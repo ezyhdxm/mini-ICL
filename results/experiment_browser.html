@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Experiment Browser - mini-ICL</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 0;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        header h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        header p {
+            text-align: center;
+            opacity: 0.9;
+        }
+        
+        .search-section {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .search-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .form-group label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #555;
+            font-size: 0.9em;
+        }
+        
+        .form-group input,
+        .form-group select {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+            flex: 1;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .results-info {
+            padding: 15px;
+            background: #e7f3ff;
+            border-left: 4px solid #667eea;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .results-info.show {
+            display: block;
+        }
+        
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        
+        .experiment-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            border-left: 4px solid #667eea;
+        }
+        
+        .experiment-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        
+        .experiment-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .experiment-name {
+            font-size: 1.2em;
+            font-weight: 700;
+            color: #667eea;
+            word-break: break-all;
+        }
+        
+        .task-badge {
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+        
+        .params-section {
+            margin-top: 15px;
+        }
+        
+        .param-category {
+            margin-bottom: 15px;
+        }
+        
+        .param-category-title {
+            font-weight: 700;
+            color: #555;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            font-size: 0.85em;
+            letter-spacing: 0.5px;
+        }
+        
+        .param-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+        
+        .param-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+        
+        .param-label {
+            font-weight: 600;
+            color: #666;
+        }
+        
+        .param-value {
+            color: #333;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .path-link {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 0.85em;
+            color: #666;
+            word-break: break-all;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .no-results {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        
+        .no-results-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+        
+        .table-view {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        
+        thead {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        th {
+            padding: 15px 12px;
+            text-align: left;
+            font-weight: 600;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        tbody tr {
+            transition: background-color 0.2s;
+        }
+        
+        tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+        
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .folder-name {
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+            color: #667eea;
+            word-break: break-all;
+        }
+        
+        .param-value-small {
+            font-size: 0.85em;
+            color: #555;
+        }
+        
+        .view-toggle {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        .btn-toggle {
+            padding: 8px 16px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        
+        .btn-toggle.active {
+            background: #667eea;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔬 Experiment Browser</h1>
+            <p>Search and browse mini-ICL experiment results</p>
+        </header>
+        
+        <div class="search-section">
+            <form class="search-form" id="searchForm">
+                <div class="form-group">
+                    <label for="taskName">Task Name</label>
+                    <select id="taskName">
+                        <option value="">All Tasks</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="vocabSize">Vocab Size</label>
+                    <input type="number" id="vocabSize" placeholder="e.g., 10">
+                </div>
+                
+                <div class="form-group">
+                    <label for="seqLen">Sequence Length</label>
+                    <input type="number" id="seqLen" placeholder="e.g., 257">
+                </div>
+                
+                <div class="form-group">
+                    <label for="embDim">Embedding Dim</label>
+                    <input type="number" id="embDim" placeholder="e.g., 128">
+                </div>
+                
+                <div class="form-group">
+                    <label for="numLayers">Num Layers</label>
+                    <input type="number" id="numLayers" placeholder="e.g., 6">
+                </div>
+                
+                <div class="form-group">
+                    <label for="alpha">Alpha</label>
+                    <input type="number" step="0.1" id="alpha" placeholder="e.g., 1.0">
+                </div>
+                
+                <div class="form-group">
+                    <label for="nTasks">N Tasks</label>
+                    <input type="number" id="nTasks" placeholder="e.g., 3">
+                </div>
+                
+                <div class="form-group">
+                    <label for="learningRate">Learning Rate</label>
+                    <input type="number" step="0.0001" id="learningRate" placeholder="e.g., 0.0004">
+                </div>
+            </form>
+            
+            <div class="button-group">
+                <button type="button" class="btn-primary" onclick="performSearch()">🔍 Search</button>
+                <button type="button" class="btn-secondary" onclick="clearSearch()">Clear</button>
+            </div>
+        </div>
+        
+        <div class="results-info" id="resultsInfo"></div>
+        
+        <div class="view-toggle">
+            <button class="btn-toggle active" id="tableViewBtn" onclick="switchView('table')">📊 Table View</button>
+            <button class="btn-toggle" id="cardViewBtn" onclick="switchView('card')">🃏 Card View</button>
+        </div>
+        
+        <div id="resultsContainer">
+            <div class="loading">Loading experiments...</div>
+        </div>
+    </div>
+    
+    <script>
+        let allExperiments = [];
+        let filteredExperiments = [];
+        
+        // Load experiments from JSON file
+        async function loadExperiments() {
+            try {
+                // Try multiple paths for the JSON file
+                const possiblePaths = [
+                    'experiment_index.json',
+                    './experiment_index.json',
+                    '../results/experiment_index.json'
+                ];
+                
+                let data = null;
+                let lastError = null;
+                
+                for (const path of possiblePaths) {
+                    try {
+                        const response = await fetch(path);
+                        if (response.ok) {
+                            data = await response.json();
+                            break;
+                        }
+                    } catch (e) {
+                        lastError = e;
+                        continue;
+                    }
+                }
+                
+                if (!data) {
+                    // Fallback: try to load via file input (for local file access)
+                    throw new Error(`Failed to load experiment_index.json from any path. 
+Make sure the JSON file exists in the same directory as this HTML file, or use a local web server.
+Error: ${lastError?.message || 'Unknown error'}`);
+                }
+                
+                allExperiments = data.experiments || [];
+                filteredExperiments = allExperiments;
+                
+                if (allExperiments.length === 0) {
+                    document.getElementById('resultsContainer').innerHTML = `
+                        <div class="no-results">
+                            <div class="no-results-icon">📋</div>
+                            <h2>No experiments found</h2>
+                            <p>The index file is loaded but contains no experiments.</p>
+                            <p style="margin-top: 20px; font-size: 0.9em;">
+                                Please run: <code>python -m icl.utils.experiment_index</code>
+                            </p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // Populate task name dropdown
+                const taskNames = [...new Set(allExperiments.map(exp => exp.task_name))].sort();
+                const taskSelect = document.getElementById('taskName');
+                taskNames.forEach(task => {
+                    const option = document.createElement('option');
+                    option.value = task;
+                    option.textContent = task;
+                    taskSelect.appendChild(option);
+                });
+                
+                displayResults();
+            } catch (error) {
+                console.error('Error loading experiments:', error);
+                document.getElementById('resultsContainer').innerHTML = `
+                    <div class="no-results">
+                        <div class="no-results-icon">⚠️</div>
+                        <h2>Failed to load experiments</h2>
+                        <p style="color: #d32f2f; margin: 15px 0;">${error.message}</p>
+                        <div style="background: #fff3cd; padding: 15px; border-radius: 5px; margin-top: 20px;">
+                            <h3 style="margin-bottom: 10px;">How to fix:</h3>
+                            <ol style="text-align: left; max-width: 600px; margin: 0 auto;">
+                                <li>Run the indexing script: <code>python -m icl.utils.experiment_index</code></li>
+                                <li>Make sure <code>experiment_index.json</code> is in the same folder as this HTML file</li>
+                                <li>If opening via <code>file://</code>, use a local web server instead:</li>
+                                <ul style="margin-top: 10px;">
+                                    <li><code>python -m http.server 8000</code> (in the results folder)</li>
+                                    <li>Then open: <code>http://localhost:8000/experiment_browser.html</code></li>
+                                </ul>
+                            </ol>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+        
+        function performSearch() {
+            const filters = {
+                taskName: document.getElementById('taskName').value,
+                vocabSize: document.getElementById('vocabSize').value,
+                seqLen: document.getElementById('seqLen').value,
+                embDim: document.getElementById('embDim').value,
+                numLayers: document.getElementById('numLayers').value,
+                alpha: document.getElementById('alpha').value,
+                nTasks: document.getElementById('nTasks').value,
+                learningRate: document.getElementById('learningRate').value,
+            };
+            
+            filteredExperiments = allExperiments.filter(exp => {
+                if (filters.taskName && exp.task_name !== filters.taskName) return false;
+                if (filters.vocabSize && exp.params.task?.vocab_size != filters.vocabSize) return false;
+                if (filters.seqLen && exp.params.task?.seq_len != filters.seqLen) return false;
+                if (filters.embDim && exp.params.model?.emb_dim != filters.embDim) return false;
+                if (filters.numLayers && exp.params.model?.num_layers != filters.numLayers) return false;
+                if (filters.alpha && exp.params.task?.alpha != parseFloat(filters.alpha)) return false;
+                if (filters.nTasks && exp.params.task?.n_tasks != filters.nTasks) return false;
+                if (filters.learningRate && exp.params.training?.learning_rate != parseFloat(filters.learningRate)) return false;
+                return true;
+            });
+            
+            displayResults();
+        }
+        
+        function clearSearch() {
+            document.getElementById('searchForm').reset();
+            filteredExperiments = allExperiments;
+            displayResults();
+        }
+        
+        let currentView = 'table';
+        
+        function switchView(view) {
+            currentView = view;
+            document.getElementById('tableViewBtn').classList.toggle('active', view === 'table');
+            document.getElementById('cardViewBtn').classList.toggle('active', view === 'card');
+            displayResults();
+        }
+        
+        function displayResults() {
+            const container = document.getElementById('resultsContainer');
+            const info = document.getElementById('resultsInfo');
+            
+            if (filteredExperiments.length === 0) {
+                container.innerHTML = `
+                    <div class="no-results">
+                        <div class="no-results-icon">🔍</div>
+                        <h2>No experiments found</h2>
+                        <p>Try adjusting your search criteria</p>
+                    </div>
+                `;
+                info.classList.remove('show');
+                return;
+            }
+            
+            info.textContent = `Found ${filteredExperiments.length} experiment(s)`;
+            info.classList.add('show');
+            
+            if (currentView === 'table') {
+                container.innerHTML = '<div class="table-view"></div>';
+                const tableView = container.querySelector('.table-view');
+                tableView.appendChild(createExperimentTable());
+            } else {
+                container.innerHTML = '<div class="results-grid"></div>';
+                const grid = container.querySelector('.results-grid');
+                filteredExperiments.forEach(exp => {
+                    const card = createExperimentCard(exp);
+                    grid.appendChild(card);
+                });
+            }
+        }
+        
+        function createExperimentTable() {
+            const table = document.createElement('table');
+            
+            // Header
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            
+            const headers = [
+                'Experiment Name', 'Task', 'Voc', 'Seq', 
+                'Emb', 'Layer', 'Minor', 'Batch', 'LR', 'Epochs'
+            ];
+            
+            headers.forEach(header => {
+                const th = document.createElement('th');
+                th.textContent = header;
+                headerRow.appendChild(th);
+            });
+            
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+            
+            // Body
+            const tbody = document.createElement('tbody');
+            
+            filteredExperiments.forEach(exp => {
+                const row = document.createElement('tr');
+                const params = exp.params || {};
+                const task = params.task || {};
+                const model = params.model || {};
+                const training = params.training || {};
+                
+                // Helper to safely get value and handle string conversion
+                const getValue = (val) => {
+                    if (val === null || val === undefined) return '—';
+                    // Convert string "True"/"False" to boolean display
+                    if (val === "True" || val === true) return '✓';
+                    if (val === "False" || val === false) return '✗';
+                    // Handle arrays (like num_heads)
+                    if (Array.isArray(val)) return `[${val.join(',')}]`;
+                    return val;
+                };
+                
+                // Calculate sequence length based on task type
+                let seqDisplay = '—';
+                if (exp.task_name === 'linear') {
+                    // For linear tasks, use n_points from model or task
+                    const nPoints = model.n_points || task.n_points;
+                    if (nPoints !== null && nPoints !== undefined && nPoints !== '—') {
+                        seqDisplay = Number(nPoints);
+                    }
+                } else if (exp.task_name === 'latent') {
+                    // For latent tasks, use (seq_len - 1) // 2
+                    const seqLen = task.seq_len;
+                    if (seqLen !== null && seqLen !== undefined && seqLen !== '—') {
+                        seqDisplay = Math.floor((Number(seqLen) - 1) / 2);
+                    }
+                } else {
+                    // For other tasks, use seq_len directly
+                    seqDisplay = getValue(task.seq_len);
+                }
+                
+                // Get batch size from task or training
+                const batchSize = task.batch_size || training.batch_size;
+                
+                const cells = [
+                    exp.exp_name,
+                    exp.task_name || 'N/A',
+                    getValue(task.vocab_size),
+                    seqDisplay,
+                    getValue(model.emb_dim),
+                    getValue(model.num_layers),
+                    getValue(task.n_minor_tasks),
+                    getValue(batchSize),
+                    getValue(training.learning_rate),
+                    getValue(training.num_epochs)
+                ];
+                
+                cells.forEach((cell, idx) => {
+                    const td = document.createElement('td');
+                    const cellText = String(cell);
+                    if (idx === 0) {
+                        td.className = 'folder-name';
+                        td.textContent = cellText;
+                    } else {
+                        td.textContent = cellText;
+                    }
+                    row.appendChild(td);
+                });
+                
+                tbody.appendChild(row);
+            });
+            
+            table.appendChild(tbody);
+            return table;
+        }
+        
+        function createExperimentCard(exp) {
+            const card = document.createElement('div');
+            card.className = 'experiment-card';
+            
+            const params = exp.params || {};
+            const task = params.task || {};
+            const model = params.model || {};
+            const training = params.training || {};
+            
+            card.innerHTML = `
+                <div class="experiment-header">
+                    <div class="experiment-name">${exp.exp_name}</div>
+                    <span class="task-badge">${exp.task_name || 'N/A'}</span>
+                </div>
+                
+                <div class="params-section">
+                    ${task && Object.keys(task).length > 0 ? `
+                        <div class="param-category">
+                            <div class="param-category-title">Task</div>
+                            <div class="param-grid">
+                                ${Object.entries(task).slice(0, 6).map(([k, v]) => `
+                                    <div class="param-item">
+                                        <span class="param-label">${k}:</span>
+                                        <span class="param-value">${v}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    ${model && Object.keys(model).length > 0 ? `
+                        <div class="param-category">
+                            <div class="param-category-title">Model</div>
+                            <div class="param-grid">
+                                ${Object.entries(model).slice(0, 6).map(([k, v]) => `
+                                    <div class="param-item">
+                                        <span class="param-label">${k}:</span>
+                                        <span class="param-value">${v}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    ${training && Object.keys(training).length > 0 ? `
+                        <div class="param-category">
+                            <div class="param-category-title">Training</div>
+                            <div class="param-grid">
+                                ${Object.entries(training).slice(0, 4).map(([k, v]) => `
+                                    <div class="param-item">
+                                        <span class="param-label">${k}:</span>
+                                        <span class="param-value">${v}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div class="path-link">
+                    <strong>Path:</strong> ${exp.exp_path}
+                </div>
+            `;
+            
+            return card;
+        }
+        
+        // Allow Enter key to trigger search
+        document.getElementById('searchForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            performSearch();
+        });
+        
+        // Debug: Check if JSON file exists
+        console.log('Loading experiments...');
+        
+        // Load experiments on page load
+        loadExperiments().then(() => {
+            console.log(`Loaded ${allExperiments.length} experiments`);
+        }).catch(err => {
+            console.error('Failed to load experiments:', err);
+        });
+    </script>
+</body>
+</html>
+

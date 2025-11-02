@@ -46,7 +46,13 @@ htmlcov/
 .tox/
 
 # Results and outputs
-results/
+# Ignore everything in results/ by default
+results/*
+# But track specific code/documentation files
+!results/README_BROWSER.md
+!results/experiment_browser.html
+# Ignore subdirectories (experiment data)
+results/**/
 *.pkl
 *.pickle
 *.h5
