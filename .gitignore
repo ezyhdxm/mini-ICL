@@ -36,7 +36,8 @@ mini-icl/
 
 # Jupyter
 .ipynb_checkpoints/
-*.ipynb
+# *.ipynb files in notebooks/ folder should be tracked
+# Only ignore checkpoints
 
 # Testing
 .pytest_cache/
