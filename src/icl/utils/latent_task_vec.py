@@ -335,35 +335,59 @@ def compute_hiddens_from_existing_samples(
 
 # Although it has `fast` in the name, it is not fast. It is still slow and need to be speed up.
 
+from contextlib import nullcontext
+
 @torch.inference_mode()
 def compute_hiddens_from_existing_samples_fast(
     config, model, sampler, samples,
-    layer_index=1, activation="attn_block",
-    dtype_out=torch.float32,
-    v_step: int | None = None,   # 代替 chunk_size，按 vocab 维切
+    layer_index: int = 1,
+    activation: str = "attn_block",
+    dtype_out: torch.dtype = torch.float32,
+    v_step: int | None = None,   # Chunk size along vocab dimension
+    k_step: int | None = 4,      # Chunk size along n_tasks dimension to avoid OOM
 ):
-    device = "cpu"                               # 关键：输出落 CPU
+    """
+    Extract hidden representations at specified layer positions from existing tokenwise samples.
+    - Output is on CPU; model runs on its own device
+    - Additional support: segment processing along the first dimension (n_tasks) to reduce peak memory usage
+    """
+    # ---- Device and mode setup ----
+    out_device = torch.device("cpu")   # Output always goes to CPU
     model_device = next(model.parameters()).device
     was_training = model.training
     model.eval()
 
+    # ---- Sample tensor normalization ----
+    assert samples.device.type == "cpu", "samples must be on CPU"
     if samples.dtype != torch.long:
         samples = samples.long()
-    if samples.device.type == "cpu":
+
+    need_gpu = (model_device.type == "cuda")
+    if need_gpu:
         samples = samples.pin_memory()
 
+    # ---- Dimension inference/validation ----
     n_tasks, Tm1, V, Bm, Sfull = samples.shape
-    seq_len = sampler.seq_len
-    assert Sfull == 2 * seq_len - 1
+    seq_len_from_samples = (Sfull + 1) // 2
+    assert 2 * seq_len_from_samples - 1 == Sfull, "Last dimension of samples should be 2*seq_len-1"
+
+    if sampler is not None and hasattr(sampler, "seq_len"):
+        assert sampler.seq_len == seq_len_from_samples, \
+            f"sampler.seq_len={getattr(sampler, 'seq_len', None)} does not match inferred {seq_len_from_samples} from samples"
+    seq_len = seq_len_from_samples
 
     n_emb = getattr(config.model, "emb_dim", getattr(config.model, "n_embd", None))
-    assert n_emb is not None
+    assert n_emb is not None, "config.model must contain emb_dim or n_embd"
 
-    hiddens = torch.empty((n_tasks, V, Tm1, Bm, n_emb), device=device, dtype=dtype_out)
+    # ---- Pre-allocate output (CPU) ----
+    hiddens = torch.empty((n_tasks, V, Tm1, Bm, n_emb),
+                          device=out_device, dtype=dtype_out)
 
+    # ---- Forward hook: capture hidden vectors at target position ----
     cache = {"pos": None, "vec": None}
     def hook_fn(module, inp, out):
-        cache["vec"] = out[:, cache["pos"], :].detach()
+        pos = cache["pos"]
+        cache["vec"] = out[:, pos, :].detach()
 
     if activation == "attn_block":
         handle = model.layers[layer_index].attn_block.register_forward_hook(hook_fn)
@@ -372,59 +396,80 @@ def compute_hiddens_from_existing_samples_fast(
     else:
         raise ValueError(f"Invalid activation: {activation}")
 
-    # 临时禁掉 lm_head，避免巨型 logits
-    has_lm_head = hasattr(model, "lm_head")
-    if has_lm_head:
-        old_head = model.lm_head
-        model.lm_head = torch.nn.Identity()
+    # ---- Temporarily disable output_layer to avoid large logits ----
+    has_output_layer = hasattr(model, "output_layer")
+    if has_output_layer:
+        old_head = model.output_layer
+        model.output_layer = torch.nn.Identity()
+
+    # ---- Autocast (CUDA only) ----
+    if need_gpu:
+        major_cc = torch.cuda.get_device_capability(model_device.index or 0)[0]
+        amp_dtype = torch.bfloat16 if major_cc >= 8 else torch.float16
+        autocast_ctx = torch.autocast(device_type="cuda", dtype=amp_dtype)
+    else:
+        autocast_ctx = nullcontext()
 
     try:
-        # 经验：优先按 vocab 切
+        # Chunk along vocab dimension
         if v_step is None:
-            # 给个保守缺省值（可按显存调整，比如 128 或 256）
             v_step = max(1, min(V, 128))
 
-        # bf16/FP16 自动混精
-        use_bf16 = (torch.cuda.is_available() and
-                    torch.cuda.get_device_capability(model_device.index or 0)[0] >= 8)
-        amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+        # Chunk along tasks dimension (first dimension)
+        if k_step is None or k_step <= 0:
+            k_step = 1
 
-        for t in range(Tm1):
-            task_pos = 2 * t + 1
-            cache["pos"] = task_pos
+        for k0 in trange(0, n_tasks, k_step):
+            k1 = min(k0 + k_step, n_tasks)
+            nK = k1 - k0
 
-            L = task_pos + 1   # 截断长度
+            # For current segment of tasks, iterate over t and chunk along vocab
+            for t in range(Tm1):
+                task_pos = 2 * t + 1
+                cache["pos"] = task_pos
+                L = task_pos + 1  # Truncate to current position
 
-            for v0 in range(0, V, v_step):
-                v1 = min(v0 + v_step, V)
+                for v0 in range(0, V, v_step):
+                    v1 = min(v0 + v_step, V)
 
-                # 取 (n_tasks, v_step, Bm, L)
-                block = samples[:, t, v0:v1, :, :L]     # CPU view
-                block = block.reshape(-1, L).clone()    # 紧凑小块
-                batch = block.to(model_device, non_blocking=True)
-                del block
+                    # 1) Extract sub-block: (nK, v_step, Bm, L)
+                    block = samples[k0:k1, t, v0:v1, :, :L].contiguous()
+                    # 2) Flatten batch dimension: (nK*v_step*Bm, L)
+                    batch = block.view(-1, L)
 
-                with torch.autocast(device_type="cuda", dtype=amp_dtype):
-                    _ = model(batch)  # logits 被 Identity 截掉
+                    # 3) Move to model device
+                    if need_gpu:
+                        batch = batch.to(model_device, non_blocking=True)
 
-                vec = cache["vec"].to("cpu", dtype=dtype_out)  # (n_tasks*v_step*Bm, n_emb)
-                vec = vec.view(n_tasks, v1 - v0, Bm, n_emb)
+                    # 4) Forward pass, hook captures vector
+                    with autocast_ctx:
+                        _ = model(batch)
 
-                # 写回 CPU 缓冲
-                hiddens[:, v0:v1, t, :, :].copy_(vec)
-                del vec, batch
-            # 清理到 t 的粒度即可
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                    # 5) Retrieve vector from cache and write back to CPU output
+                    vec = cache["vec"]  # (nK*v_step*Bm, n_emb)
+                    if need_gpu:
+                        vec = vec.to(out_device, dtype=dtype_out, non_blocking=True)
+                    else:
+                        vec = vec.to(dtype=dtype_out)
+
+                    vec = vec.view(nK, v1 - v0, Bm, n_emb)
+                    hiddens[k0:k1, v0:v1, t, :, :].copy_(vec)
+
+                    # 6) Release temporaries
+                    del vec, batch, block
+
+                if need_gpu:
+                    torch.cuda.empty_cache()
 
     finally:
         handle.remove()
-        if has_lm_head:
-            model.lm_head = old_head
+        if has_output_layer:
+            model.output_layer = old_head
         if was_training:
             model.train()
 
     return hiddens
+
 
 
 

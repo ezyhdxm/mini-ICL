@@ -28,6 +28,7 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 from . import linear_algebra_utils as lau
+from .basic import get_hash
 from icl.models import Transformer
 
 def hash_array(arr):
@@ -127,6 +128,233 @@ def load_model(checkpoint_dir, config, step=None):
     model.load_state_dict(checkpoint['model'])
     model.eval()
     return model.to(device)
+
+
+def list_checkpoints(checkpoint_dir):
+    """
+    List all available checkpoints in the checkpoint directory.
+    
+    Args:
+        checkpoint_dir: Path to the checkpoints directory (e.g., "results/latent/train_xxx/checkpoints")
+    
+    Returns:
+        dict with keys:
+            - 'regular': list of tuples (step, filename) for regular checkpoints (model_{step}.pt)
+            - 'final': list of tuples (step, filename) for final checkpoints (model_final_{step}.pt)
+            - 'all_steps': sorted list of all step numbers available
+    """
+    checkpoint_dir = os.path.abspath(checkpoint_dir)
+    
+    if not os.path.exists(checkpoint_dir):
+        raise ValueError(f"Checkpoint directory does not exist: {checkpoint_dir}")
+    
+    # Find all checkpoint files
+    regular_pattern = os.path.join(checkpoint_dir, "model_*.pt")
+    final_pattern = os.path.join(checkpoint_dir, "model_final_*.pt")
+    
+    regular_files = glob.glob(regular_pattern)
+    final_files = glob.glob(final_pattern)
+    
+    # Extract step numbers
+    def extract_step_number(filename):
+        """Extract step number from filename like 'model_100.pt' or 'model_final_100.pt'"""
+        basename = os.path.basename(filename)
+        # Match both model_{step}.pt and model_final_{step}.pt
+        match = re.search(r"model(?:_final)?_(\d+)\.pt", basename)
+        return int(match.group(1)) if match else None
+    
+    regular_checkpoints = []
+    for f in regular_files:
+        # Skip final checkpoints in regular list
+        if "model_final_" not in os.path.basename(f):
+            step = extract_step_number(f)
+            if step is not None:
+                regular_checkpoints.append((step, os.path.basename(f)))
+    
+    final_checkpoints = []
+    for f in final_files:
+        step = extract_step_number(f)
+        if step is not None:
+            final_checkpoints.append((step, os.path.basename(f)))
+    
+    # Sort by step number
+    regular_checkpoints.sort(key=lambda x: x[0])
+    final_checkpoints.sort(key=lambda x: x[0])
+    
+    # Get all unique step numbers
+    all_steps = sorted(set([s for s, _ in regular_checkpoints] + [s for s, _ in final_checkpoints]))
+    
+    return {
+        'regular': regular_checkpoints,
+        'final': final_checkpoints,
+        'all_steps': all_steps
+    }
+
+
+def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verbose=True):
+    """
+    Load a model checkpoint from the checkpoint directory.
+    
+    More flexible than load_model - can load any checkpoint by step number,
+    and provides better error messages and checkpoint listing.
+    
+    Args:
+        config: Configuration object (ConfigDict) used to initialize the model.
+                If checkpoint_dir is None, the checkpoint directory will be automatically
+                constructed from config.work_dir and config hash.
+        step: Step number to load (None = load latest). Can be:
+              - None: load latest checkpoint (final if use_final=True, otherwise regular)
+              - int: specific step number
+              - "latest": explicitly load latest
+              - "final": load latest final checkpoint
+        checkpoint_dir: Optional path to the checkpoints directory.
+                        If None, will be auto-constructed from config.
+                        (e.g., "results/latent/train_xxx/checkpoints")
+        use_final: If True and step=None, prefer final checkpoints over regular ones
+        verbose: If True, print information about loaded checkpoint
+    
+    Returns:
+        model: Loaded Transformer model in eval mode, moved to config.device
+    """
+    # Auto-construct checkpoint_dir from config if not provided
+    if checkpoint_dir is None:
+        exp_name = f"train_{get_hash(config)}"
+        exp_dir = os.path.join(config.work_dir, exp_name)
+        
+        # Handle notebooks directory case
+        cur_dir = os.getcwd()
+        if cur_dir.endswith("notebooks"):
+            exp_dir = os.path.join("..", exp_dir)
+        
+        checkpoint_dir = os.path.join(exp_dir, "checkpoints")
+        
+        if verbose:
+            print(f"Auto-detected checkpoint directory: {checkpoint_dir}")
+    
+    checkpoint_dir = os.path.abspath(checkpoint_dir)
+    
+    if not os.path.exists(checkpoint_dir):
+        raise ValueError(f"Checkpoint directory does not exist: {checkpoint_dir}")
+    
+    # List available checkpoints
+    checkpoints = list_checkpoints(checkpoint_dir)
+    
+    if len(checkpoints['all_steps']) == 0:
+        raise ValueError(f"No checkpoints found in {checkpoint_dir}")
+    
+    device = config.device
+    
+    # Determine which checkpoint to load
+    if step is None or step == "latest":
+        if use_final and len(checkpoints['final']) > 0:
+            # Load latest final checkpoint
+            step_num, filename = checkpoints['final'][-1]
+            model_path = os.path.join(checkpoint_dir, filename)
+            if verbose:
+                print(f"Loading latest final checkpoint: {filename} (step {step_num})")
+        else:
+            # Load latest regular checkpoint
+            if len(checkpoints['regular']) == 0:
+                if len(checkpoints['final']) > 0:
+                    step_num, filename = checkpoints['final'][-1]
+                    model_path = os.path.join(checkpoint_dir, filename)
+                    if verbose:
+                        print(f"Only final checkpoints available. Loading: {filename} (step {step_num})")
+                else:
+                    raise ValueError("No checkpoints found")
+            else:
+                step_num, filename = checkpoints['regular'][-1]
+                model_path = os.path.join(checkpoint_dir, filename)
+                if verbose:
+                    print(f"Loading latest checkpoint: {filename} (step {step_num})")
+    
+    elif step == "final":
+        if len(checkpoints['final']) == 0:
+            raise ValueError("No final checkpoints found")
+        step_num, filename = checkpoints['final'][-1]
+        model_path = os.path.join(checkpoint_dir, filename)
+        if verbose:
+            print(f"Loading latest final checkpoint: {filename} (step {step_num})")
+    
+    elif isinstance(step, int):
+        # Try to find checkpoint with this step number
+        model_path = None
+        step_num = step
+        
+        # First try exact match in regular checkpoints
+        for s, fname in checkpoints['regular']:
+            if s == step:
+                model_path = os.path.join(checkpoint_dir, fname)
+                step_num = s
+                if verbose:
+                    print(f"Loading checkpoint: {fname} (step {step})")
+                break
+        
+        # If not found, try exact match in final checkpoints
+        if model_path is None:
+            for s, fname in checkpoints['final']:
+                if s == step:
+                    model_path = os.path.join(checkpoint_dir, fname)
+                    step_num = s
+                    if verbose:
+                        print(f"Loading final checkpoint: {fname} (step {step})")
+                    break
+        
+        # If still not found, try direct file paths
+        if model_path is None:
+            # Try regular format
+            candidate = os.path.join(checkpoint_dir, f"model_{step}.pt")
+            if os.path.exists(candidate):
+                model_path = candidate
+                step_num = step
+                if verbose:
+                    print(f"Loading checkpoint: model_{step}.pt (step {step})")
+            else:
+                # Try final format
+                candidate = os.path.join(checkpoint_dir, f"model_final_{step}.pt")
+                if os.path.exists(candidate):
+                    model_path = candidate
+                    step_num = step
+                    if verbose:
+                        print(f"Loading final checkpoint: model_final_{step}.pt (step {step})")
+        
+        # If still not found, find the closest step
+        if model_path is None or (model_path is not None and not os.path.exists(model_path)):
+            all_checkpoints = checkpoints['regular'] + checkpoints['final']
+            if len(all_checkpoints) == 0:
+                raise ValueError(f"No checkpoints found in {checkpoint_dir}")
+            
+            # Find the checkpoint with the closest step number
+            closest_step, closest_filename = min(all_checkpoints, key=lambda x: abs(x[0] - step))
+            model_path = os.path.join(checkpoint_dir, closest_filename)
+            step_num = closest_step
+            
+            if verbose:
+                diff = abs(closest_step - step)
+                print(f"Step {step} not found. Loading closest checkpoint: {closest_filename} (step {closest_step}, diff={diff})")
+    
+    else:
+        raise ValueError(f"Invalid step parameter: {step}. Must be None, int, 'latest', or 'final'")
+    
+    # Load the checkpoint
+    try:
+        checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load checkpoint from {model_path}: {e}")
+    
+    # Initialize model and load state
+    try:
+        model = Transformer(config)
+        model.load_state_dict(checkpoint['model'])
+        model.eval()
+        model = model.to(device)
+        
+        if verbose and 'step' in checkpoint:
+            print(f"Checkpoint info: step={checkpoint.get('step', 'N/A')}")
+        
+        return model
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize model from checkpoint: {e}")
 
 ####################
 # Load Config
@@ -1397,5 +1625,269 @@ def view_mask(batch, info, padded=False, dyck=False):
 
     html += "</pre>"
     display(HTML(html))
+
+
+########################
+# Bigram Analysis      #
+########################
+
+def bigram_prefix_counts(x: torch.Tensor, V: int, *, dtype=torch.int64) -> torch.Tensor:
+    """
+    Compute cumulative bigram counts at each position in sequences.
+    
+    For each position t, computes the count of all bigrams (prev, next) that occurred
+    up to and including position t in the sequence. This creates a cumulative count
+    matrix for each sequence.
+    
+    Args:
+        x: Input sequences of shape (B, T) where B is batch size and T is sequence length.
+           Values should be in [0, V-1].
+        V: Vocabulary size (number of states)
+        dtype: Output dtype (default: torch.int64)
+    
+    Returns:
+        counts: Tensor of shape (B, T, V, V) where counts[b, t, u, v] is the count
+                of bigram (u -> v) in sequence b up to position t.
+                Position 0 is always zeros (no bigrams yet).
+    
+    Example:
+        >>> x = torch.tensor([[0, 1, 2, 1]])  # Single sequence: 0->1->2->1
+        >>> counts = bigram_prefix_counts(x, V=3)
+        >>> counts[0, 1, 0, 1]  # At position 1, count of (0->1) is 1
+        tensor(1)
+        >>> counts[0, 2, 1, 2]  # At position 2, count of (1->2) is 1
+        tensor(1)
+    """
+    assert x.dim() == 2, "x must be (B, T)"
+    B, T = x.shape
+    device = x.device
+
+    if T == 1:
+        return torch.zeros(B, T, V, V, dtype=dtype, device=device)
+
+    prev = x[:, :-1]               # (B, T-1)
+    nxt  = x[:,  1:]               # (B, T-1)
+
+    prev_oh = F.one_hot(prev, num_classes=V).to(torch.float32)  # (B, T-1, V)
+    nxt_oh  = F.one_hot(nxt,  num_classes=V).to(torch.float32)  # (B, T-1, V)
+
+    edges = torch.einsum('btu,btv->btuv', prev_oh, nxt_oh)      # (B, T-1, V, V)
+
+    zero_pad = torch.zeros(B, 1, V, V, dtype=edges.dtype, device=device)
+    edges_padded = torch.cat([zero_pad, edges], dim=1)          # (B, T, V, V)
+
+    out = torch.cumsum(edges_padded, dim=1)                     
+    return out.to(dtype)
+
+
+def compute_hiddens_data(
+    config,
+    model: torch.nn.Module,
+    x: torch.Tensor,
+    layer_index: int = 1,
+) -> torch.Tensor:
+    """
+    Extract hidden representations from a specific layer at odd positions.
+    
+    For sequences with padding, this extracts hidden states at the non-padding
+    token positions (odd indices in the full sequence).
+    
+    Args:
+        config: Configuration object (not directly used, but may be needed for compatibility)
+        model: Transformer model
+        x: Input sequences of shape (B, T_full) where T_full includes padding tokens.
+           Odd positions (1, 3, 5, ...) are the actual tokens.
+        layer_index: Which transformer layer to extract from (default: 1)
+    
+    Returns:
+        hiddens: Tensor of shape (B, seq_len, d_model) where seq_len = (T_full - 1) // 2
+                 Hidden representations at odd positions from the specified layer's
+                 attention block output.
+    """
+    model_device = next(model.parameters()).device
+    x = x.to(model_device)
+
+    seq_len = x.shape[1]
+    pos = torch.arange(1, seq_len, 2).to(model_device)  # Odd positions
+    cache = {}
+        
+    def hook_fn(module, inp, out):
+        cache["vec"] = out[:, pos, :].detach()
+
+    handle = model.layers[layer_index].attn_block.register_forward_hook(hook_fn)
+    model.eval()
+    with torch.no_grad():
+        _ = model(x)
+    handle.remove()
+
+    return cache["vec"]
+
+
+def compute_bigram_r2_scores(
+    model: torch.nn.Module,
+    sampler,
+    config,
+    num_samples: int = 1024,
+    T0: int = 10,
+    max_layers: int | None = None,
+    mode: str = "ood",
+) -> np.ndarray:
+    """
+    Compute R² scores between hidden representations and bigram prefix counts.
+    
+    For each layer and time step, fits a linear regression to predict bigram counts
+    from hidden representations. Returns the R² scores as a measure of how well
+    hidden states encode bigram information.
+    
+    Args:
+        model: Transformer model
+        sampler: Data sampler with generate() method and num_states, seq_len attributes
+        config: Configuration object
+        num_samples: Number of samples to generate (default: 1024)
+        T0: Starting position index (default: 10, to skip early positions)
+        max_layers: Maximum number of layers to analyze. If None, uses all layers.
+        mode: Generation mode for sampler (default: "ood")
+    
+    Returns:
+        r2_scores: Array of shape (num_layers, num_time_steps) containing R² scores
+                   for each layer at each time step.
+    """
+    from sklearn.linear_model import LinearRegression
+    
+    # Generate samples
+    x, *_ = sampler.generate(num_samples=num_samples, mode=mode)
+    
+    # Compute bigram counts (only use non-padding tokens)
+    bigram_count = bigram_prefix_counts(x[:, ::2], sampler.num_states)
+    bigram_count = bigram_count.reshape(num_samples, sampler.seq_len, -1)
+    bigram_count = bigram_count[:, T0:-1]
+    Tdim = bigram_count.shape[1]
+    
+    # Determine number of layers
+    if max_layers is None:
+        num_layers = len(model.layers)
+    else:
+        num_layers = min(max_layers, len(model.layers))
+    
+    r2 = np.zeros((num_layers, Tdim))
+    
+    for layer in range(num_layers):
+        hiddens = compute_hiddens_data(
+            config,
+            model,
+            x,
+            layer_index=layer,
+        )
+        hiddens = hiddens[:, T0:]
+        
+        for t in range(Tdim):
+            X = hiddens[:, t].cpu().numpy()
+            y = bigram_count[:, t].cpu().numpy()
+            
+            lr_model = LinearRegression()
+            lr_model.fit(X, y)
+            r2[layer, t] = lr_model.score(X, y)
+    
+    return r2
+
+
+def plot_bigram_r2_scores(
+    r2_scores: np.ndarray,
+    T0: int = 10,
+    title: str = "R² Score: Hidden States vs Bigram Counts",
+    show: bool = True,
+):
+    """
+    Plot R² scores over time for each layer.
+    
+    Args:
+        r2_scores: Array of shape (num_layers, num_time_steps) from compute_bigram_r2_scores
+        T0: Starting position offset (used for x-axis labeling)
+        title: Plot title (default: "R² Score: Hidden States vs Bigram Counts")
+        show: Whether to show the plot immediately (default: True)
+    
+    Returns:
+        fig: Plotly figure object
+    """
+    if not PLOTLY_AVAILABLE:
+        raise ImportError("Plotly is not installed. Install it with: pip install plotly")
+    
+    num_layers, num_time_steps = r2_scores.shape
+    time_steps = T0 + np.arange(num_time_steps)
+    
+    fig = go.Figure()
+    
+    for layer in range(num_layers):
+        fig.add_trace(go.Scatter(
+            x=time_steps,
+            y=r2_scores[layer],
+            mode='lines',
+            name=f'Layer {layer}'
+        ))
+    
+    fig.update_layout(
+        title=title,
+        xaxis_title='Position t',
+        yaxis_title='R² Score',
+        template='plotly_white'
+    )
+    
+    if show:
+        fig.show()
+    
+    return fig
+
+
+def plot_sufficient_stat(
+    model: torch.nn.Module,
+    sampler,
+    config,
+    num_samples: int = 1024,
+    T0: int = 10,
+    max_layers: int | None = None,
+    mode: str = "ood",
+    title: str = "R² Score: Hidden States vs Bigram Counts",
+    show: bool = True,
+):
+    """
+    Complete sufficient statistics analysis pipeline: compute R² scores and plot results.
+    
+    This is a convenience function that combines compute_bigram_r2_scores and
+    plot_bigram_r2_scores into a single call.
+    
+    Args:
+        model: Transformer model
+        sampler: Data sampler with generate() method and num_states, seq_len attributes
+        config: Configuration object
+        num_samples: Number of samples to generate (default: 1024)
+        T0: Starting position index (default: 10, to skip early positions)
+        max_layers: Maximum number of layers to analyze. If None, uses all layers.
+        mode: Generation mode for sampler (default: "ood")
+        title: Plot title (default: "R² Score: Hidden States vs Bigram Counts")
+        show: Whether to show the plot immediately (default: True)
+    
+    Returns:
+        tuple: (r2_scores, fig) where:
+            - r2_scores: Array of shape (num_layers, num_time_steps) with R² scores
+            - fig: Plotly figure object
+    """
+    r2_scores = compute_bigram_r2_scores(
+        model=model,
+        sampler=sampler,
+        config=config,
+        num_samples=num_samples,
+        T0=T0,
+        max_layers=max_layers,
+        mode=mode,
+    )
+    
+    fig = plot_bigram_r2_scores(
+        r2_scores=r2_scores,
+        T0=T0,
+        title=title,
+        show=show,
+    )
+    
+    return r2_scores, fig
 
 
