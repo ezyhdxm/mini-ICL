@@ -1,54 +1,12 @@
-<style>
-.lang-switch {
-  text-align: right;
-  margin-bottom: 20px;
-  position: sticky;
-  top: 0;
-  background: white;
-  padding: 10px 0;
-  z-index: 100;
-}
-.lang-switch input[type="radio"] {
-  display: none;
-}
-.lang-switch label {
-  cursor: pointer;
-  padding: 6px 16px;
-  margin-left: 8px;
-  border-radius: 6px;
-  background: #f6f8fa;
-  color: #24292e;
-  border: 1px solid #d1d5da;
-  display: inline-block;
-  transition: all 0.2s;
-}
-.lang-switch label:hover {
-  background: #e1e4e8;
-}
-#lang-en:checked ~ .lang-switch label[for="lang-en"],
-#lang-zh:checked ~ .lang-switch label[for="lang-zh"] {
-  background: #0366d6;
-  color: white;
-  border-color: #0366d6;
-}
-.lang-content {
-  display: none;
-}
-#lang-en:checked ~ .lang-content.en,
-#lang-zh:checked ~ .lang-content.zh {
-  display: block;
-}
-</style>
-
-<input type="radio" id="lang-en" name="lang" checked>
-<input type="radio" id="lang-zh" name="lang">
-
-<div class="lang-switch">
-  <label for="lang-en">English</label>
-  <label for="lang-zh">中文</label>
+<div align="right">
+  <strong>Language / 语言:</strong>
+  <a href="#english-content">English</a> | 
+  <a href="#chinese-content">中文</a>
 </div>
 
-<div class="lang-content en">
+---
+
+<a name="english-content"></a>
 # mini-ICL
 
 A repo containing the essential functionality for investigating in-context learning and task vectors.
@@ -149,9 +107,13 @@ for exp in results:
 ### Updating the Index
 
 Run the indexing command again whenever you add new experiments. The database will be updated with new experiments and existing entries will be refreshed.
-</div>
 
-<div class="lang-content zh">
+---
+
+<details>
+<summary><strong>中文版本 / Chinese Version (点击展开 / Click to expand)</strong></summary>
+
+<a name="chinese-content"></a>
 # mini-ICL
 
 一个用于研究上下文学习和任务向量的核心功能库。
@@ -252,4 +214,11 @@ for exp in results:
 ### 更新索引
 
 添加新实验后，记得重新运行索引命令。数据库将更新新实验，现有条目将刷新。
+
+</details>
+
+<div align="right">
+  <strong>Language / 语言:</strong>
+  <a href="#english-content">English</a> | 
+  <a href="#chinese-content">中文</a>
 </div>
