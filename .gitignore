@@ -53,6 +53,9 @@ results/*
 !results/experiment_browser.html
 # Ignore subdirectories (experiment data)
 results/**/
+
+# Track HTML README
+!README.html
 *.pkl
 *.pickle
 *.h5
