@@ -3,6 +3,7 @@ import torch
 from tqdm.notebook import trange
 import numpy as np
 import plotly.graph_objects as go
+import os
 
 # The following functions are used to compute hidden representations from the model at different granularity and different layers.
 
@@ -765,7 +766,294 @@ def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, la
 
 
 
-# These two functions are very slow and need to be speed up. 
+import torch
+from torch import Tensor
+from typing import Dict, Any, Iterable, Optional, Tuple
+
+# ===================== 缓存构建 =====================
+
+def _build_cache(sampler, task_k: int, device: torch.device, eps: float = 1e-12) -> Dict[str, Any]:
+    b = int(sampler.num_states)
+    order = int(sampler.order)
+
+    trans_mat: Tensor = sampler.get_task_matrix(task_k).to(device)
+    S = trans_mat.shape[0]
+    assert S == b ** order, "trans_mat first dim must equal num_states ** order"
+
+    # 归一化
+    trans_mat = trans_mat / trans_mat.sum(dim=1, keepdim=True).clamp_min(eps)
+
+    # next_state_idx_table
+    s_idx = torch.arange(S, device=device, dtype=torch.long).unsqueeze(1)
+    v_idx = torch.arange(b, device=device, dtype=torch.long).unsqueeze(0)
+    base_pow_order_1 = (b ** (order - 1)) if order > 1 else 1
+    tail = s_idx % base_pow_order_1
+    next_state_idx_table = tail * b + v_idx
+
+    # 解码 tokens_s / last_token_of_state
+    tokens_s = torch.empty((S, order), device=device, dtype=torch.long)
+    tmp = s_idx.squeeze(1).clone()
+    for pos in reversed(range(order)):
+        tokens_s[:, pos] = tmp % b
+        tmp = tmp // b
+    last_token_of_state = tokens_s[:, -1]
+
+    cache = dict(
+        device=device,
+        trans_mat=trans_mat,
+        next_state_idx_table=next_state_idx_table,
+        tokens_s=tokens_s,
+        last_token_of_state=last_token_of_state,
+    )
+
+    # 小 S 用稠密矩阵，否则用父索引结构
+    S_dense_max = 4096
+    if S <= S_dense_max:
+        A_dense = torch.zeros((S, S), device=device)
+        src = (trans_mat).reshape(-1)
+        dst = next_state_idx_table.reshape(-1)
+        row = torch.arange(S, device=device).unsqueeze(1).expand(S, b).reshape(-1)
+        A_dense.index_put_((row, dst), src, accumulate=True)
+        cache["A_dense"] = A_dense
+        cache["use_dense"] = True
+    else:
+        child = next_state_idx_table.reshape(-1)
+        parent = torch.arange(S, device=device).unsqueeze(1).expand(S, b).reshape(-1)
+        w = (trans_mat).reshape(-1)
+        sort_idx = torch.argsort(child)
+        child_sorted = child[sort_idx]
+        parent_sorted = parent[sort_idx]
+        w_sorted = w[sort_idx]
+        unique_child, counts = torch.unique_consecutive(child_sorted, return_counts=True)
+        starts = torch.cumsum(torch.cat([torch.tensor([0], device=device), counts[:-1]]), dim=0)
+        cache.update(dict(
+            parents_sorted_index=parent_sorted,
+            parents_sorted_weight=w_sorted,
+            child_unique=unique_child,
+            child_starts=starts,
+            child_counts=counts,
+            use_dense=False,
+        ))
+    return cache
+
+
+def _get_cache(sampler, task_k: int, device: torch.device, eps: float = 1e-12) -> Dict[str, Any]:
+    if not hasattr(sampler, "_ffbs_cache"):
+        sampler._ffbs_cache: Dict[Tuple[int, str], Dict[str, Any]] = {}
+    key = (task_k, str(device))
+    if key not in sampler._ffbs_cache:
+        sampler._ffbs_cache[key] = _build_cache(sampler, task_k, device, eps=eps)
+    return sampler._ffbs_cache[key]
+
+
+# ===================== 前向 =====================
+
+def _forward_alphas_uniform(L: Tensor, cache: Dict[str, Any], eps: float = 1e-12) -> Tensor:
+    device = L.device
+    trans_mat = cache["trans_mat"]
+    next_state_idx_table = cache["next_state_idx_table"]
+    S, b = trans_mat.shape
+    T = L.shape[0]
+
+    alphas = torch.empty((T, S), device=device)
+    alpha = (torch.full((S,), 1.0 / S, device=device) * L[0]).clamp_min(eps)
+    alpha = alpha / alpha.sum().clamp_min(eps)
+    alphas[0] = alpha
+
+    flat_dst = next_state_idx_table.reshape(-1)
+    for u in range(1, T):
+        src = (alpha.unsqueeze(1) * trans_mat).reshape(-1)
+        buf = torch.zeros(S, device=device)
+        buf.index_add_(0, flat_dst, src)
+        alpha = (buf * L[u]).clamp_min(eps)
+        alpha = alpha / alpha.sum().clamp_min(eps)
+        alphas[u] = alpha
+    return alphas
+
+
+# ===================== 后向 =====================
+
+def _backward_sample_dense(alphas: Tensor, K: int, cache: Dict[str, Any], eps: float = 1e-12) -> Tensor:
+    device = alphas.device
+    A = cache["A_dense"]
+    T, S = alphas.shape
+    z_path = torch.empty((K, T), device=device, dtype=torch.long)
+    z_path[:, -1] = torch.multinomial(alphas[-1], K, replacement=True)
+    for u in reversed(range(T - 1)):
+        alpha_u = alphas[u]
+        cols = A.index_select(1, z_path[:, u + 1])
+        probs = (alpha_u.unsqueeze(1) * cols).clamp_min(eps)
+        probs = probs / probs.sum(dim=0, keepdim=True).clamp_min(eps)
+        z_path[:, u] = torch.multinomial(probs.t(), 1).squeeze(1)
+    return z_path
+
+
+def _backward_sample_grouped(alphas: Tensor, K: int, cache: Dict[str, Any], eps: float = 1e-12) -> Tensor:
+    device = alphas.device
+    T, S = alphas.shape
+    p_idx = cache["parents_sorted_index"]
+    p_w = cache["parents_sorted_weight"]
+    c_u = cache["child_unique"]
+    c_s = cache["child_starts"]
+    c_c = cache["child_counts"]
+
+    z_path = torch.empty((K, T), device=device, dtype=torch.long)
+    z_path[:, -1] = torch.multinomial(alphas[-1], K, replacement=True)
+    for u in reversed(range(T - 1)):
+        alpha_u = alphas[u]
+        zu1 = z_path[:, u + 1]
+        uniq, inv = torch.unique(zu1, return_inverse=True)
+        for g, s_next in enumerate(uniq):
+            k_idx = (inv == g).nonzero(as_tuple=False).squeeze(1)
+            pos = (c_u == s_next).nonzero(as_tuple=False)
+            if pos.numel() == 0:
+                z_path[k_idx, u] = torch.randint(0, S, (k_idx.numel(),), device=device)
+                continue
+            pos = pos.item()
+            start = c_s[pos].item()
+            length = c_c[pos].item()
+            parents = p_idx[start:start + length]
+            weights = p_w[start:start + length]
+            probs = (alpha_u[parents] * weights).clamp_min(eps)
+            probs = probs / probs.sum().clamp_min(eps)
+            z_u_g = torch.multinomial(probs.expand(k_idx.numel(), -1), 1).squeeze(1)
+            z_path[k_idx, u] = parents[z_u_g]
+    return z_path
+
+
+# ===================== 公开 API =====================
+
+@torch.no_grad()
+def generate_conditional_sample_ffbs_uniform_prior(
+    sampler,
+    task_k: int,
+    input_pos: int,         # 偶数：token 位置
+    target_token: int,
+    num_samples: int,
+    *,
+    eps: float = 1e-12,
+    device_override: Optional[str] = None,
+):
+    device = torch.device(device_override) if device_override is not None else sampler.device
+
+    # === 长度定义：总长为 seq_len_padded，偶数位是 token ===
+    seq_len_padded = int(sampler.seq_len)            # 例如 257
+    seq_len_tokens  = (seq_len_padded + 1) // 2      # 例如 129
+    order = int(sampler.order)
+    b = int(sampler.num_states)
+    assert 0 <= target_token < b
+
+    # input_pos 为偶数位，对应 token_idx
+    token_idx = input_pos // 2
+    assert 0 <= token_idx < seq_len_tokens, f"token_idx {token_idx} out of [0,{seq_len_tokens})"
+
+    cache = _get_cache(sampler, task_k, device, eps=eps)
+    S = cache["trans_mat"].shape[0]
+    last_token = cache["last_token_of_state"]
+
+    # 窗口时间轴：z_u 以 x_{order-1+u} 结尾
+    T = seq_len_tokens - order + 1
+    assert T >= 1, "seq_len_tokens must be >= order"
+    u_star = token_idx - (order - 1)
+
+    # 观测似然：仅在 u_star 约束“窗口最后一位 = target_token”
+    L = torch.ones((T, S), device=device)
+    if 0 <= u_star < T:
+        mask = (last_token == int(target_token))
+        L[u_star, ~mask] = 0.0
+
+    # 前向
+    alphas = _forward_alphas_uniform(L, cache, eps=eps)
+
+    # 后向
+    if cache.get("use_dense", False):
+        z_path = _backward_sample_dense(alphas, num_samples, cache, eps=eps)
+    else:
+        z_path = _backward_sample_grouped(alphas, num_samples, cache, eps=eps)
+
+    # 还原 token 序列
+    tokens_s = cache["tokens_s"]
+    samples_tokens = torch.empty((num_samples, seq_len_tokens), device=device, dtype=torch.long)
+    samples_tokens[:, :order] = tokens_s[z_path[:, 0]]
+    for u in range(1, T):
+        samples_tokens[:, order - 1 + u] = cache["last_token_of_state"][z_path[:, u]]
+
+    assert (samples_tokens[:, token_idx] == target_token).all()
+
+    # === 按照“偶数位 token，奇数位 pad”的约定拼回总长 ===
+    out = torch.full((num_samples, seq_len_padded), fill_value=b, device=device, dtype=torch.long)
+    out[:, ::2] = samples_tokens
+    return out
+
+
+from tqdm.notebook import tqdm
+import torch
+from typing import Iterable, Optional
+
+@torch.no_grad()
+def sample_all_positions_all_targets_multi(
+    sampler,
+    task_ids: Iterable[int],
+    num_samples_per_condition: int,
+    *,
+    eps: float = 1e-12,
+    device_override: Optional[str] = None,
+):
+    """
+    多 task，全位置、全 target 的条件采样（pad=True，seq_len 表示 padding 后长度）。
+    ✅ 在 Jupyter Notebook 中带漂亮的 tqdm.notebook 进度条。
+    返回形状: [n_tasks, seq_len//2, b, num_samples, seq_len]
+    """
+    device = torch.device(device_override) if device_override is not None else sampler.device
+    seq_len_padded = int(sampler.seq_len)
+    seq_len_tokens = (seq_len_padded + 1) // 2
+    b = int(sampler.num_states)
+
+    task_ids = list(task_ids)
+    n_tasks = len(task_ids)
+
+    out = torch.empty(
+        (n_tasks, seq_len_tokens, b, num_samples_per_condition, seq_len_padded),
+        device=device,
+        dtype=torch.long,
+    )
+
+    # 外层 task 进度条
+    for t_idx, task_k in enumerate(tqdm(task_ids, desc="Sampling tasks", leave=True)):
+        _ = _get_cache(sampler, task_k, device, eps=eps)
+        # 每个 task 内部位置进度条（子条）
+        for pos in tqdm(range(seq_len_tokens), desc=f"Task {task_k} positions", leave=False):
+            input_pos = 2 * pos
+            for v in range(b):
+                out[t_idx, pos, v] = generate_conditional_sample_ffbs_uniform_prior(
+                    sampler, task_k, input_pos, v, num_samples_per_condition,
+                    eps=eps, device_override=str(device)
+                )
+    return out
+
+
+
+
+
+def _generate_token_samples_for_vocab(args):
+    """Helper function for parallel processing of vocab tokens."""
+    sampler, task_k, input_pos, tok, Bmasked, B_pool = args
+    batch_size = max(1, min(Bmasked, B_pool))
+    collected = []
+    remaining = Bmasked
+    
+    while remaining > 0:
+        current_batch = min(batch_size, remaining)
+        samples = generate_conditional_sample(
+            sampler, task_k, input_pos, tok, current_batch
+        )
+        collected.append(samples.cpu())
+        remaining -= current_batch
+    
+    # Concatenate all batches
+    result = torch.cat(collected, dim=0)[:Bmasked]
+    return tok, result
+
 
 def collect_tokenwise_batches(
     sampler,
@@ -773,142 +1061,169 @@ def collect_tokenwise_batches(
     input_pos: int,
     B_pool: int=1024,
     Bmasked: int=32,
+    parallel_vocab: bool=True,
+    num_workers: int=None,
 ) -> torch.Tensor:
     """
-    Collect tokenwise batches for a specified task and position. Efficiently filters
-    the sampling pool to get the required number of samples per token type, avoiding redundant computation.
+    Collect tokenwise batches for a specified task and position using conditional sampling.
+    This improved version uses conditional probability instead of rejection sampling.
+    
+    Performance improvements:
+    - No rejection sampling: directly generates samples with correct conditional probability
+    - Much faster for rare tokens (old method could waste many samples)
+    - Optional parallel processing across vocab tokens
     
     Args:
         sampler: Data sampler
         task_k: Task index
-        input_pos: Input position index
-        B_pool: Number of samples to fetch from the sampler each time
+        input_pos: Input position index (in padded space if pad=True)
+        B_pool: Batch size for generating samples (kept for compatibility)
         Bmasked: Number of samples needed per token type
+        parallel_vocab: If True, process different vocab tokens in parallel (faster)
+        num_workers: Number of worker processes for parallel vocab processing 
+                    (defaults to min(4, vocab_size) if parallel_vocab=True)
     
     Returns:
-        batches: Tensor of shape (vocab_size_eff, Bmasked, 2*seq_len-1)
+        batches: Tensor of shape (vocab_size_eff, Bmasked, 2*seq_len-1) if pad=True,
+                 or (vocab_size_eff, Bmasked, seq_len) if pad=False
                 Bmasked complete sequences for each token type
     """
     seq_len = sampler.seq_len
     vocab_size_eff = sampler.num_states
     
-    # Pre-allocate output to avoid concatenation overhead
-    out = torch.empty((vocab_size_eff, Bmasked, 2*seq_len-1), dtype=torch.long, device=sampler.device)
-    write_ptr = torch.zeros(vocab_size_eff, dtype=torch.int64, device=sampler.device)
-
-    while (write_ptr < Bmasked).any():
-        pool, *_ = sampler.generate(mode="test", num_samples=B_pool, task=task_k)  # (B_pool, seq_len)
-
-        toks = pool[:, input_pos]                          # (B_pool,)
-        toks_sorted, idx_sorted = torch.sort(toks)
-        pool_sorted = pool[idx_sorted]                     # (B_pool, seq_len)
-
-        uniq, counts = torch.unique_consecutive(toks_sorted, return_counts=True)
-        starts = torch.cumsum(torch.cat([counts.new_zeros(1), counts[:-1]]), dim=0)
-
-        for i in range(uniq.numel()):
-            u = uniq[i].item()
-            if u >= vocab_size_eff:
-                continue
-            have = write_ptr[u].item()
-            need = Bmasked - have
-            if need <= 0:
-                continue
-            st = starts[i].item()
-            ct = counts[i].item()
-            take = min(need, ct)
-            if take > 0:
-                # Write directly into pre-allocated output tensor
-                out[u, have:have+take] = pool_sorted[st:st+take]
-                write_ptr[u] += take
-
+    # Determine output shape based on padding
+    if sampler.pad:
+        output_seq_len = 2 * seq_len - 1
+    else:
+        output_seq_len = seq_len
+    
+    # Pre-allocate output
+    out = torch.empty((vocab_size_eff, Bmasked, output_seq_len), dtype=torch.long, device=sampler.device)
+    
+    if parallel_vocab and vocab_size_eff > 1:
+        # Parallel processing across vocab tokens
+        if num_workers is None:
+            num_workers = min(4, vocab_size_eff, os.cpu_count() or 1)
+        
+        if num_workers > 1:
+            # Use multiprocessing for vocab tokens
+            from torch.multiprocessing import Pool, set_start_method
+            try:
+                set_start_method("spawn", force=True)
+            except RuntimeError:
+                pass
+            
+            args_list = [(sampler, task_k, input_pos, tok, Bmasked, B_pool) 
+                        for tok in range(vocab_size_eff)]
+            
+            with Pool(processes=num_workers) as pool:
+                results = pool.map(_generate_token_samples_for_vocab, args_list)
+            
+            # Assemble results
+            for tok, result in results:
+                out[tok] = result.to(sampler.device)
+        else:
+            # Fall through to sequential processing
+            parallel_vocab = False
+    
+    if not parallel_vocab or vocab_size_eff == 1:
+        # Sequential processing (or fallback)
+        batch_size = max(1, min(Bmasked, B_pool))
+        
+        for tok in range(vocab_size_eff):
+            collected = []
+            remaining = Bmasked
+            
+            while remaining > 0:
+                current_batch = min(batch_size, remaining)
+                samples = generate_conditional_sample(
+                    sampler, task_k, input_pos, tok, current_batch
+                )
+                collected.append(samples)
+                remaining -= current_batch
+            
+            # Concatenate all batches
+            out[tok] = torch.cat(collected, dim=0)[:Bmasked]
+    
     return out
 
 import os
-from torch.multiprocessing import Pool, set_start_method
-from tqdm.notebook import trange
+import torch
+from multiprocessing.pool import ThreadPool  # 外层用线程池，避免嵌套进程池
+from multiprocessing import get_context      # 若后续改回进程池可用
 from .basic import get_hash
-
 
 def worker_job(k, t, sampler, B_pool, Bmasked):
     torch.manual_seed(1337 + 1000 * k + t)
     batches = collect_tokenwise_batches(
-        sampler, k, input_pos=2*t, B_pool=B_pool, Bmasked=Bmasked
+        sampler, k, input_pos=2 * t, B_pool=B_pool, Bmasked=Bmasked
     )
     return k, t, batches.cpu()
 
-
-def generate_tokenwise_samples_mp(sampler, n_tasks, config, B_pool=4096, Bmasked=32, num_workers=None):
+def generate_tokenwise_samples_mp(
+    sampler,
+    n_tasks,
+    config,
+    B_pool=4096,
+    Bmasked=32,
+    num_workers=None,
+):
     """
-    Generate tokenwise samples using multiprocessing, with caching to disk.
-    
-    Checks if samples are already saved in results/latent/{exp_name}/samples.pt.
-    If found, loads and returns them. Otherwise, generates samples, saves them, and returns.
-    
-    Args:
-        sampler: Data sampler
-        n_tasks: Number of tasks to process
-        config: Configuration object used to determine experiment name
-        B_pool: Number of samples to fetch from the sampler each time
-        Bmasked: Number of samples needed per token type
-        num_workers: Number of worker processes (defaults to cpu_count() // 2)
-    
-    Returns:
-        samples: Tensor of shape (n_tasks, seq_len-1, vocab_size_eff, Bmasked, 2*seq_len-1)
-                Complete sequences for all tasks, positions, and token types
+    Generate tokenwise samples using multi-*threading* outside (to avoid nested process pools),
+    with caching to disk.
+    pad=True，seq_len 表示 padding 后长度（偶数 token，奇数 pad）
+    返回形状: (n_tasks, (L+1)//2, vocab, Bmasked, L)
     """
     exp_name = f"train_{get_hash(config)}"
-    
-    # Construct save path: results/latent/{exp_name}/samples.pt
+
     cur_dir = os.getcwd()
-    if cur_dir.endswith("notebooks"):
-        base_path = os.path.join("..", "results", "latent")
-    else:
-        base_path = os.path.join("results", "latent")
-    
+    base_path = os.path.join("..", "results", "latent") if cur_dir.endswith("notebooks") \
+                else os.path.join("results", "latent")
     save_dir = os.path.join(base_path, exp_name)
     save_path = os.path.join(save_dir, "samples.pt")
-    
-    # Check if samples already exist
+
+    vocab = int(sampler.num_states)
+    L = int(sampler.seq_len)             # 总长度（含 pad）
+    L_tokens = (L + 1) // 2              # token 位置数
+
+    # 如果已有缓存
     if os.path.exists(save_path):
         print(f"Loading cached samples from {save_path}")
         samples = torch.load(save_path, map_location="cpu")
-        # Verify shape matches expected dimensions
-        vocab = sampler.num_states
-        L = sampler.seq_len
-        expected_shape = (n_tasks, L-1, vocab, Bmasked, 2*L-1)
+        expected_shape = (n_tasks, L_tokens, vocab, Bmasked, L)
         if samples.shape != expected_shape:
-            print(f"Warning: Cached samples shape {samples.shape} != expected {expected_shape}. Regenerating...")
+            print(f"Warning: cached shape {samples.shape} != expected {expected_shape}. Regenerating...")
         else:
             return samples
-    
-    # Generate samples if not cached
+
     print(f"Generating samples and saving to {save_path}")
-    vocab = sampler.num_states
-    L = sampler.seq_len
-    samples = torch.empty((n_tasks, L-1, vocab, Bmasked, 2*L-1), dtype=torch.long, device="cpu")
+    samples = torch.empty((n_tasks, L_tokens, vocab, Bmasked, L), dtype=torch.long, device="cpu")
 
-    jobs = [(k, t) for k in range(n_tasks) for t in range(L-1)]
-    num_workers = num_workers or os.cpu_count() // 2
-    print("Number of Workers: ", num_workers)
+    jobs = [(k, t) for k in range(n_tasks) for t in range(L_tokens)]
+    num_workers = num_workers or max(1, (os.cpu_count() or 2) // 2)
+    print("Number of Workers (threads):", num_workers)
 
-    set_start_method("spawn", force=True)
-    with Pool(processes=num_workers) as pool:
-        with trange(len(jobs), desc="generating samples (mp)") as pbar:
-            for k, t, batches in pool.starmap(
-                worker_job,
-                ((k, t, sampler, B_pool, Bmasked) for k, t in jobs),
-                chunksize=1,
-            ):
-                samples[k, t] = batches
-                pbar.update(1)
-    
-    # Save generated samples
+    # 外层用线程池，避免在 daemon 进程里再开进程池
+    with ThreadPool(processes=num_workers) as pool:
+        total_jobs = len(jobs)
+        print(f"Starting threaded mapping over {total_jobs} jobs ...")
+        processed = 0
+
+        for k, t, batches in pool.starmap(
+            worker_job,
+            ((k, t, sampler, B_pool, Bmasked) for k, t in jobs),
+            chunksize=1,
+        ):
+            samples[k, t] = batches
+            processed += 1
+            if processed % max(1, total_jobs // 10) == 0 or processed == total_jobs:
+                print(f"Progress: {processed}/{total_jobs} ({processed/total_jobs:.0%})")
+
     os.makedirs(save_dir, exist_ok=True)
     torch.save(samples, save_path)
     print(f"Saved samples to {save_path}")
-
     return samples
+
 
 
 
