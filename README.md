@@ -42,6 +42,7 @@ from icl.utils import train_model, extract_task_vector_markov
 ```
 
 Experiments can be reproduced using the notebooks provided under the `notebooks` folder.
+The intermediate results and model checkpoints are very large. Feel free to ask me about a physical copy if you want access.  
 
 ## Experiment Browser
 
