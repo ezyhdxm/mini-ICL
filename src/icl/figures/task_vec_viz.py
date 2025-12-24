@@ -1,71 +1,9 @@
 import numpy as np
 import plotly.graph_objects as go
 import torch
-from typing import List, Union
 from scipy.optimize import curve_fit
 from tqdm.notebook import trange
-
-def plot_pairwise_task_vector_variance(task_vectors: torch.Tensor, normalize: bool = True,
-                                       save_path: Union[str, None] = "tdiff_var_plot.png", verbose=False) -> None:
-    """
-    Compute and plot the per-position variance of task vector differences across all task pairs.
-
-    Parameters:
-    -----------
-    task_vectors : torch.Tensor
-        Tensor of shape (n_tasks, sequence_length, embedding_dim)
-    save_path : str or None
-        If specified, the plot is saved to this path (e.g., .png or .pdf). If None, it is not saved.
-    """
-
-    n_tasks = task_vectors.shape[0]
-    pairwise_tvars = []
-
-    if normalize:
-        task_vectors = task_vectors / task_vectors.norm(dim=-1, keepdim=True)
-    
-    avg_task_vector = task_vectors.mean(dim=0)  # shape: (seq_len, batch_size, emb_dim)
-
-    # Compute variance of difference vectors per pair
-    if verbose:
-        print(f"Computing pairwise task vector variance for {n_tasks} tasks...")
-    for i in range(n_tasks):
-        tvs_diff = task_vectors[i] - avg_task_vector # (seq_len, batch_size, emb_dim)
-        tsds_diff = (tvs_diff - tvs_diff.mean(dim=-2, keepdim=True)).norm(dim=-1)
-        tvars_diff = (tsds_diff**2).mean(dim=-1).cpu().numpy()  # (seq_len,)
-        pairwise_tvars.append(tvars_diff)
-
-    # Plot with Plotly
-    fig = go.Figure()
-    if verbose:
-        print("Plotting pairwise task vector variance...")
-    for i, tvars_diff in enumerate(pairwise_tvars):
-        x = np.arange(1, len(tvars_diff) + 1)
-        fig.add_trace(go.Scatter(
-            x=x,
-            y=tvars_diff,
-            mode='lines',
-            name=f"Task {i}",
-            opacity=0.5,
-            line=dict(width=1)
-        ))
-
-    fig.update_layout(
-        title="Variance of Task Vector Differences vs Position",
-        xaxis_title="Position",
-        yaxis_title="Variance",
-        width=800,
-        height=500,
-        template="plotly_white"
-    )
-
-    if save_path:
-        fig.write_image(save_path, scale=3)
-
-    fig.show()
-
-
-
+from typing import Union, Optional
 
 
 def plot_task_vector_variance_with_fit(task_vectors: torch.Tensor, normalize: bool = True,
@@ -98,9 +36,9 @@ def plot_task_vector_variance_with_fit(task_vectors: torch.Tensor, normalize: bo
 
     fit_successful = False
     try:
-        popt, _ = curve_fit(power_law_model, x, mean_tvar, p0=(1.0, -1.0, 0.0), maxfev=10000)
+        popt, _ = curve_fit(power_law_model, x[10:], mean_tvar[10:], p0=(1.0, -1.0, 0.0), maxfev=10000)
         a_fit, c_fit, b_fit = popt
-        fitted_curve = power_law_model(x, *popt)
+        fitted_curve = power_law_model(x[10:], *popt)
         fit_successful = True
     except (RuntimeError, ValueError) as e:
         print(f"[Warning] curve_fit failed: {e}")
@@ -125,7 +63,7 @@ def plot_task_vector_variance_with_fit(task_vectors: torch.Tensor, normalize: bo
     if fit_successful and fitted_curve is not None:
         label_text = f"$\\mathrm{{Fit}}: {a_fit:.2f} \\cdot x^{{{c_fit:.2f}}} {'-' if b_fit < 0 else '+'} {abs(b_fit):.2f}$"
         fig.add_trace(go.Scatter(
-            x=x,
+            x=x[10:],
             y=fitted_curve,
             mode='lines',
             line=dict(color='red', dash='dash', width=2),
@@ -148,84 +86,6 @@ def plot_task_vector_variance_with_fit(task_vectors: torch.Tensor, normalize: bo
     fig.show()
 
 
-def plotly_line_plot(y, title=None, yname=None):
-    x = np.arange(1, len(y) + 1)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x,
-        y=y,
-        mode='lines',
-        name=yname,
-        opacity=1,
-        line=dict(width=1)
-    ))
-    fig.update_layout(
-        title=title,
-        xaxis_title="Position",
-        yaxis_title=yname,
-        width=800,
-        height=500,
-        template="plotly_white"
-    )
-    fig.show()
-
-def plot_task_vector_differences(task_vectors: torch.Tensor, normalize: bool = True,
-                                  save_path: Union[str, None] = "tdiff_mean_plot.png") -> List:
-    """
-    Compute and plot the norm of mean task vector differences over all task pairs.
-
-    Parameters:
-    -----------
-    task_vectors : torch.Tensor
-        Tensor of shape (n_tasks, sequence_length, embedding_dim)
-    save_path : str or None
-        If given, saves the plot to this file.
-    """
-
-    n_tasks = task_vectors.shape[0]
-    tvd_means = []
-    tvs_diff_means = []
-    if normalize:
-        task_vectors = task_vectors / task_vectors.norm(dim=-1, keepdim=True)  # Normalize task vectors
-
-    avg_task_vector = task_vectors.mean(dim=0)  # shape: (seq_len, batch_size, emb_dim)
-
-    # Compute mean difference vector norm across positions
-    for i in range(n_tasks):
-        tvs_diff = task_vectors[i] - avg_task_vector  # shape: (seq_len, batch_size, emb_dim)
-        tvs_diff_mean = tvs_diff.mean(dim=1)
-        tvs_diff_means.append(tvs_diff_mean.cpu().numpy())
-        tvd_mean = tvs_diff_mean.norm(dim=-1)  # shape: (seq_len,)
-        tvd_means.append(tvd_mean.cpu().numpy())
-
-    # Plot with Plotly
-    fig = go.Figure()
-    for i, tvd_mean in enumerate(tvd_means):
-        x = np.arange(1, len(tvd_mean) + 1)
-        fig.add_trace(go.Scatter(
-            x=x,
-            y=tvd_mean,
-            mode='lines',
-            name=f"Task {i}",
-            opacity=0.5,
-            line=dict(width=1)
-        ))
-
-    fig.update_layout(
-        title="Mean of Task Vector Differences vs Position",
-        xaxis_title="Position",
-        yaxis_title="Norm",
-        width=800,
-        height=500,
-        template="plotly_white"
-    )
-
-    if save_path:
-        fig.write_image(save_path, scale=3)
-
-    fig.show()
-
-    return tvs_diff_means
 
 
 def plot_lambdas(lambdas, convex_combs=None):
@@ -310,26 +170,40 @@ def plot_task_vector_modes(
     task_vectors: torch.Tensor,
     normalize: bool = True,
     save_path: Union[str, None] = None,
-    verbose: bool = False
+    verbose: bool = False,
+    trace_names: Optional[list[str]] = None,  # NEW: optional custom labels for each "task"
 ) -> None:
+    """
+    Expects 4D task_vectors: (n_tasks, seq_len, *, *).
+    trace_names (optional): list of length n_tasks to name traces.
+    """
+    if task_vectors.ndim != 4:
+        raise ValueError(f"plot_task_vector_modes expects 4D tensor, got shape {tuple(task_vectors.shape)}")
+
     if normalize:
-        task_vectors = task_vectors / task_vectors.norm(dim=-1, keepdim=True)
+        task_vectors = task_vectors / (task_vectors.norm(dim=-1, keepdim=True) + 1e-12)
 
     n_tasks, seq_len, _, _ = task_vectors.shape
     x = np.arange(1, seq_len + 1)
 
+    if trace_names is None:
+        trace_names = [f"Task {i}" for i in range(n_tasks)]
+    else:
+        if len(trace_names) != n_tasks:
+            raise ValueError(f"trace_names must have length {n_tasks}, got {len(trace_names)}")
+
     # --- Mode 1: Task vector variance and power-law fit ---
     tvs_means = task_vectors.mean(dim=-2, keepdim=True)
     tsds = (task_vectors - tvs_means).norm(dim=-1)
-    tvars = (tsds**2).mean(dim=-1).cpu().numpy()
+    tvars = (tsds**2).mean(dim=-1).cpu().numpy()  # (n_tasks, seq_len)
     mean_tvar = tvars.mean(axis=0)
 
     def power_law_model(x, a, c, b):
         return a * x**c + b
 
     try:
-        popt, _ = curve_fit(power_law_model, x, mean_tvar, p0=(1.0, -1.0, 0.0), maxfev=10000)
-        fitted_curve = power_law_model(x, *popt)
+        popt, _ = curve_fit(power_law_model, x[10:], mean_tvar[10:], p0=(1.0, -1.0, 0.0), maxfev=10000)
+        fitted_curve = power_law_model(x[10:], *popt)
         a_fit, c_fit, b_fit = popt
         fit_label = f"Fit: {a_fit:.2f}·x^{c_fit:.2f} {'-' if b_fit < 0 else '+'} {abs(b_fit):.2f}"
     except Exception as e:
@@ -340,12 +214,10 @@ def plot_task_vector_modes(
 
     # --- Mode 2: Mean of task vector differences ---
     avg_task_vector = task_vectors.mean(dim=0)
-    diff_means = []
     diff_norms = []
     for i in range(n_tasks):
         diff = task_vectors[i] - avg_task_vector
         diff_mean = diff.mean(dim=1)
-        diff_means.append(diff_mean.cpu().numpy())
         diff_norm = diff_mean.norm(dim=-1)
         diff_norms.append(diff_norm.cpu().numpy())
 
@@ -362,74 +234,127 @@ def plot_task_vector_modes(
 
     # Traces for Mode 1
     for i in range(n_tasks):
-        fig.add_trace(go.Scatter(x=x, y=tvars[i], mode='lines', opacity=0.5,
-                                 line=dict(width=1),
-                                 name=f"Task {i}",
-                                 visible=True))
+        fig.add_trace(go.Scatter(
+            x=x, y=tvars[i], mode="lines", opacity=0.5,
+            line=dict(width=1),
+            name=trace_names[i],
+            visible=True
+        ))
     if fitted_curve is not None:
-        fig.add_trace(go.Scatter(x=x, y=fitted_curve, mode='lines',
-                                 line=dict(color='red', dash='dash', width=2),
-                                 name=fit_label,
-                                 visible=True))
+        fig.add_trace(go.Scatter(
+            x=x[10:], y=fitted_curve, mode="lines",
+            line=dict(color="red", dash="dash", width=2),
+            name=fit_label,
+            visible=True
+        ))
 
     # Traces for Mode 2
     for i in range(n_tasks):
-        fig.add_trace(go.Scatter(x=x, y=diff_norms[i], mode='lines', opacity=0.5,
-                                 line=dict(width=1),
-                                 name=f"Diff Task {i}",
-                                 visible=False))
+        fig.add_trace(go.Scatter(
+            x=x, y=diff_norms[i], mode="lines", opacity=0.5,
+            line=dict(width=1),
+            name=f"Diff {trace_names[i]}",
+            visible=False
+        ))
 
     # Traces for Mode 3
     for i in range(n_tasks):
-        fig.add_trace(go.Scatter(x=x, y=pairwise_tvars[i], mode='lines', opacity=0.5,
-                                 line=dict(width=1),
-                                 name=f"VarDiff Task {i}",
-                                 visible=False))
+        fig.add_trace(go.Scatter(
+            x=x, y=pairwise_tvars[i], mode="lines", opacity=0.5,
+            line=dict(width=1),
+            name=f"VarDiff {trace_names[i]}",
+            visible=False
+        ))
 
     # --- Dropdown Menus ---
     n_mode1 = n_tasks + (1 if fitted_curve is not None else 0)
     n_mode2 = n_tasks
     n_mode3 = n_tasks
-
-    def visibility_mask(n_total, start, length):
-        return [i >= start and i < start + length for i in range(n_total)]
-
     total_traces = n_mode1 + n_mode2 + n_mode3
 
+    def visibility_mask(n_total, start, length):
+        return [start <= i < start + length for i in range(n_total)]
+
     dropdown_buttons = [
-        dict(label="Task Vector Variance (Power-law fit)",
+        dict(
+            label="Task Vector Variance (Power-law fit)",
             method="update",
-            args=[{"visible": visibility_mask(total_traces, 0, n_mode1)},
+            args=[
+                {"visible": visibility_mask(total_traces, 0, n_mode1)},
                 {"title": {"text": "Hidden Vector Variance vs Position"},
-                    "yaxis": {"title": "Variance"}}]),
-
-        dict(label="Mean of Task Vector Differences",
+                 "yaxis": {"title": "Variance"}}
+            ],
+        ),
+        dict(
+            label="Mean of Task Vector Differences",
             method="update",
-            args=[{"visible": visibility_mask(total_traces, n_mode1, n_mode2)},
+            args=[
+                {"visible": visibility_mask(total_traces, n_mode1, n_mode2)},
                 {"title": {"text": "Mean of Hidden Vector Differences vs Position"},
-                    "yaxis": {"title": "Norm"}}]),
-
-        dict(label="Variance of Task Vector Differences",
+                 "yaxis": {"title": "Norm"}}
+            ],
+        ),
+        dict(
+            label="Variance of Task Vector Differences",
             method="update",
-            args=[{"visible": visibility_mask(total_traces, n_mode1 + n_mode2, n_mode3)},
+            args=[
+                {"visible": visibility_mask(total_traces, n_mode1 + n_mode2, n_mode3)},
                 {"title": {"text": "Variance of Hidden Vector Differences vs Position"},
-                    "yaxis": {"title": "Variance"}}])
+                 "yaxis": {"title": "Variance"}}
+            ],
+        ),
     ]
 
     # --- Final Layout ---
     fig.update_layout(
-        updatemenus=[dict(active=0,
-                          buttons=dropdown_buttons,
-                          x=0.01, y=1.1, xanchor="left", yanchor="top")],
+        updatemenus=[dict(
+            active=0, buttons=dropdown_buttons,
+            x=0.01, y=1.1, xanchor="left", yanchor="top"
+        )],
         title="Hidden Vector Variance vs Position",
         xaxis_title="Position",
         yaxis_title="Variance",
         width=900,
         height=600,
-        template="plotly_white"
+        template="plotly_white",
     )
 
     if save_path:
         fig.write_image(save_path, scale=3)
 
     fig.show()
+
+
+def plot_task_vocab_vector_modes(
+    task_vectors: torch.Tensor,
+    normalize: bool = True,
+    save_path: Union[str, None] = None,
+    verbose: bool = False,
+) -> None:
+    """
+    Wrapper:
+      - If 4D: assumes (task, seq_len, *, *) and calls plot_task_vector_modes.
+      - If 5D: assumes (task, vocab, seq_len, *, *), flattens (task,vocab)->tv,
+               and calls plot_task_vector_modes with trace names "Task t | Vocab v".
+    """
+    if task_vectors.ndim == 4:
+        return plot_task_vector_modes(
+            task_vectors, normalize=normalize, save_path=save_path, verbose=verbose
+        )
+
+    if task_vectors.ndim != 5:
+        raise ValueError(f"Expected 4D or 5D tensor, got shape {tuple(task_vectors.shape)}")
+
+    n_task, n_vocab, seq_len, a, b = task_vectors.shape  # (task, vocab, seq_len, *, *)
+    flat = task_vectors.reshape(n_task * n_vocab, seq_len, a, b)
+
+    trace_names = [f"Task {t} | Vocab {v}" for t in range(n_task) for v in range(n_vocab)]
+
+    return plot_task_vector_modes(
+        flat,
+        normalize=normalize,
+        save_path=save_path,
+        verbose=verbose,
+        trace_names=trace_names,
+    )
+

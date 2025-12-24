@@ -1,12 +1,9 @@
-from dataclasses import dataclass
-from collections import namedtuple
 import torch
+from torch import nn
+from typing import List, Optional
 
-from torch import nn, Tensor
-from torch.nn import functional as F
-from typing import List, Optional, Tuple
-from .pos_encoder import *
-from .attention import *
+from .kv_cache import KVCache
+from .attention import MultiHeadAttention
 
 class TFAttnBlock(nn.Module):
     def __init__(self, config, layer=0):
@@ -15,10 +12,9 @@ class TFAttnBlock(nn.Module):
         self.ln1 = nn.LayerNorm(config.model.emb_dim) if config.model.layer_norm else nn.Identity()
         self.attn_dropout = nn.Dropout(config.model.dropout) if config.model.dropout else None
     
-    def forward(self, x):
-        atten_out = self.MHA(self.ln1(x))
-        x = x + self.attn_dropout(atten_out) if self.attn_dropout is not None else x + atten_out
-        return x
+    def forward(self, x, kv_cache: Optional[KVCache] = None, cache_pos: Optional[int] = None, update_cache: bool = True):
+        y = self.MHA(self.ln1(x), kv_cache=kv_cache, cache_pos=cache_pos, update_cache=update_cache)
+        return x + (self.attn_dropout(y) if self.attn_dropout is not None else y)
 
 class TFMLPBlock(nn.Module):
     def __init__(self, config, layer=0):
@@ -26,7 +22,7 @@ class TFMLPBlock(nn.Module):
         self.mlp = None
         if config.model.mlp[layer]:
             if config.model.activation[layer]:
-                assert config.model.ff_dim is not None, "FeedForward dimension cannot be empty."
+                assert config.model.ff_dim is not None
                 self.mlp = nn.Sequential(
                     nn.Linear(config.model.emb_dim, config.model.ff_dim, bias=config.model.mlp_bias),
                     nn.SiLU(), # seems to be the most popular activation function nowadays
@@ -50,37 +46,21 @@ class TFBlock(nn.Module):
         self.attn_block = TFAttnBlock(config, layer)
         self.mlp = TFMLPBlock(config, layer)
 
-    def forward(self, x):
-        x = self.attn_block(x)
-        x = self.mlp(x)
-        return x
+    def forward(self, x, *, kv_cache: Optional[KVCache] = None, cache_pos: Optional[int] = None, update_cache: bool = True):
+        x = self.attn_block(x, kv_cache=kv_cache, cache_pos=cache_pos, update_cache=update_cache)
+        return self.mlp(x)
         
 class Transformer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.embed = nn.Embedding(config.vocab_size, config.model.emb_dim).to(config.device)
-        self.pos_enc = config.model.pos_enc
-        if config.model.pos_enc == "abs":
-            self.positional_encoding = nn.Embedding(config.seq_len, config.model.emb_dim)
+        self.embed = nn.Embedding(config.vocab_size, config.model.emb_dim)
         self.layers = nn.ModuleList([TFBlock(config, layer) for layer in range(config.model.num_layers)])
         self.output_layer = nn.Linear(config.model.emb_dim, config.vocab_size)
+        self.to(config.device)
 
-    def to(self, device):
-        self.embed = self.embed.to(device)
-        if self.pos_enc == "abs":
-            self.positional_encoding = self.positional_encoding.to(device)
-        for layer in self.layers:
-            layer = layer.to(device)
-        self.output_layer = self.output_layer.to(device)
-        return self
-
-    def forward(self, x):
-        if self.pos_enc == "abs":
-            x = self.embed(x) + self.positional_encoding(torch.arange(x.size(1), device=x.device).view(1, x.size(1)))
-        else:
-            x = self.embed(x)
-        for layer in self.layers:
-            x = layer(x)
-            
-        logits = self.output_layer(x) # (batch_size, seq_len, vocab_size)
-        return logits
+    def forward(self, x, kv_caches: Optional[List[KVCache]] = None, cache_pos: Optional[int] = None, update_cache: bool = True):
+        x = self.embed(x)
+        for i, layer in enumerate(self.layers):
+            cache_i = kv_caches[i] if kv_caches is not None else None
+            x = layer(x, kv_cache=cache_i, cache_pos=cache_pos, update_cache=update_cache)
+        return self.output_layer(x)

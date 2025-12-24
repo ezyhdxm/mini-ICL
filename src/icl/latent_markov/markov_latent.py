@@ -7,7 +7,7 @@ from IPython.display import display
 
 from collections import defaultdict
 
-from icl.latent_markov.latent_utils import generate_markov_chains
+# from icl.latent_markov.latent_utils import generate_markov_chains
 
 # config specifies the number of different transitions
 # each time, we randomly sample a transition matrix to use
@@ -46,12 +46,12 @@ class LatentMarkov:
             self.random_stationary = config.task.stationary # Whether to use sampled stationary distribution
         else:
             self.random_stationary = False 
-        if self.random_stationary: assert config.task.order == 1, "Order must be 1 for random stationary distribution in current implementation"
+        if self.random_stationary: 
+            raise NotImplementedError("Random stationary distribution is not implemented yet")
         
         self.alpha = config.task.alpha # Dirichlet prior for the transition matrix
         self.seed = config.seed # Seed for random number generation
         
-
         self.n_major_tasks = config.task.n_tasks # Total number of transition matrices
         self.n_minor_tasks = config.task.n_minor_tasks if 'n_minor_tasks' in config.task else 0
         self.p_minor = config.task.p_minor if 'p_minor' in config.task else 0.0 # Probability of tasks from the minor task pool
@@ -378,6 +378,7 @@ class LatentMarkov:
                     trans_mat = self._sample_banded_trans_mats(num_samples)
                 stationary = None
             else:
+                raise NotImplementedError("Random stationary distribution is not implemented yet")
                 trans_mat, stationary = generate_markov_chains(num_samples,
                                                                self.num_states, 
                                                                self.alpha, 

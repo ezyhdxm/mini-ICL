@@ -1,138 +1,132 @@
-# from collections import namedtuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# import nvtx
-# from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+from torch import Tensor
+from typing import Optional
 
-from .pos_encoder import *
+from .pos_encoder import precompute_freqs_cis, apply_rotary_emb
+from .kv_cache import KVCache
 
-# TODO: Add MLA
-
-# causal mask for flex_attention, not in use yet. 
-# flex_attention is a fast implementation of multihead attention. 
-# Yet it has not support positional encodings with training parameters.  
-
-def causal(b, h, q_idx, kv_idx):
-    return q_idx >= kv_idx
-
-
-
-
-######################
-# MultiHeadAttention #
-######################
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, config, layer=0):
+    def __init__(self, config, layer: int = 0):
         super().__init__()
-        self.emb_dim = config.model.emb_dim
-        self.n_head = config.model.num_heads[layer]
+        self.emb_dim = int(config.model.emb_dim)
+        self.n_head = int(config.model.num_heads[layer])
+        if self.emb_dim % self.n_head != 0:
+            raise ValueError("emb_dim must be divisible by n_head")
         self.head_dim = self.emb_dim // self.n_head
-        self.attn_type = config.model.attention_type if hasattr(config.model, 'attention_type') else "MHA"
-        if self.attn_type == "GQA":
-            self.g = config.model.attn_groups if hasattr(config.model, 'attn_groups') else 2
+        if self.head_dim % 2 != 0:
+            raise ValueError("head_dim must be even for rotary embeddings")
 
-        
-        assert self.emb_dim % self.n_head == 0, "Embedding dimension must be divisible by the number of heads."
-        
-        if config.training.identity_query:
-            self.query = nn.Identity()
+        self.query = nn.Linear(self.emb_dim, self.emb_dim, bias=bool(config.model.bias))
+        self.key   = nn.Linear(self.emb_dim, self.emb_dim, bias=bool(config.model.bias))
+        self.value = nn.Linear(self.emb_dim, self.emb_dim, bias=bool(config.model.bias))
+        self.out   = nn.Linear(self.emb_dim, self.emb_dim, bias=bool(config.model.bias))
+
+        self.flash = bool(getattr(config.model, "flash", False))
+        self.causal = bool(getattr(config.model, "mask", True))
+        self.dropout = float(config.model.dropout) if getattr(config.model, "dropout", None) else 0.0
+        self.inv_sqrt = self.head_dim ** -0.5
+
+        self.register_buffer(
+            "freqs_cis",
+            precompute_freqs_cis(self.head_dim, int(config.model.pos_max_len) * 2),
+            persistent=False,
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        *,
+        kv_cache: Optional[KVCache] = None,
+        cache_pos: Optional[int] = None,
+        update_cache: bool = True,
+    ) -> Tensor:
+        B, Tnew, _ = x.size()
+
+        # ---- cache position ----
+        if kv_cache is None:
+            cache_pos_i = 0 if cache_pos is None else int(cache_pos)
+            cur = 0
         else:
-            self.query = nn.Linear(self.emb_dim, self.emb_dim, bias=config.model.bias)
-        
-        if self.attn_type == "MQA":
-            self.key = nn.Linear(self.emb_dim, self.head_dim, bias=config.model.bias)
-            self.value = nn.Linear(self.emb_dim, self.head_dim, bias=config.model.bias)
-        elif self.attn_type == "MHA":
-            self.key = nn.Linear(self.emb_dim, self.emb_dim, bias=config.model.bias)
-            self.value = nn.Linear(self.emb_dim, self.emb_dim, bias=config.model.bias)
-        elif self.attn_type == "GQA":
-            self.key = nn.Linear(self.emb_dim, self.g * self.head_dim, bias=config.model.bias)
-            self.value = nn.Linear(self.emb_dim, self.g * self.head_dim, bias=config.model.bias)
-            self.register_buffer("head_to_group", torch.arange(self.n_head) // (self.n_head // self.g))
-        
-        if config.training.freeze_value: self.value.weight.requires_grad_(False)
-        
-        self.out = nn.Linear(self.emb_dim, self.emb_dim, bias=config.model.bias)
-        if config.training.freeze_out: self.out.weight.requires_grad_(False)
-        
-        self.pos_enc = config.model.pos_enc
-        self.scale = self.head_dim ** 0.5
-        self.flash = config.model.flash
-        self.dropout = config.model.dropout if config.model.dropout else 0.
-        assert not (self.flash and self.pos_enc == "rpe"), "Flash Attention does not support RPE currently."  
-        
-        if self.pos_enc == "rpe":
-            if not self.flash:
-                self.PEV = RelativePositionalEncoding(self.head_dim, config.model.pos_max_len) # (T,T,D)
-                self.PEK = RelativePositionalEncoding(self.head_dim, config.model.pos_max_len) # (T,T,D)
-            elif config.device == "cuda":
-                self.rpe = torch.randn((2*config.model.pos_max_len+1, self.head_dim), device=config.device) / (self.head_dim ** 0.5)
-                
+            cur = int(kv_cache.cur_len)
+            cache_pos_i = cur if cache_pos is None else int(cache_pos)
+            if cache_pos_i > cur:
+                raise RuntimeError("cache_pos cannot be > kv_cache.cur_len")
+
+        end = cache_pos_i + Tnew
+
+        # ---- project ----
+        q = self.query(x).view(B, Tnew, self.n_head, self.head_dim)  # (B,T,H,D)
+        k = self.key(x).view(B, Tnew, self.n_head, self.head_dim)
+        v = self.value(x).view(B, Tnew, self.n_head, self.head_dim)
+
+        # ---- rotary ----
+        if end > self.freqs_cis.size(0):
+            raise RuntimeError("rotary freqs overflow")
+        freqs = self.freqs_cis[cache_pos_i:end]
+        if freqs.device != x.device:
+            freqs = freqs.to(device=x.device)
+        q, k = apply_rotary_emb(q, k, freqs_cis=freqs)  # (B,T,H,D)
+
+        Q = q.transpose(1, 2)  # (B,H,T,D)
+        K = k.transpose(1, 2)
+        V = v.transpose(1, 2)
+
+        # ---- kv cache combine ----
+        if kv_cache is not None:
+            if end > kv_cache.k.size(2):
+                raise RuntimeError("KV cache overflow")
+
+            if update_cache:
+                kv_cache.k[:, :, cache_pos_i:end, :].copy_(K)
+                kv_cache.v[:, :, cache_pos_i:end, :].copy_(V)
+                kv_cache.cur_len = end
+                Ktot = kv_cache.k[:, :, :end, :]
+                Vtot = kv_cache.v[:, :, :end, :]
             else:
-                raise ValueError("Flash Attention with RPE is currently only supported on CUDA devices.") # TODO: pay a closer look to flex_attention
-        
-        elif self.pos_enc == "rotary":
-            self.register_buffer("freqs_cis", precompute_freqs_cis(self.head_dim, config.model.pos_max_len * 2))
-
-        
-        elif self.pos_enc == "alibi":
-            self.alibi_emb = AliBiPositionalEncoding(self.n_head)
-    
-    def forward(self, x): # x: (B,T,C)
-        batch_size, seq_len, _ = x.size()
-        Q = self.query(x).view(batch_size, seq_len, self.n_head, self.head_dim).transpose(1,2) # (B,H,T,D)
-        if self.attn_type == "MQA":
-            # Multi-query attention: only one key and value projection
-            K = self.key(x).view(batch_size, seq_len, 1, self.head_dim).transpose(1,2)
-            V = self.value(x).view(batch_size, seq_len, 1, self.head_dim).transpose(1,2)
-        elif self.attn_type == "MHA":
-            K = self.key(x).view(batch_size, seq_len, self.n_head, self.head_dim).transpose(1,2) # (B,H,T,D)
-            V = self.value(x).view(batch_size, seq_len, self.n_head, self.head_dim).transpose(1,2) # (B,H,T,D)
-        elif self.attn_type == "GQA":
-            K = self.key(x).view(batch_size, seq_len, self.g, self.head_dim).transpose(1,2) # (B,G,T,D)
-            V = self.value(x).view(batch_size, seq_len, self.g, self.head_dim).transpose(1,2) # (B,G,T,D)
-            K = K[:, self.head_to_group]  # (B, H, T, D)
-            V = V[:, self.head_to_group]  # (B, H, T, D)
-        
-        if self.pos_enc == "rotary":                                
-            # expected shape for apply_rotary_emb: (batch_size, max_seq_len, num_head, d_head)
-            Q, K = apply_rotary_emb(
-                Q.transpose(1, 2), K.transpose(1, 2), 
-                freqs_cis=self.freqs_cis[:seq_len].to(x.device)
-                )  # (B,H,T,D)
-            Q, K = Q.transpose(1, 2), K.transpose(1, 2)
-            
-        if self.flash:
-            out = F.scaled_dot_product_attention(Q, K, V, attn_mask=None, dropout_p=self.dropout, is_causal=True)
-            out = out.transpose(1,2).contiguous().view(batch_size,seq_len,-1) # (B,T,C)
-            out = self.out(out)
-            return out
+                # Fast "probe at end": write into unused tail but do not advance cur_len.
+                if cache_pos_i == cur:
+                    kv_cache.k[:, :, cache_pos_i:end, :].copy_(K)
+                    kv_cache.v[:, :, cache_pos_i:end, :].copy_(V)
+                    Ktot = kv_cache.k[:, :, :end, :]
+                    Vtot = kv_cache.v[:, :, :end, :]
+                else:
+                    # Rewind probe without mutating cache contents.
+                    Ktot = torch.cat((kv_cache.k[:, :, :cache_pos_i, :], K), dim=2)
+                    Vtot = torch.cat((kv_cache.v[:, :, :cache_pos_i, :], V), dim=2)
         else:
-            attn_score = Q @ K.transpose(-1,-2) / self.scale # (B,H,T,T)
-            if self.pos_enc == "rpe":
-                Q2 = Q.transpose(0,2) # (T,B,H,D)
-                Q2 = Q2.contiguous().view(seq_len, batch_size*self.n_head, self.head_dim) # (T,BH,D)
-                attn_score2 = torch.matmul(Q2, self.PEK(seq_len).transpose(1,2)) # (T,BH,D) @ (T,D,T) -> (T,BH,T)
-                attn_score2 = attn_score2.view(seq_len, self.n_head, batch_size, seq_len).transpose(0,2).contiguous() # (B,H,T,T)
-                attn_score += attn_score2 / self.scale
-            elif self.pos_enc=="alibi":
-                attn_score += self.alibi_emb(seq_len)
+            Ktot, Vtot = K, V
 
-            causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
-            attn_score = attn_score.masked_fill(~causal_mask, float('-inf'))
+        # ---- attention ----
+        k_len = Ktot.size(-2)
+        past_len = k_len - Tnew  # 0 if no prefix
 
-            self.attn = F.softmax(attn_score, dim=-1) # (B,H,T,T)
-            out = self.attn @ V # (B,H,T,D)
-            
-            if self.pos_enc == "rpe":
-                attn2 = self.attn.transpose(0,2).contiguous().view(seq_len, -1, seq_len) # (T,BH,T)
-                out2 = torch.matmul(attn2, self.PEV(seq_len)) # (T,BH,T) @ (T,T,D) -> (T,BH,D)
-                out2 = out2.view(seq_len, -1, batch_size, self.head_dim).transpose(0,2) # (B,H,T,D)
-                out += out2
-            
-            out = out.transpose(1,2).contiguous().view(batch_size,seq_len,-1) # (B,T,C)
-            out = self.out(out)
-            
-            return out
+        if self.flash:
+            drop = self.dropout if self.training else 0.0
+            if not self.causal:
+                out = F.scaled_dot_product_attention(Q, Ktot, Vtot, dropout_p=drop, is_causal=False)
+            else:
+                if past_len == 0:
+                    out = F.scaled_dot_product_attention(Q, Ktot, Vtot, dropout_p=drop, is_causal=True)
+                elif Tnew == 1:
+                    out = F.scaled_dot_product_attention(Q, Ktot, Vtot, dropout_p=drop, is_causal=False)
+                else:
+                    # offset causal mask: allow key positions <= past_len + i for query row i
+                    attn_mask = torch.ones((Tnew, k_len), device=Q.device, dtype=torch.bool).tril(diagonal=past_len)
+                    out = F.scaled_dot_product_attention(
+                        Q, Ktot, Vtot, attn_mask=attn_mask, dropout_p=drop, is_causal=False
+                    )
+        else:
+            attn_score = (Q @ Ktot.transpose(-1, -2)) * self.inv_sqrt  # (B,H,Tnew,K)
+            if self.causal:
+                causal_mask = torch.ones((Tnew, k_len), device=attn_score.device, dtype=torch.bool).tril(diagonal=past_len)
+                attn_score = attn_score.masked_fill(~causal_mask, torch.finfo(attn_score.dtype).min)
+            self.attn = F.softmax(attn_score, dim=-1)
+            if self.dropout and self.training:
+                self.attn = F.dropout(self.attn, p=self.dropout)
+            out = self.attn @ Vtot
+
+        out = out.transpose(1, 2).contiguous().view(B, Tnew, self.emb_dim)
+        return self.out(out)

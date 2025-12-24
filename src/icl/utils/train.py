@@ -13,9 +13,10 @@ import timeit
 
 
 from icl.latent_markov import *
-from icl.models.ngram_latent import *
+# from icl.models.ngram_latent import *
 from .train_utils import get_attn_base, get_train_result, tabulate_model
 from icl.figures.plot import get_loss_plots
+from icl.models.attention import MultiHeadAttention
 # from icl.figures.head_view import get_head_view
 # from icl.models.ngram_trigger import *
 # from icl.tasks.causal_graph import *
@@ -23,6 +24,7 @@ from icl.figures.plot import get_loss_plots
 from .basic import get_hash
 
 
+# use for profiling
 @contextmanager
 def maybe_nvtx_range(message, color="blue", enabled=True):
     ctx = nvtx.annotate(message, color=color) if enabled else nullcontext() 
@@ -36,6 +38,18 @@ def maybe_nvtx_range(message, color="blue", enabled=True):
             end_time = timeit.default_timer()
             print(f"{message}: {end_time - start_time:.6f} s")
             
+# turn off flash attention to obtain attention scores
+def flash_off(model):
+    for m in model.modules():
+        if isinstance(m, MultiHeadAttention):
+            m.flash = False
+# turn on flash attention for faster computation
+def flash_on(model):
+    for m in model.modules():
+        if isinstance(m, MultiHeadAttention):
+            m.flash = True
+
+
 
 def _init_log() -> dict:
     """
@@ -195,7 +209,9 @@ class BaseTrainer:
                 optimizer.zero_grad()
 
                 if (self.config.training.get_attn) > 0 and (self.step % self.config.training.get_attn == 0): 
+                    flash_off(model)
                     self.attn_maps[self.step] = get_attn_base(model, batch)
+                    flash_on(model)
 
                 with maybe_nvtx_range(f"Forward Pass {iters}:{i}", color="blue", enabled=self.config.profile):
                     with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.mixed_precision else nullcontext():

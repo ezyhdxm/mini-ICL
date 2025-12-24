@@ -9,8 +9,8 @@ def get_config_base() -> ConfigDict:
     config = ConfigDict()
     config.profile = False  # Default profiling flag, can be set to True for performance profiling
     config.mixed_precision = False  # Default mixed precision flag, can be set to True for mixed precision training
-    config.seq_len = 257
-    config.vocab_size = 10
+    config.seq_len = 129
+    config.vocab_size = 8
     config.seed = 10086
     config.batch_size = 64
     config.eval_size = 128
@@ -74,11 +74,8 @@ def get_config_base() -> ConfigDict:
     config.training.warmup_steps = 10_000
     config.training.learning_rate = 4e-4
     config.training.eval_iter = 50
-    config.training.get_attn = 5_000
+    config.training.get_attn = 5000
     config.training.get_checkpoints = 100
-    config.training.freeze_value = False
-    config.training.freeze_out = False
-    config.training.identity_query = False
     config.training.scheduler = True
     config.training.T_max = 20
     

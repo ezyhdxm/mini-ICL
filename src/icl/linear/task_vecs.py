@@ -127,105 +127,10 @@ def get_task_vector_from_hidden(config, model, task, layer_index=3,
 
 
 
-def predict_with_task_vector(
-        model, query_data, query_target, task_vector, l=0, pad="mapsto", is_diff=False,
-        optimize=False, lr=1e-3, num_epochs=5, train_task=None, task_idx=None, verbose=False, pos=1
-    ):
-    if pad == "bos": 
-        task_pos=0 
-    else:
-        task_pos = pos
-    
-    if task_vector.device != model.device:
-        task_vector = task_vector.to(model.device)
-
-    if optimize:
-        assert train_task is not None, "train_task must be provided for optimization"
-        assert task_idx is not None, "task_idx must be provided for optimization"
-        alpha = nn.Parameter(torch.tensor(0.05, device=task_vector.device))
-        optimizer = torch.optim.Adam([alpha], lr=lr)
-    else:
-        alpha = 1.0
-
-    def inject_hook(module, input, output):
-        
-        if not is_diff:
-            output[:, task_pos, :] = alpha * task_vector
-        else:
-            output[:, task_pos, :] += alpha * task_vector
-        return output
-    
-    hook_handle = model.transformer.blocks[l].attn_block.register_forward_hook(inject_hook)
-
-    if optimize:
-        # Freeze the model
-        for p in model.parameters(): p.requires_grad = False
-        # optim.Adam([theta], lr=lr)
-        loss_fn = nn.MSELoss()
-        try:
-            for epoch in range(num_epochs):
-                data, target = train_task.sample_from_task(train_task.task_pool[task_idx], epoch)
-                optimizer.zero_grad()
-                preds = model(data, target)
-                loss = loss_fn(preds[:, 0], target[:, 0].to(preds.device))
-                if verbose: print(loss.item())
-                loss.backward()
-                optimizer.step()
-            preds = model(query_data, query_target)
-        finally:
-            hook_handle.remove()
-    else:
-        with torch.no_grad():
-            preds = model(query_data, query_target)
-        hook_handle.remove()
-
-    return preds
 
 
 
 
-def check_injection(train_task, model, inject_vectors, layer=1, pos=1, is_diff=False, task_idx=None):
-    t0 = pos
-    l0 = layer
-    train_task.batch_size = 1024
-    # print(f"Memory allocated: {torch.cuda.memory_allocated()/1024**3:.2f} GB")
-    criterion = nn.MSELoss(reduction='none')
-    # tvs_means = task_vectors.mean(dim=-2)
-    # tvs_mean_weighted = tvs_means[:, -10:].mean(dim=1)
-    
-    for k in range(train_task.task_pool.shape[0]):
-        torch.cuda.empty_cache()
-        if task_idx is None:
-            tid = k
-        else:
-            tid = task_idx
-        
-        query_data, query_target = train_task.sample_from_task(train_task.task_pool[tid], step=50)
-        
-        preds_rand = predict_with_task_vector(
-                model=model,
-                query_data=query_data[:, :(3*t0+3)],
-                query_target=query_target[:, :(3*t0+3)],
-                task_vector=inject_vectors[k],
-                l=l0,              # same layer
-                pad="mapsto",      # same position
-                pos=3*t0+1,
-                is_diff=is_diff
-            )
-        with torch.no_grad():
-            preds = model(query_data, query_target)
 
-        if is_diff:
-            query_target[:, t0] = (query_data[:, t0] @ train_task.task_pool[k]).squeeze(-1)
-        
-        errors_rand = criterion(preds_rand[:, t0], query_target[:, t0].to(preds_rand.device))  # shape: (batch,)
-        errors_base = criterion(preds[:, t0], query_target[:, t0].to(preds_rand.device))
-        loss = errors_rand.mean()
-        baseline_loss = errors_base.mean()
-        
-        std_rand = errors_rand.std(unbiased=True)
-        std_base = errors_base.std(unbiased=True)
-        print(f"{t0}-shot loss w. injected vector: {loss.item():.3f} ({std_rand.item():.3f})")
-        print(f"{t0}-shot loss w.o. injected vector: {baseline_loss.item():.3f} ({std_base.item():.3f})")
 
 
