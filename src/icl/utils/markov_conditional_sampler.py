@@ -1,5 +1,6 @@
 import numpy as np
 from typing import Iterator, Tuple, Optional
+import torch
 
 def stationary_distribution(P, atol: float = 1e-12) -> np.ndarray:
     n = P.shape[0]
@@ -164,3 +165,24 @@ def sample_all_positions_all_vocab_array(
         out[t, v, :, :] = samples_tv.astype(dtype, copy=False)
 
     return out
+
+
+
+def get_all_samples(n_tasks, sampler_clone0, num_samples):
+
+    all_samples = np.empty((n_tasks+3, sampler_clone0.seq_len-1, sampler_clone0.num_states, num_samples, 2*sampler_clone0.seq_len-1))
+
+    P_major = sampler_clone0.major_trans_mat.cpu().numpy()
+    for i in range(3):
+        sample = sample_all_positions_all_vocab_array(P_major[i], sampler_clone0.seq_len-1, num_samples)
+        all_samples[i,:,:,:,::2] = sample[:-1]
+        all_samples[i,:,:,:,1::2] = sampler_clone0.num_states
+
+    P_minors = sampler_clone0.minor_trans_mat[:n_tasks].cpu().numpy()
+    for i in range(3, n_tasks+3):
+        sample = sample_all_positions_all_vocab_array(P_minors[i-3], sampler_clone0.seq_len-1, num_samples)
+        all_samples[i,:,:,:,::2] = sample[:-1]
+        all_samples[i,:,:,:,1::2] = sampler_clone0.num_states
+
+    all_samples = torch.from_numpy(all_samples)
+    return all_samples

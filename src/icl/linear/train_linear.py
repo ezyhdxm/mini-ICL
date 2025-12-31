@@ -47,7 +47,7 @@ def get_sharded_batch_sampler(task: Task, is_eval: bool=False) -> Callable[[int]
     
     Args:
         task: Task object with sample_batch method
-        is_eval: Whether to use evaluation mode
+        is_eval: Whether to use evaluation mode, when is_eval is True, only the major tasks are sampled, otherwise minor tasks may be sampled as well. The name may be misleading. 
     
     Returns:
         Function that takes step number and returns (data, tasks, targets) shaped for devices
@@ -76,7 +76,7 @@ def _init_log(bsln_preds_false: Preds, bsln_preds_true: Preds, n_dims: int) -> d
     including baseline comparisons and transformer performance.
     
     Args:
-        bsln_preds_false: Baseline predictions for false evaluation mode
+        bsln_preds_false: Baseline predictions for false evaluation mode, that is, minor tasks may be included. 
         bsln_preds_true: Baseline predictions for true evaluation mode
         n_dims: Number of dimensions for normalization
     
@@ -188,12 +188,12 @@ def train(config: ConfigDict, verbose=False) -> None:
         print(f"{exp_name} already completed")
         checkpoint_path = os.path.join(exp_dir, "checkpoint.pt")
         log_path = os.path.join(exp_dir, "log.json")
-        checkpoint = torch.load(checkpoint_path, map_location=config.device)
+        checkpoint = torch.load(checkpoint_path, map_location=config.device, weights_only=True)
         model = get_model(**config["model"], dtype=data_type)
         model.load_state_dict(checkpoint["model"])
         model = model.to(config.device)
         print(f"Loaded model from {checkpoint_path}")
-        return model, json.load(open(log_path, "r"))
+        return model, (json.load(open(log_path, "r")), checkpoint_path)
     
     # Save config
     os.makedirs(exp_dir, exist_ok=True)

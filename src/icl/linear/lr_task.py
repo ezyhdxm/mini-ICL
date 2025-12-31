@@ -96,6 +96,7 @@ class NoisyLinearRegression:
             idxs = torch.randint(low=0, high=self.n_tasks, size=(self.batch_size,), 
                                  generator=self.task_gen, device=self.device) # (batch_size,)
             tasks = self.task_pool[idxs]
+            # add minor tasks with probability p_minor if is_eval is False
             if not is_eval and self.p_minor > 0:
                 minor_mask = torch.rand(self.batch_size, generator=self.task_gen, device=self.device) < self.p_minor
                 n_minor = int(minor_mask.sum().item())

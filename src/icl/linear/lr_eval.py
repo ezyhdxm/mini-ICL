@@ -22,7 +22,7 @@ def mse(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 # Evaluation                                                                                                           #
 ########################################################################################################################
 
-
+# evaluate xs @ ws
 def get_oracle_step(task) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
     def step(xs: torch.Tensor, ws: torch.Tensor) -> torch.Tensor:
         return task.evaluate_oracle(xs, ws)

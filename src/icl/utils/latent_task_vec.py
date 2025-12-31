@@ -32,7 +32,7 @@ def compute_hiddens(config,
     """
     device = config.device
     B = 256 
-    max_tasks = 32
+    max_tasks = 64
     n_tasks = min(max_tasks, sampler.n_major_tasks + sampler.n_minor_tasks)
     seq_len = sampler.seq_len
     n_embd = config.model.emb_dim
@@ -83,89 +83,122 @@ def compute_hiddens(config,
 
 # A core visualization function. 
 
-def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, lambdas,
-                         task_labels=None, final_labels=None, n_minors=0,
-                         size_min=6, size_max=20):
+
+def project_with_r2_size(
+    task_vecs_over_all_time,
+    final_task_vecs,
+    r2_scores,
+    lambdas,
+    task_labels=None,
+    final_labels=None,
+    n_minors=0,
+    size_min=6,
+    size_max=20,
+    # --- NEW: extra hover data ---
+    hover_data=None,          # shape (K,) or None
+    hover_name="hover",       # label shown on hover
+    hover_fmt=".3f",          # formatting for numeric hover values
+):
     """
     Project high-dimensional task vectors to 2D plane and adjust scatter point sizes by R² scores.
     Uses final_task_vecs to construct the projection plane (via SVD to get first two principal components).
     Supports time slider for dynamically viewing projections at different timesteps.
-    
+
     Args:
-        task_vecs_over_all_time: Tensor of shape (K, T, D), task vectors for K tasks at T timesteps.
-                                Last n_minors tasks are minor tasks
-        final_task_vecs: Tensor of shape (3, D), 3 final reference task vectors
-        r2_scores: Tensor of shape (K, T), goodness-of-fit for each point
-        lambdas: Tensor of shape (K, T, 3), weights of each point on the 3 final vectors
-        task_labels: List of task labels, length should be K
-        final_labels: List of labels for final vectors, length should be 3
-        n_minors: Number of minor tasks, default 0
-        size_min: Minimum scatter point size, corresponds to minimum R²
-        size_max: Maximum scatter point size, corresponds to maximum R²
-    
+        task_vecs_over_all_time: (K, T, D)
+        final_task_vecs: (3, D)
+        r2_scores: (K, T)
+        lambdas: (K, T, 3)
+        task_labels: list[str] length K
+        final_labels: list[str] length 3
+        n_minors: int
+        size_min, size_max: marker size range
+
+        hover_data: optional extra hover field of shape (K,), same ordering as tasks.
+                   (Static across time; if you want (K,T) later, we can extend similarly.)
+        hover_name: label used in hover tooltip for hover_data
+        hover_fmt: numeric format (Plotly d3-format-style like ".3f", ".2e", etc.)
+
     Returns:
-        fig: Plotly Figure object containing interactive projection plot with time slider
+        fig: plotly.graph_objects.Figure
     """
 
     def to_np(x):
+        if x is None:
+            return None
         if hasattr(x, "detach"):
             return x.detach().cpu().numpy()
         return np.asarray(x)
 
-    X = to_np(task_vecs_over_all_time)
-    F = to_np(final_task_vecs)
-    R2 = to_np(r2_scores)
+    X = to_np(task_vecs_over_all_time)   # (K,T,D)
+    F = to_np(final_task_vecs)           # (3,D)
+    R2 = to_np(r2_scores)                # (K,T)
+    L = to_np(lambdas)                   # (K,T,3)
+    H = to_np(hover_data)                # (K,) or None
+
     K, T, D = X.shape
+
+    if H is not None:
+        H = np.asarray(H)
+        if H.shape != (K,):
+            H = H.reshape(-1)
+            if H.shape[0] != K:
+                raise ValueError(f"hover_data must have shape (K,), got {hover_data.shape} (K={K})")
+        H = H.reshape(K, 1)  # (K,1) for concatenation
 
     # --- build projection plane from final_task_vecs ---
     F_center = F.mean(axis=0, keepdims=True)
     F0 = F - F_center
     U, S, Vt = np.linalg.svd(F0, full_matrices=False)
-    basis = Vt[:2].T
-    F_proj = (F - F_center) @ basis # (3,2)
-
-    # if n_minors > 0:
-    #    F_proj = np.concatenate([F_proj, np.zeros((n_minors, 2))], axis=0) 
+    basis = Vt[:2].T  # (D,2)
+    F_proj = (F - F_center) @ basis  # (3,2)
 
     # Separate major, OOD, and minor tasks
     if n_minors > 0:
         n_non_minor = K - n_minors
-        n_major = min(3, n_non_minor)  # First 3 are major tasks
-        n_ood = max(0, n_non_minor - 3)  # Rest (3 to -n_minors) are OOD tasks
-        
-        X_major = X[:n_major]  # (n_major, T, D)
-        X_ood = X[n_major:n_major+n_ood] if n_ood > 0 else None  # (n_ood, T, D)
-        X_minor = X[n_major+n_ood:]  # (n_minors, T, D)
-        
-        R2_major = R2[:n_major]  # (n_major, T)
-        R2_ood = R2[n_major:n_major+n_ood] if n_ood > 0 else None  # (n_ood, T)
-        R2_minor = R2[n_major+n_ood:]  # (n_minors, T)
-        
-        lambdas_major = lambdas[:n_major]  # (n_major, T, 3)
-        lambdas_ood = lambdas[n_major:n_major+n_ood] if n_ood > 0 else None  # (n_ood, T, 3)
-        lambdas_minor = lambdas[n_major+n_ood:]  # (n_minors, T, 3)
-        
-        # Precompute projections for major, OOD, and minor tasks separately
+        n_major = min(3, n_non_minor)     # first 3 are major
+        n_ood = max(0, n_non_minor - 3)   # rest before minors are OOD
+
+        X_major = X[:n_major]  # (n_major,T,D)
+        X_ood = X[n_major:n_major + n_ood] if n_ood > 0 else None
+        X_minor = X[n_major + n_ood:]  # (n_minors,T,D)
+
+        R2_major = R2[:n_major]
+        R2_ood = R2[n_major:n_major + n_ood] if n_ood > 0 else None
+        R2_minor = R2[n_major + n_ood:]
+
+        L_major = L[:n_major]
+        L_ood = L[n_major:n_major + n_ood] if n_ood > 0 else None
+        L_minor = L[n_major + n_ood:]
+
+        H_major = H[:n_major] if H is not None else None
+        H_ood = H[n_major:n_major + n_ood] if (H is not None and n_ood > 0) else None
+        H_minor = H[n_major + n_ood:] if H is not None else None
+
+        # Precompute projections
         X_major_proj_list = [(X_major[:, t, :] - F_center) @ basis for t in range(T)]
         X_ood_proj_list = [(X_ood[:, t, :] - F_center) @ basis for t in range(T)] if n_ood > 0 else None
         X_minor_proj_list = [(X_minor[:, t, :] - F_center) @ basis for t in range(T)]
     else:
-        # No minor tasks, separate major and OOD
         n_major = min(3, K)
         n_ood = max(0, K - 3)
-        
+
         X_major = X[:n_major]
         X_ood = X[n_major:] if n_ood > 0 else None
         X_minor = None
-        
+
         R2_major = R2[:n_major]
         R2_ood = R2[n_major:] if n_ood > 0 else None
         R2_minor = None
-        
-        lambdas_major = lambdas[:n_major]
-        lambdas_ood = lambdas[n_major:] if n_ood > 0 else None
-        lambdas_minor = None
-        
+
+        L_major = L[:n_major]
+        L_ood = L[n_major:] if n_ood > 0 else None
+        L_minor = None
+
+        H_major = H[:n_major] if H is not None else None
+        H_ood = H[n_major:] if (H is not None and n_ood > 0) else None
+        H_minor = None
+
         X_major_proj_list = [(X_major[:, t, :] - F_center) @ basis for t in range(T)]
         X_ood_proj_list = [(X_ood[:, t, :] - F_center) @ basis for t in range(T)] if n_ood > 0 else None
         X_minor_proj_list = None
@@ -173,13 +206,12 @@ def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, la
     # Generate labels
     if n_minors > 0:
         if task_labels is None:
-            # First 3 are major tasks, rest (3 to -n_minors) are OOD tasks
             major_labels = [f"major_{i}" for i in range(3)]
-            ood_labels = [f"ood_{i}" for i in range(3, K-n_minors)]
+            ood_labels = [f"ood_{i}" for i in range(3, K - n_minors)]
             minor_labels = [f"minor_{i}" for i in range(n_minors)]
         else:
             major_labels = task_labels[:3]
-            ood_labels = task_labels[3:K-n_minors] if K-n_minors > 3 else []
+            ood_labels = task_labels[3:K - n_minors] if K - n_minors > 3 else []
             minor_labels = [f"minor_{i}" for i in range(n_minors)]
     else:
         if task_labels is None:
@@ -189,6 +221,7 @@ def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, la
             major_labels = task_labels[:3]
             ood_labels = task_labels[3:K] if K > 3 else []
         minor_labels = None
+
     if final_labels is None:
         final_labels = [f"final_{i}" for i in range(3)]
 
@@ -196,89 +229,95 @@ def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, la
     def scale_sizes(r2_values):
         r2_min, r2_max = R2.min(), R2.max()
         if r2_max == r2_min:
-            return np.full_like(r2_values, (size_min+size_max)/2.0)
+            return np.full_like(r2_values, (size_min + size_max) / 2.0)
         return size_min + (r2_values - r2_min) / (r2_max - r2_min) * (size_max - size_min)
 
-    # Initial scatter at t=0
-    t0 = 0
-    fig = go.Figure()
+    # customdata builder: [R2, lambda1, lambda2, lambda3, (optional hover)]
+    def make_custom(r2_col, lam_mat, h_col=None):
+        base = np.concatenate([r2_col.reshape(-1, 1), lam_mat], axis=1)  # (n,4)
+        if h_col is None:
+            return base
+        return np.concatenate([base, h_col], axis=1)  # (n,5)
 
-    # Add major tasks trace
-    X_major0 = X_major_proj_list[t0]
-    lambda_major0 = lambdas_major[:, t0, :]
-    sizes_major0 = scale_sizes(R2_major[:, t0])
-    
-    fig.add_trace(go.Scatter(
-        x=X_major0[:, 0], y=X_major0[:, 1],
-        mode="markers",
-        name="major tasks",
-        marker=dict(size=sizes_major0, opacity=0.8, sizemode="diameter", color="blue"),
-        text=major_labels,
-        customdata=np.concatenate([R2_major[:, t0:t0+1], lambda_major0], axis=1),
-        hovertemplate=(
+    # hover template builder
+    def make_hovertemplate(has_extra: bool):
+        extra_line = f"<br>{hover_name}=%{{customdata[4]:{hover_fmt}}}" if has_extra else ""
+        return (
             "task=%{text}"
             "<br>R²=%{customdata[0]:.3f}"
             "<br>λ₁=%{customdata[1]:.3f}"
             "<br>λ₂=%{customdata[2]:.3f}"
             "<br>λ₃=%{customdata[3]:.3f}"
-            "<extra></extra>"
+            + extra_line
+            + "<extra></extra>"
         )
+
+    has_extra = H is not None
+
+    # Initial scatter at t=0
+    t0 = 0
+    fig = go.Figure()
+
+    # --- major tasks trace ---
+    X_major0 = X_major_proj_list[t0]
+    sizes_major0 = scale_sizes(R2_major[:, t0])
+    custom_major0 = make_custom(R2_major[:, t0], L_major[:, t0, :], H_major)
+
+    fig.add_trace(go.Scatter(
+        x=X_major0[:, 0],
+        y=X_major0[:, 1],
+        mode="markers",
+        name="major tasks",
+        marker=dict(size=sizes_major0, opacity=0.8, sizemode="diameter", color="blue"),
+        text=major_labels,
+        customdata=custom_major0,
+        hovertemplate=make_hovertemplate(has_extra),
     ))
 
-    # Add OOD tasks trace if they exist
+    # --- OOD tasks trace ---
     if X_ood_proj_list is not None and len(ood_labels) > 0:
         X_ood0 = X_ood_proj_list[t0]
-        lambda_ood0 = lambdas_ood[:, t0, :]
         sizes_ood0 = scale_sizes(R2_ood[:, t0])
-        
+        custom_ood0 = make_custom(R2_ood[:, t0], L_ood[:, t0, :], H_ood)
+
         fig.add_trace(go.Scatter(
-            x=X_ood0[:, 0], y=X_ood0[:, 1],
+            x=X_ood0[:, 0],
+            y=X_ood0[:, 1],
             mode="markers",
             name="OOD tasks",
             marker=dict(size=sizes_ood0, opacity=0.8, sizemode="diameter", color="green", symbol="square"),
             text=ood_labels,
-            customdata=np.concatenate([R2_ood[:, t0:t0+1], lambda_ood0], axis=1),
-            hovertemplate=(
-                "task=%{text}"
-                "<br>R²=%{customdata[0]:.3f}"
-                "<br>λ₁=%{customdata[1]:.3f}"
-                "<br>λ₂=%{customdata[2]:.3f}"
-                "<br>λ₃=%{customdata[3]:.3f}"
-                "<extra></extra>"
-            )
+            customdata=custom_ood0,
+            hovertemplate=make_hovertemplate(has_extra),
         ))
 
-    # Add minor tasks trace if they exist
+    # --- minor tasks trace ---
     if n_minors > 0:
         X_minor0 = X_minor_proj_list[t0]
-        lambda_minor0 = lambdas_minor[:, t0, :]
         sizes_minor0 = scale_sizes(R2_minor[:, t0])
-        
+        custom_minor0 = make_custom(R2_minor[:, t0], L_minor[:, t0, :], H_minor)
+
         fig.add_trace(go.Scatter(
-            x=X_minor0[:, 0], y=X_minor0[:, 1],
+            x=X_minor0[:, 0],
+            y=X_minor0[:, 1],
             mode="markers",
             name="minor tasks",
             marker=dict(size=sizes_minor0, opacity=0.8, sizemode="diameter", color="red", symbol="diamond"),
             text=minor_labels,
-            customdata=np.concatenate([R2_minor[:, t0:t0+1], lambda_minor0], axis=1),
-            hovertemplate=(
-                "task=%{text}"
-                "<br>R²=%{customdata[0]:.3f}"
-                "<br>λ₁=%{customdata[1]:.3f}"
-                "<br>λ₂=%{customdata[2]:.3f}"
-                "<br>λ₃=%{customdata[3]:.3f}"
-                "<extra></extra>"
-            )
+            customdata=custom_minor0,
+            hovertemplate=make_hovertemplate(has_extra),
         ))
 
-    # final refs
+    # --- final refs trace ---
     fig.add_trace(go.Scatter(
-        x=F_proj[:,0], y=F_proj[:,1],
+        x=F_proj[:, 0],
+        y=F_proj[:, 1],
         mode="markers+text",
         name="final refs",
         marker=dict(size=12, symbol="star", line=dict(width=1)),
         text=final_labels,
-        textposition="top center"
+        textposition="top center",
+        hoverinfo="skip",
     ))
 
     # Slider steps
@@ -286,62 +325,61 @@ def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, la
     for t in range(T):
         X_major_t = X_major_proj_list[t]
         sizes_major_t = scale_sizes(R2_major[:, t])
-        custom_major_t = np.concatenate([R2_major[:, t:t+1], lambdas_major[:, t, :]], axis=1)
-        
-        # Build args for slider step
+        custom_major_t = make_custom(R2_major[:, t], L_major[:, t, :], H_major)
+
+        # Lists must match trace order: major, (ood), (minor), final refs
         x_coords = [X_major_t[:, 0]]
         y_coords = [X_major_t[:, 1]]
         custom_data = [custom_major_t]
         markers = [dict(size=sizes_major_t, opacity=0.8, sizemode="diameter", color="blue")]
         texts = [major_labels]
-        
-        # Add OOD tasks if they exist
+
         if X_ood_proj_list is not None and len(ood_labels) > 0:
             X_ood_t = X_ood_proj_list[t]
             sizes_ood_t = scale_sizes(R2_ood[:, t])
-            custom_ood_t = np.concatenate([R2_ood[:, t:t+1], lambdas_ood[:, t, :]], axis=1)
-            
+            custom_ood_t = make_custom(R2_ood[:, t], L_ood[:, t, :], H_ood)
+
             x_coords.append(X_ood_t[:, 0])
             y_coords.append(X_ood_t[:, 1])
             custom_data.append(custom_ood_t)
             markers.append(dict(size=sizes_ood_t, opacity=0.8, sizemode="diameter", color="green", symbol="square"))
             texts.append(ood_labels)
-        
-        # Add minor tasks if they exist
+
         if n_minors > 0:
             X_minor_t = X_minor_proj_list[t]
             sizes_minor_t = scale_sizes(R2_minor[:, t])
-            custom_minor_t = np.concatenate([R2_minor[:, t:t+1], lambdas_minor[:, t, :]], axis=1)
-            
+            custom_minor_t = make_custom(R2_minor[:, t], L_minor[:, t, :], H_minor)
+
             x_coords.append(X_minor_t[:, 0])
             y_coords.append(X_minor_t[:, 1])
             custom_data.append(custom_minor_t)
             markers.append(dict(size=sizes_minor_t, opacity=0.8, sizemode="diameter", color="red", symbol="diamond"))
             texts.append(minor_labels)
-        
-        # Add final refs
+
+        # final refs (unchanged over time)
         x_coords.append(F_proj[:, 0])
         y_coords.append(F_proj[:, 1])
-        custom_data.append(None)
-        markers.append(None)
+        custom_data.append(None)  # not used for final refs
+        markers.append(None)      # keep marker unchanged
         texts.append(final_labels)
-        
+
         steps.append(dict(
             method="update",
             args=[
                 {"x": x_coords,
-                "y": y_coords,
-                "customdata": custom_data,
-                "marker": markers,
-                "text": texts},
+                 "y": y_coords,
+                 "customdata": custom_data,
+                 "marker": markers,
+                 "text": texts},
                 {"title": f"Projection at t={t}"}
             ],
             label=str(t)
         ))
 
-
     fig.update_layout(
-        title="Projection with R² (hover & size)" + (f" - Major/OOD/Minor tasks" if n_minors > 0 or len(ood_labels) > 0 else ""),
+        title="Projection with R² (hover & size)" + (
+            " - Major/OOD/Minor tasks" if (n_minors > 0 or len(ood_labels) > 0) else ""
+        ),
         xaxis_title="axis 1",
         yaxis_title="axis 2",
         sliders=[dict(
@@ -350,10 +388,12 @@ def project_with_r2_size(task_vecs_over_all_time, final_task_vecs, r2_scores, la
             currentvalue=dict(prefix="t = "),
             pad=dict(t=10)
         )],
-        width=800, height=650
+        width=800,
+        height=650,
     )
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig
+
 
 
 
@@ -454,121 +494,3 @@ def induction_head_score_with_pad_i_minus_1(attn: torch.Tensor,
 
 
 
-# Not used currently
-
-@torch.no_grad()
-def steer_at_pos_and_get_next_attn(
-    model,
-    batch: torch.Tensor,
-    layer: int,                   # steering at layer
-    pos:   int,
-    final_task_vectors: torch.Tensor,   # (K, D) or (D,)
-    batch_index: Optional[Sequence[int]] = None,
-    eps: float = 1e-6,
-    use_pinv: bool = False,
-):
-    """
-    Perform vector steering at a specified position and capture the next layer's attention.
-    Steering operation projects the feature vector at the specified position onto the orthogonal complement
-    of the subspace spanned by final_task_vectors. Used to analyze the effect of removing task vector components
-    on model behavior.
-    
-    Args:
-        model: Transformer model
-        batch: Input batch of shape (B, T)
-        layer: Index of the layer to perform steering (must be valid and next layer must exist)
-        pos: Position index to steer
-        final_task_vectors: Task vectors of shape (K, D) or (D,), where K is number of tasks, D is hidden dim
-        batch_index: Optional, specifies which batch samples to steer (None means all)
-        eps: Numerical stability constant for matrix inversion
-        use_pinv: Whether to use pseudo-inverse instead of regular inverse
-    
-    Returns:
-        cache: Dictionary containing:
-            - vec_before: Feature vector before steering, (B, D)
-            - vec_after: Feature vector after steering (projected onto orthogonal complement), (B, D)
-            - attn_next: Next layer's attention weights (if available), depends on model implementation
-    """
-    cache = {"vec_before": None, "vec_after": None, "attn_next": None}
-
-    # ---------- basic checks ----------
-    if layer < 0 or layer + 1 >= len(model.layers):
-        raise IndexError(f"`layer={layer}` invalid or no layer+1 for attention")
-
-    steer_module = model.layers[layer].attn_block
-    attn_module_next = getattr(model.layers[layer+1].attn_block, "MHA", model.layers[layer+1].attn_block)
-
-    dev  = batch.device
-    dt = torch.float32
-
-    V = final_task_vectors
-    if V.dim() == 1:    # (D,) -> (1, D)
-        V = V.unsqueeze(0)
-    # V: (K, D)
-    V = V.to(dev)
-    K, Dv = V.shape
-    if K == 0:
-        raise ValueError("`final_task_vectors` is empty（K=0）, cannot do projection")
-
-    A = V.t().contiguous()        # (D, K)
-    G = A.t() @ A                 # (K, K)
-    if use_pinv:
-        G_inv = torch.linalg.pinv(G)          
-    else:
-        G_inv = torch.linalg.inv(G + eps * torch.eye(K, device=dev, dtype=dt))
-
-    # ---------- steering hook ----------
-    def steering_hook(module, inp, out):
-        # out: (B, T, D)
-        if out.dim() != 3:
-            raise RuntimeError(f"Expect out to be (B,T,D), but get {tuple(out.shape)}")
-        B, T, D = out.shape
-        if pos < 0 or pos >= T:
-            raise IndexError(f"`pos={pos}` exceeds T={T}")
-
-        if Dv != D:
-            raise ValueError(f"`final_task_vectors` dim D={Dv} inconsistent with D={D}")
-
-        y = out.clone()
-
-        y_pos = y[:, pos, :]               # (B, D)
-        cache["vec_before"] = y_pos.detach().clone()
-
-        Yp = y_pos @ A                     # (B, K)
-        Yp = Yp @ G_inv                    # (B, K)
-        Yp = Yp @ A.t()                    # (B, D)
-        y_pos_perp = y_pos - Yp            # (B, D)
-
-        if batch_index is None:
-            y[:, pos, :] = y_pos_perp
-            cache["vec_after"] = y_pos_perp.detach().clone()
-        else:
-            idx = torch.as_tensor(batch_index, device=y.device)
-            y[idx, pos, :] = y_pos_perp[idx]
-            cache["vec_after"] = y_pos_perp.detach().clone()
-
-        return y
-
-    # ---------- capture hook ----------
-    def capture_hook(module, inp, out):
-        attn = getattr(module, "attn", None)
-        if attn is not None:
-            cache["attn_next"] = attn.detach().cpu().clone()
-        return out
-
-    prev_flash = getattr(attn_module_next, "flash", None)
-    if prev_flash is not None:
-        attn_module_next.flash = False
-
-    h1 = steer_module.register_forward_hook(steering_hook)
-    h2 = attn_module_next.register_forward_hook(capture_hook)
-
-    try:
-        _ = model(batch)
-    finally:
-        h1.remove()
-        h2.remove()
-        if prev_flash is not None:
-            attn_module_next.flash = prev_flash
-
-    return cache

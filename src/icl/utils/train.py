@@ -13,6 +13,7 @@ import timeit
 
 
 from icl.latent_markov import *
+from icl.coin.coin import Coins
 # from icl.models.ngram_latent import *
 from .train_utils import get_attn_base, get_train_result, tabulate_model
 from icl.figures.plot import get_loss_plots
@@ -143,7 +144,8 @@ class BaseTrainer:
 
     def train(self, model, verbose=False):
         sampler = get_sampler(self.config)
-        print(tabulate_model(model, self.config.seq_len, self.config.batch_size, self.config.device))
+        if verbose:
+            print(tabulate_model(model, self.config.seq_len, self.config.batch_size, self.config.device))
 
         optimizer = torch.optim.AdamW(model.parameters(), 
                                     lr=self.config.training.learning_rate, 
@@ -264,57 +266,6 @@ class BaseTrainer:
 
         return get_train_result(log=self.log, config=self.config, sampler=sampler, attn_maps=self.attn_maps, probes=self.probes)
 
-class MarkovTrainer(BaseTrainer):
-    def info_process(self, info):
-        length = info.max(dim=1).values // 2
-        mask = info > length[:, None]
-        mask = mask[:, 1:].reshape(-1)
-        return mask
-    
-    def get_task_loss(self, outputs, targets, info):
-        return self.criterion(outputs[info], targets[info]).item()
-    
-    def log_eval(self, model, data, infos):
-        step = self.step
-        with torch.no_grad():
-            model.eval()
-            outputs = model(data["test"])
-            target = data["test"][:, 1:].reshape(-1)
-            outputs = outputs[:, :-1, :].reshape(-1, self.config.vocab_size)
-            
-            eval_loss = self.criterion(outputs, target)
-            self.log["eval/loss"].append(eval_loss.item())
-            wandb.log({"eval/loss": eval_loss.item()}, step=step)
-            eval_task_loss = self.get_task_loss(outputs, target, infos["test"]) 
-            eval_task_acc = (outputs[infos["test"]].argmax(dim=-1) == target[infos["test"]]).float().mean().item()
-            self.log["eval/IDLoss"].append(eval_task_loss)
-            self.log["eval/IDAcc"].append(eval_task_acc)
-            wandb.log({"eval/IDLoss": eval_task_loss}, step=step)
-            wandb.log({"eval/IDAcc": eval_task_acc}, step=step)
-            self.log["eval/step"].append(step)
-            if self.config.task.ood:
-                ood_outputs = model(data["ood"])
-                ood_outputs = ood_outputs[:, :-1, :].reshape(-1, self.config.vocab_size)
-                ood_target = data["ood"][:, 1:].reshape(-1)
-                ood_loss = self.get_task_loss(ood_outputs, ood_target, infos["ood"])
-                # ood_acc = (ood_outputs[infos["ood"] > ood_length].argmax(dim=-1) == ood_target[infos["ood"] > ood_length]).float().mean().item()
-                ood_acc = (ood_outputs[infos["ood"]].argmax(dim=-1) == ood_target[infos["ood"]]).float().mean().item()
-                self.log["eval/OODLoss"].append(ood_loss)
-                self.log["eval/OODAcc"].append(ood_acc)
-                wandb.log({"eval/OODLoss": ood_loss}, step=step)
-                wandb.log({"eval/OODAcc": ood_acc}, step=step)
-
-            if "length_ood" in self.config.task and self.config.task.length_ood:
-                ood_outputs = model(data["length_ood"])
-                ood_outputs = ood_outputs[:, :-1, :].reshape(-1, self.config.vocab_size)
-                length_target = data["length_ood"][:, 1:].reshape(-1)
-                ood_loss = self.get_task_loss(ood_outputs, length_target, infos["length_ood"])
-                ood_acc = (ood_outputs[infos["length_ood"]].argmax(dim=-1) == length_target[infos["length_ood"]]).float().mean().item()
-                self.log["eval/LengthLoss"].append(ood_loss)
-                self.log["eval/LengthAcc"].append(ood_acc)
-                wandb.log({"eval/LengthLoss": ood_loss}, step=step)
-                wandb.log({"eval/LengthAcc": ood_acc}, step=step)
-
 
 
 
@@ -322,11 +273,10 @@ class MarkovTrainer(BaseTrainer):
 def get_sampler(config):
     task_samplers = {
         "latent": LatentMarkov,
+        "coin": Coins,
     }
     if config.task.name in task_samplers: return task_samplers[config.task.name](config)
     raise NotImplementedError(f"Task '{config.task.name}' not implemented yet.")
-
-
 
 
 
