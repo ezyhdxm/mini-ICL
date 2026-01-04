@@ -14,6 +14,7 @@ import timeit
 
 from icl.latent_markov import *
 from icl.coin.coin import Coins
+from icl.dyck.dyck import DyckPathTask
 # from icl.models.ngram_latent import *
 from .train_utils import get_attn_base, get_train_result, tabulate_model
 from icl.figures.plot import get_loss_plots
@@ -81,7 +82,8 @@ class BaseTrainer:
             print(f"{self.exp_name} already completed")
             return
         os.makedirs(self.exp_dir, exist_ok=True)
-        with open(os.path.join(self.exp_dir, "config.json"), "w") as f: f.write(config.to_json())
+        with open(os.path.join(self.exp_dir, "config.json"), "w") as f: 
+            f.write(config.to_json())
         self.log = _init_log()
         self.checkpoint_path = os.path.join(self.exp_dir, f"checkpoints")
         os.makedirs(self.checkpoint_path, exist_ok=True)
@@ -117,14 +119,6 @@ class BaseTrainer:
                 ood_loss = self.get_task_loss(ood_outputs, ood_target, infos["ood"])
                 self.log["eval/OODLoss"].append(ood_loss)
                 wandb.log({"eval/OODLoss": ood_loss}, step=step)
-
-            if "length_ood" in self.config.task and self.config.task.length_ood:
-                ood_outputs = model(data["length_ood"])
-                ood_outputs = ood_outputs[:, :-1, :].reshape(-1, self.config.vocab_size)
-                length_target = data["length_ood"][:, 1:].reshape(-1)
-                ood_loss = self.get_task_loss(ood_outputs, length_target, infos["length_ood"])
-                self.log["eval/LengthLoss"].append(ood_loss)
-                wandb.log({"eval/LengthLoss": ood_loss}, step=step)
 
     def save_checkpoint(self, model, optimizer, is_final=False):
         os.makedirs(self.checkpoint_path, exist_ok=True)
@@ -168,8 +162,8 @@ class BaseTrainer:
         
         #scheduler = CosineAnnealingLR(optimizer, T_max=self.config.training.T_max) if self.config.training.scheduler is True else None
 
-        data = {"test": None, "ood": None, "length_ood": None}
-        infos = {"test": None, "ood": None, "length_ood": None}
+        data = {"test": None, "ood": None,}
+        infos = {"test": None, "ood": None,}
         scaler = torch.amp.GradScaler('cuda') if self.mixed_precision else None
 
         data["test"], infos["test"] = sampler.generate(mode="test")
@@ -180,12 +174,6 @@ class BaseTrainer:
             data["ood"], infos["ood"] = sampler.generate(mode="ood")
             infos["ood"] = self.info_process(infos["ood"])
                 
-
-        if "length_ood" in self.config.task and self.config.task.length_ood:
-            data["length_ood"], infos["length_ood"] = sampler.generate(mode="length_ood")
-            infos["length_ood"] = self.info_process(infos["length_ood"])
-                
-
         # eval_batch, eval_info = sampler.generate(mode="eval")
         # eval_info = self.info_process(eval_info)
 
@@ -249,7 +237,8 @@ class BaseTrainer:
 
 
                 if (self.step % self.config.training.eval_iter == 0) or (self.step < min(self.config.training.eval_iter, 100) and self.step % 5 == 0):
-                    if verbose: print(f"Step: {self.step}")
+                    if verbose: 
+                        print(f"Step: {self.step}")
                     self.log["train/step"].append(self.step)
                     lr_val = scheduler.get_last_lr()[0] if scheduler else self.config.training.learning_rate
                     self.log["train/lr"].append(lr_val)
@@ -274,6 +263,7 @@ def get_sampler(config):
     task_samplers = {
         "latent": LatentMarkov,
         "coin": Coins,
+        "dyck": DyckPathTask,
     }
     if config.task.name in task_samplers: return task_samplers[config.task.name](config)
     raise NotImplementedError(f"Task '{config.task.name}' not implemented yet.")

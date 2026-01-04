@@ -5,22 +5,22 @@ from ml_collections import ConfigDict # DeepMind style config library
 import os
 
 
-def get_config_coin() -> ConfigDict:
+def get_config_dyck() -> ConfigDict:
     config = ConfigDict()
     config.profile = False  # Default profiling flag, can be set to True for performance profiling
     config.mixed_precision = False  # Default mixed precision flag, can be set to True for mixed precision training
-    config.seq_len = 129
-    config.vocab_size = 4
+    config.seq_len = 169
+    config.vocab_size = 9
     config.seed = 10086
     config.batch_size = 64
-    config.eval_size = 512
+    config.eval_size = 128
     config.test_size = 512
     config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    TASKNAME = "coin"  # Default task name, can be overridden in config
+    TASKNAME = "dyck"  # Default task name, can be overridden in config
     config.work_dir = os.path.join("results", TASKNAME)  # Specify working directory
     config.ngram = 3  # N-gram order for the n-gram learner
     config.wandb = ConfigDict()
-    config.wandb.project = "mini-ICL-coin"  # Specify wandb project
+    config.wandb.project = "mini-ICL-dyck"  # Specify wandb project
 
     #####################  
     #    Tasks          #
@@ -28,12 +28,17 @@ def get_config_coin() -> ConfigDict:
     
     config.task = ConfigDict()
     config.task.name = TASKNAME  # Name of the task, must be "latent"
+    config.task.order = 0  # Order of the Markov chain
+    config.task.dyck_length = 10  # Length of the Dyck path (number of pairs)
+    config.task.alpha = 1  # Dirichlet prior for the transition matrix
     config.task.ood = True  # Out-of-distribution flag
     config.task.n_tasks = 3  # Total number of transitions to sample
     config.task.p_minor = 0.1  # Probability of tasks from the minor task pool
     config.task.n_minor_tasks = 0  # Number of minor tasks, if needed
     config.task.init_task_pool = None
     config.task.pad = True  # Whether to pad the sequences with a special token
+    config.task.repeat_prob = 0.25
+    
 
     ######################
     #     Model          #
