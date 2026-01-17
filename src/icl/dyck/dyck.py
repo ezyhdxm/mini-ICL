@@ -64,11 +64,12 @@ class DyckPathTask:
             self.trans_matrix = dirichlet_dist.sample((self.num_states_order,))
             self.trans_matrix /= self.trans_matrix.sum(dim=1, keepdim=True)
         else:
-            # For order=0, sample i.i.d. distribution from Dirichlet prior
+            # For order=0, sample i.i.d. uniform distribution
             self.powers = None
-            dirichlet_dist = torch.distributions.Dirichlet(torch.ones(self.num_states, device=self.device) * self.alpha)
-            self.trans_matrix = dirichlet_dist.sample()  # Sample a single probability vector
-            self.trans_matrix /= self.trans_matrix.sum()  # Ensure normalization
+            # dirichlet_dist = torch.distributions.Dirichlet(torch.ones(self.num_states, device=self.device) * self.alpha)
+            # self.trans_matrix = dirichlet_dist.sample()  # Sample a single probability vector
+            # self.trans_matrix /= self.trans_matrix.sum()  # Ensure normalization
+            self.trans_matrix = torch.full((self.num_states,), 1.0 / self.num_states, device=self.device)
     
     def to(self, device):
         self.device = device

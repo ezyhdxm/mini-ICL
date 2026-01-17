@@ -8,75 +8,71 @@ import os
 
 # The following functions are used to compute hidden representations from the model at different granularity and different layers.
 
-def compute_hiddens(config,
-                    model: torch.nn.Module,
-                    sampler,
-                    layer_index: int = 1,
-                    return_final: bool = False,
-                    ) -> Tuple[torch.Tensor, torch.Tensor]:
+import torch
+
+def compute_hiddens(
+    config,
+    model: torch.nn.Module,
+    sampler,
+    B: int = 64,
+):
     """
-    Extract hidden representations from the attention block of a specified layer.
-    
-    Args:
-        config: Configuration object, must contain device and model.emb_dim
-        model: Transformer model
-        sampler: Data sampler
-        layer_index: Index of the layer to extract from
-        return_final: If True, only return the hidden at the final position; 
-                     if False, return all positions
-    
+    Extract hidden representations from the attention blocks of ALL layers.
+
     Returns:
-        Tensor shape depends on return_final:
-        - return_final=True:  (n_tasks, B, n_embd) - final position only
-        - return_final=False: (n_tasks, seq_len-1, B, n_embd) - all positions
+        all_hiddens: (n_layers, n_tasks, seq_len-1, B, n_embd)
     """
     device = config.device
-    B = 256 
-    max_tasks = 64
-    n_tasks = min(max_tasks, sampler.n_major_tasks + sampler.n_minor_tasks)
+    n_tasks = sampler.n_major_tasks + sampler.n_minor_tasks
     seq_len = sampler.seq_len
     n_embd = config.model.emb_dim
+    n_layers = len(model.layers)
 
-    if return_final:
-        output_shape = (n_tasks, B, n_embd)
-        task_pos = 2 * seq_len - 1
-    else:
-        output_shape = (n_tasks, seq_len-1, B, n_embd) 
-        task_pos = 2 * torch.arange(seq_len-1, device=device) + 1  # (seq_len-1,)
+    # positions corresponding to "real" tokens
+    task_pos = 2 * torch.arange(seq_len - 1, device=device) + 1  # (P,)
 
-    all_hiddens = torch.empty(output_shape, device=device)
+    all_hiddens = torch.empty(
+        (n_layers, n_tasks, seq_len - 1, B, n_embd),
+        device=device,
+    )
 
-    def run_and_extract(batch_data: torch.Tensor, pos):
+    def run_and_extract(batch_data):
         cache = {}
+        handles = []
 
-        def hook_fn(module, inp, out):
-            # out: (B, L, d_model)
-            if isinstance(pos, torch.Tensor):
-                # (B, P, d)
-                cache['vecs'] = out.index_select(dim=1, index=pos).detach()
-            else:
-                # (B, d)
-                cache['vecs'] = out[:, pos, :].detach()
+        for l in range(n_layers):
+            def make_hook(layer_idx):
+                def hook_fn(module, inp, out):
+                    # out: (B, L, d)
+                    cache[layer_idx] = out.index_select(1, task_pos).detach()
+                return hook_fn
 
-        handle = model.layers[layer_index].attn_block.register_forward_hook(hook_fn)
+            h = model.layers[l].attn_block.register_forward_hook(
+                make_hook(l)
+            )
+            handles.append(h)
+
         with torch.no_grad():
             _ = model(batch_data)
-        handle.remove()
-        return cache['vecs']
+
+        for h in handles:
+            h.remove()
+
+        return cache  # layer -> (B, P, d)
 
     for i in range(n_tasks):
-        demo_data, _ = sampler.generate(mode="testing", task=i, num_samples=B)  # (B, L_in)
+        demo_data, _ = sampler.generate(
+            mode="testing", task=i, num_samples=B
+        )
 
-        vecs = run_and_extract(demo_data, task_pos)
-        #   return_final=True  -> (B, n_embd)
-        #   return_final=False -> (B, P, n_embd)
+        layer_vecs = run_and_extract(demo_data)
 
-        if return_final:
-            all_hiddens[i, :, :] = vecs  # (B, d)
-        else:
-            all_hiddens[i, :, :, :] = vecs.permute(1, 0, 2)  # (P, B, d)
-    
-    return all_hiddens
+        for l in range(n_layers):
+            # (B, P, d) -> (P, B, d)
+            all_hiddens[l, i] = layer_vecs[l].permute(1, 0, 2)
+
+    return all_hiddens # (n_layers, n_tasks, seq_len-1, B, n_embd)
+
 
 
 
@@ -103,6 +99,8 @@ def project_with_r2_size(
     # --- NEW: mask annotation ---
     mask=None,                # None, (T,), (K,T), or (...,T) matching X leading dims
     show_mask_annotation=True,  # allow turning off even if mask is passed
+    # --- Display options ---
+    show_final_refs=True,     # whether to display final reference points and labels
 ):
     """
     Project high-dimensional task vectors to a 2D plane and adjust scatter marker sizes by R² scores.
@@ -126,6 +124,9 @@ def project_with_r2_size(
 
     Minor handling:
       - n_minors refers to the last n_minors items after flattening.
+
+    Display options:
+      - show_final_refs: If False, hides the final reference points and labels from the plot.
 
     Returns:
         fig: plotly.graph_objects.Figure
@@ -484,15 +485,16 @@ def project_with_r2_size(
         ))
 
     # Final refs (static)
-    fig.add_trace(go.Scatter(
-        x=F_proj[:, 0], y=F_proj[:, 1],
-        mode="markers+text",
-        name="final refs",
-        marker=dict(size=12, symbol="star", line=dict(width=1)),
-        text=final_labels,
-        textposition="top center",
-        hoverinfo="skip",
-    ))
+    if show_final_refs:
+        fig.add_trace(go.Scatter(
+            x=F_proj[:, 0], y=F_proj[:, 1],
+            mode="markers+text",
+            name="final refs",
+            marker=dict(size=12, symbol="star", line=dict(width=1)),
+            text=final_labels,
+            textposition="top center",
+            hoverinfo="skip",
+        ))
 
     # ----------------------------
     # Slider steps
@@ -525,10 +527,11 @@ def project_with_r2_size(
             texts.append(minor_labels)
 
         # final refs unchanged
-        xs.append(F_proj[:, 0]); ys.append(F_proj[:, 1])
-        cds.append(None)
-        markers.append(None)
-        texts.append(final_labels)
+        if show_final_refs:
+            xs.append(F_proj[:, 0]); ys.append(F_proj[:, 1])
+            cds.append(None)
+            markers.append(None)
+            texts.append(final_labels)
 
         step_layout = {"title": f"Projection at t={t}"}
         if cum_mask is not None and show_mask_annotation:
@@ -573,74 +576,735 @@ def project_with_r2_size(
 
 
 
-
-
-
-
-
-
-
-
-
-# Currently not used, not working as expected, needs to be fixed
-
-@torch.no_grad()
-def induction_head_score_with_pad_i_minus_1(attn: torch.Tensor,
-                                            tokens: torch.Tensor,
-                                            pad_id: int,
-                                            reduce: str = "mean_over_batch") -> torch.Tensor:
+def project_with_r2_trajectories_group_colors(
+    task_vecs_over_all_time,
+    final_task_vecs,
+    r2_scores,
+    lambdas,
+    task_labels=None,
+    n_minors=0,
+    # --- size mapping (uses R²) ---
+    size_min=6,
+    size_max=18,
+    # --- alpha ramp (early -> late) ---
+    alpha_start=0.06,
+    alpha_end=0.85,
+    # --- group colors (ALL tasks in group share same color) ---
+    major_color="#1f77b4",   # blue
+    ood_color="#ff7f0e",     # orange
+    minor_color="#2ca02c",   # green
+    # --- trajectory styling ---
+    line_alpha=0.22,
+    line_width=1.1,
+    marker_line_width=0.0,  # for non-endpoints (usually 0 looks cleaner)
+    # --- endpoint emphasis (NO size change; just edge + full opacity) ---
+    end_marker_alpha=1.0,
+    end_marker_line_color="rgba(0,0,0,0.9)",
+    end_marker_line_width=2.4,
+    # --- layout ---
+    width=900,
+    height=700,
+):
     """
-    Compute induction head (IH) score considering special matching conditions for padding tokens.
-    Matching condition: x[j-2] == x[i-1] and x[j-1] is a padding token.
-    This function is used to analyze whether the model has learned the induction head mechanism.
-    
-    Args:
-        attn: Attention weights of shape (B, H, T, T2)
-        tokens: Token sequences of shape (B, T)
-        pad_id: ID of the padding token
-        reduce: Reduction mode, "mean_over_batch" averages over batch dimension, "none" does no reduction
-    
-    Returns:
-        scores: Shape (B, H) if reduce="none", otherwise shape (H,)
+    Overlapped trajectories on one plot (no slider, no final refs).
+
+    Coloring rule (as requested):
+      - First 3 (after flattening): MAJOR color
+      - Last n_minors: MINOR color
+      - Everything in-between: OOD color
+
+    Endpoint visibility:
+      - Does NOT change endpoint size (size reflects R²).
+      - Adds a solid outline + full-opacity fill by drawing endpoints as an overlay trace.
+
+    Shapes:
+      task_vecs_over_all_time : (..., T, D)
+      r2_scores               : (..., T)
+      lambdas                 : (..., T, 3)
+      final_task_vecs         : (3, D)
     """
-    assert attn.dim() == 4 and tokens.dim() == 2
-    B, H, T, T2 = attn.shape
-    assert T == T2 and tokens.shape[1] == T
-    dev = attn.device
-    
-    idx = torch.arange(T, device=dev)
-    I = idx.view(T, 1).expand(T, T)          
-    J = idx.view(1, T).expand(T, T)          
-    j_lt_i = (J < I)                          
+    import re
+    import numpy as np
+    import plotly.graph_objects as go
 
-    is_pad_q = (tokens == pad_id)        
+    # ----------------------------
+    # Helpers
+    # ----------------------------
+    def to_np(x):
+        if x is None:
+            return None
+        if hasattr(x, "detach"):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
 
-    prev1_is_pad = torch.zeros((B, T), dtype=torch.bool, device=dev)
-    prev1_is_pad[:, 1:] = (tokens[:, :-1] == pad_id)   
+    def prod(shape):
+        out = 1
+        for s in shape:
+            out *= int(s)
+        return int(out)
 
-    prev2 = torch.full((B, T), fill_value=-1, dtype=tokens.dtype, device=dev)
-    prev2[:, 2:] = tokens[:, :-2]                       
+    def flatten_leading(X, *, name, tail_ndim):
+        X = np.asarray(X)
+        if X.ndim < tail_ndim:
+            raise ValueError(f"{name} must have ≥ {tail_ndim} dims, got {X.shape}")
+        lead_shape = X.shape[: X.ndim - tail_ndim]
+        tail_shape = X.shape[X.ndim - tail_ndim :]
+        K = prod(lead_shape) if len(lead_shape) > 0 else 1
+        return X.reshape((K, *tail_shape)), lead_shape, tail_shape
 
-    i_minus1 = torch.full((B, T), fill_value=-1, dtype=tokens.dtype, device=dev)
-    i_minus1[:, 1:] = tokens[:, :-1]                    
+    def normalize_labels(task_labels, lead_shape, K):
+        if task_labels is None:
+            if len(lead_shape) == 2:
+                a, b = lead_shape
+                return [f"task{i}|vocab{j}" for i in range(a) for j in range(b)]
+            return [f"item_{k}" for k in range(K)]
+        arr = to_np(task_labels)
+        if isinstance(arr, np.ndarray):
+            flat = arr.reshape(-1)
+            if flat.shape[0] == K:
+                return [str(x) for x in flat.tolist()]
+        task_labels = list(task_labels)
+        if len(task_labels) != K:
+            raise ValueError(f"task_labels must have length {K}")
+        return [str(x) for x in task_labels]
 
-    cond_q_pad   = is_pad_q[:, :, None]                         
-    cond_j_lt_i  = j_lt_i[None, :, :]                           
-    cond_prev1   = prev1_is_pad[:, None, :]                     
-    cond_match   = (prev2[:, None, :] == i_minus1[:, :, None])  # (B,T,T)
+    # robust color -> rgba
+    _rgb_pat = re.compile(
+        r"^\s*rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)\s*(?:,\s*([0-9.]+)\s*)?\)\s*$",
+        re.IGNORECASE,
+    )
 
-    M = cond_q_pad & cond_j_lt_i & cond_prev1 & cond_match     
+    def to_rgba(color, a):
+        a = float(max(0.0, min(1.0, a)))
+        if not isinstance(color, str):
+            return color
+        s = color.strip()
 
-    M_f = M.float()
-    num = (attn * M_f[:, None, :, :]).sum(dim=(-1, -2))     
-    den = M_f.sum(dim=(-1, -2)).clamp_min(1e-8)             
-    scores_bh = num / den[:, None]                           
+        m = _rgb_pat.match(s)
+        if m:
+            r, g, b = [int(round(float(m.group(i)))) for i in range(1, 4)]
+            r = max(0, min(255, r))
+            g = max(0, min(255, g))
+            b = max(0, min(255, b))
+            return f"rgba({r},{g},{b},{a:.4f})"
 
-    if reduce == "none":
-        return scores_bh
-    return scores_bh.mean(dim=0) 
+        if s.startswith("#"):
+            h = s[1:]
+            if len(h) == 3:
+                h = "".join(c * 2 for c in h)
+            if len(h) != 6:
+                raise ValueError(f"Unsupported hex color: {color}")
+            r = int(h[0:2], 16)
+            g = int(h[2:4], 16)
+            b = int(h[4:6], 16)
+            return f"rgba({r},{g},{b},{a:.4f})"
+
+        return s  # named colors etc.
+
+    # ----------------------------
+    # Convert + flatten inputs
+    # ----------------------------
+    X_raw = to_np(task_vecs_over_all_time)
+    F = to_np(final_task_vecs)
+    R2_raw = to_np(r2_scores)
+    L_raw = to_np(lambdas)
+
+    if any(v is None for v in (X_raw, F, R2_raw, L_raw)):
+        raise ValueError("task_vecs_over_all_time, final_task_vecs, r2_scores, lambdas are required.")
+
+    X, lead_shape, _ = flatten_leading(X_raw, name="task_vecs_over_all_time", tail_ndim=2)  # (K,T,D)
+    if X.ndim != 3:
+        raise ValueError(f"task_vecs_over_all_time must flatten to (K,T,D). Got {X.shape}")
+    K, T, D = X.shape
+    if K < 1:
+        raise ValueError("K=0: no trajectories to plot.")
+    if T < 1:
+        raise ValueError("T=0: no timesteps to plot.")
+
+    R2, _, _ = flatten_leading(R2_raw, name="r2_scores", tail_ndim=1)  # (K,T)
+    L, _, _ = flatten_leading(L_raw, name="lambdas", tail_ndim=2)      # (K,T,3)
+    if R2.shape != (K, T):
+        raise ValueError(f"r2_scores shape mismatch: expected {(K,T)}, got {R2.shape}")
+    if L.shape != (K, T, 3):
+        raise ValueError(f"lambdas shape mismatch: expected {(K,T,3)}, got {L.shape}")
+
+    labels = normalize_labels(task_labels, lead_shape, K)
+
+    if n_minors < 0 or n_minors > K:
+        raise ValueError(f"n_minors must be in [0, K]. Got n_minors={n_minors}, K={K}.")
+
+    # ----------------------------
+    # Projection plane from final_task_vecs
+    # ----------------------------
+    F = np.asarray(F)
+    if F.ndim != 2 or F.shape[0] != 3 or F.shape[1] != D:
+        raise ValueError(f"final_task_vecs must be (3,{D}), got {F.shape}")
+
+    F_center = F.mean(axis=0, keepdims=True)          # (1,D)
+    F0 = F - F_center                                 # (3,D)
+    _, _, Vt = np.linalg.svd(F0, full_matrices=False)
+
+    basis = Vt[:2].T                                   # (D,2) or (D,1) if D==1
+    if basis.shape[1] == 1:
+        basis = np.concatenate([basis, np.zeros((D, 1), dtype=basis.dtype)], axis=1)
+    if basis.shape != (D, 2):
+        raise RuntimeError(f"Internal error: basis has shape {basis.shape}, expected {(D,2)}")
+
+    # IMPORTANT: avoid accidental 4D broadcast; guarantee (K,T,2)
+    X_centered = X - F_center.reshape(1, 1, D)         # (K,T,D)
+    X_proj = np.tensordot(X_centered, basis, axes=([2], [0]))  # (K,T,2)
+    if X_proj.shape != (K, T, 2):
+        raise RuntimeError(f"Internal error: X_proj has shape {X_proj.shape}, expected {(K,T,2)}")
+
+    # ----------------------------
+    # Group indices (exactly as requested)
+    # ----------------------------
+    non_minor_end = K - n_minors if n_minors > 0 else K
+    major_end = min(3, non_minor_end)
+
+    idx_major = np.arange(0, major_end, dtype=int)
+    idx_ood = np.arange(major_end, non_minor_end, dtype=int)
+    idx_minor = np.arange(non_minor_end, K, dtype=int) if n_minors > 0 else np.array([], dtype=int)
+
+    group_specs = [
+        ("major tasks", idx_major, major_color, "circle"),
+        ("OOD tasks",   idx_ood,   ood_color,   "square"),
+        ("minor tasks", idx_minor, minor_color, "diamond"),
+    ]
+
+    # ----------------------------
+    # Size scaling by R² (global)
+    # ----------------------------
+    r2_min, r2_max = float(R2.min()), float(R2.max())
+    if r2_max == r2_min:
+        sizes = np.full_like(R2, (size_min + size_max) / 2.0, dtype=float)
+    else:
+        sizes = size_min + (R2 - r2_min) / (r2_max - r2_min) * (size_max - size_min)
+
+    # ----------------------------
+    # Alpha ramp over time
+    # ----------------------------
+    alpha_start = max(0.0, min(1.0, float(alpha_start)))
+    alpha_end = max(0.0, min(1.0, float(alpha_end)))
+    alphas = np.array([alpha_end], dtype=float) if T == 1 else np.linspace(alpha_start, alpha_end, T)
+
+    # ----------------------------
+    # Build figure
+    # ----------------------------
+    fig = go.Figure()
+
+    hovertemplate = (
+        "task=%{text}"
+        "<br>t=%{customdata[0]}"
+        "<br>R²=%{customdata[1]:.3f}"
+        "<br>λ₁=%{customdata[2]:.3f}"
+        "<br>λ₂=%{customdata[3]:.3f}"
+        "<br>λ₃=%{customdata[4]:.3f}"
+        "<extra></extra>"
+    )
+
+    end_hovertemplate = (
+        "task=%{text}"
+        "<br><b>FINAL</b> (t=%{customdata[0]})"
+        "<br>R²=%{customdata[1]:.3f}"
+        "<br>λ₁=%{customdata[2]:.3f}"
+        "<br>λ₂=%{customdata[3]:.3f}"
+        "<br>λ₃=%{customdata[4]:.3f}"
+        "<extra></extra>"
+    )
+
+    for legend_name, idxs, base_color, symbol in group_specs:
+        if idxs.size == 0:
+            continue
+
+        # --- Lines: one trace per group (segments separated by None) ---
+        x_line = []
+        y_line = []
+        for k in idxs.tolist():
+            x_line.extend(X_proj[k, :, 0].tolist())
+            y_line.extend(X_proj[k, :, 1].tolist())
+            x_line.append(None)
+            y_line.append(None)
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_line,
+                y=y_line,
+                mode="lines",
+                name=legend_name,
+                showlegend=True,
+                hoverinfo="skip",
+                line=dict(color=to_rgba(base_color, line_alpha), width=float(line_width)),
+            )
+        )
+
+        # --- Markers: all points in group, alpha increases with time ---
+        Kg = int(idxs.size)
+
+        x_pts = X_proj[idxs, :, 0].reshape(-1)
+        y_pts = X_proj[idxs, :, 1].reshape(-1)
+
+        text_pts = np.repeat(np.asarray([labels[k] for k in idxs.tolist()], dtype=object), T)
+
+        t_pts = np.tile(np.arange(T, dtype=int), Kg)
+        r2_pts = R2[idxs, :].reshape(-1)
+        lam_pts = L[idxs, :, :].reshape(-1, 3)
+        custom_pts = np.column_stack([t_pts, r2_pts, lam_pts])  # (N,5)
+
+        size_pts = sizes[idxs, :].reshape(-1).astype(float)
+
+        rgba_by_t = [to_rgba(base_color, a) for a in alphas]     # len T
+        color_pts = np.tile(np.asarray(rgba_by_t, dtype=object), Kg)
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_pts,
+                y=y_pts,
+                mode="markers",
+                name=legend_name + " points",
+                showlegend=False,
+                marker=dict(
+                    size=size_pts,
+                    color=color_pts.tolist(),
+                    symbol=symbol,
+                    line=dict(width=float(marker_line_width)),
+                ),
+                text=text_pts.tolist(),
+                customdata=custom_pts,
+                hovertemplate=hovertemplate,
+            )
+        )
+
+        # --- Endpoints overlay: SAME size as R² (no scaling), but solid edge + full opacity ---
+        x_end = X_proj[idxs, -1, 0]
+        y_end = X_proj[idxs, -1, 1]
+        text_end = np.asarray([labels[k] for k in idxs.tolist()], dtype=object)
+
+        t_end = np.full((Kg,), T - 1, dtype=int)
+        r2_end = R2[idxs, -1].reshape(-1)
+        lam_end = L[idxs, -1, :].reshape(-1, 3)
+        custom_end = np.column_stack([t_end, r2_end, lam_end])  # (Kg,5)
+
+        end_size = sizes[idxs, -1].astype(float)  # <-- NO SIZE MODIFICATION
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_end,
+                y=y_end,
+                mode="markers",
+                name=legend_name + " endpoints",
+                showlegend=False,
+                marker=dict(
+                    size=end_size,
+                    color=to_rgba(base_color, end_marker_alpha),
+                    symbol=symbol,
+                    line=dict(color=end_marker_line_color, width=float(end_marker_line_width)),
+                ),
+                text=text_end.tolist(),
+                customdata=custom_end,
+                hovertemplate=end_hovertemplate,
+            )
+        )
+
+    fig.update_layout(
+        title="Overlapped trajectories (group colors, emphasized endpoints)",
+        xaxis_title="axis 1",
+        yaxis_title="axis 2",
+        width=int(width),
+        height=int(height),
+        legend=dict(itemsizing="constant"),
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1)
+    return fig
 
 
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+
+def project_with_r2_trajectories_group_colors_mpl(
+    task_vecs_over_all_time,
+    final_task_vecs,
+    r2_scores,
+    lambdas,
+    task_labels=None,
+    n_minors=0,
+    # --- size mapping (uses R²) ---
+    size_min=3,
+    size_max=18,
+    # --- alpha scheme ---
+    alpha_start=0.25,   # kept for backwards compat; used as default alpha_mid
+    alpha_end=0.85,     # last point alpha (highest)
+    alpha_head=0.1,     # if None -> min(1.0, alpha_mid * 1.6)
+    alpha_mid=0.01,     # if None -> alpha_start
+    n_head=1,           # "first few points"
+    # --- NEW: downsampling for long T ---
+    max_T=64,           # if T > max_T, we subsample timesteps for plotting
+    gap=2,              # keep every `gap` steps in the middle (>=1); e.g. 2 keeps every other step
+    keep_last=True,     # always keep the final timestep
+    # --- group colors (ALL tasks in group share same color, but per-trajectory jitter is applied) ---
+    major_color="#1f77b4",
+    ood_color="#ff7f0e",
+    minor_color="#2ca02c",
+    # --- per-trajectory color jitter (within each group) ---
+    color_seed=0,
+    color_jitter=0.05,
+    sat_jitter=0.10,
+    val_jitter=0.10,
+    # --- trajectory styling ---
+    line_alpha=0.35,
+    line_width=1.1,
+    # --- endpoint emphasis (NO size change; just edge + full opacity) ---
+    end_marker_alpha=0.9,
+    end_marker_edge_color=(0, 0, 0, 0.8),
+    end_marker_edge_width=1.2,
+    # --- figure ---
+    figsize=(9, 7),
+    dpi=150,
+    ax=None,
+    title="Overlapped trajectories (group colors, emphasized endpoints)",
+):
+    """
+    Matplotlib version of your Plotly plot.
+
+    Alpha rule:
+      - first n_head points: higher alpha (alpha_head)
+      - all middle points except last: low alpha (alpha_mid)
+      - last point: highest alpha (alpha_end)
+
+    Coloring rule:
+      - First 3 (after flattening): MAJOR color
+      - Last n_minors: MINOR color
+      - Everything in-between: OOD color
+
+    NEW (subsampling for long sequences):
+      If T > max_T, we plot a subset of timesteps:
+        - keep first n_head timesteps
+        - keep last timestep (if keep_last)
+        - for the middle, keep every `gap` steps
+      Subsampling is applied consistently to:
+        - X_proj (points + lines)
+        - R2-based sizes
+        - alphas
+      so endpoint remains the true final step.
+    """
+    # ----------------------------
+    # Helpers
+    # ----------------------------
+    def to_np(x):
+        if x is None:
+            return None
+        if hasattr(x, "detach"):
+            return x.detach().cpu().numpy()
+        return np.asarray(x)
+
+    def prod(shape):
+        out = 1
+        for s in shape:
+            out *= int(s)
+        return int(out)
+
+    def flatten_leading(X, *, name, tail_ndim):
+        X = np.asarray(X)
+        if X.ndim < tail_ndim:
+            raise ValueError(f"{name} must have ≥ {tail_ndim} dims, got {X.shape}")
+        lead_shape = X.shape[: X.ndim - tail_ndim]
+        tail_shape = X.shape[X.ndim - tail_ndim :]
+        K = prod(lead_shape) if len(lead_shape) > 0 else 1
+        return X.reshape((K, *tail_shape)), lead_shape, tail_shape
+
+    def normalize_labels(task_labels, lead_shape, K):
+        if task_labels is None:
+            if len(lead_shape) == 2:
+                a, b = lead_shape
+                return [f"task{i}|vocab{j}" for i in range(a) for j in range(b)]
+            return [f"item_{k}" for k in range(K)]
+        arr = to_np(task_labels)
+        if isinstance(arr, np.ndarray):
+            flat = arr.reshape(-1)
+            if flat.shape[0] == K:
+                return [str(x) for x in flat.tolist()]
+        task_labels = list(task_labels)
+        if len(task_labels) != K:
+            raise ValueError(f"task_labels must have length {K}")
+        return [str(x) for x in task_labels]
+
+    def rgba(color, a):
+        r, g, b, _ = mcolors.to_rgba(color)
+        a = float(np.clip(a, 0.0, 1.0))
+        return (r, g, b, a)
+
+    def rgba_from_rgb(rgb, a):
+        a = float(np.clip(a, 0.0, 1.0))
+        return (float(rgb[0]), float(rgb[1]), float(rgb[2]), a)
+
+    def jitter_color(base_color, rng, hue_jitter=0.03, sat_jitter=0.10, val_jitter=0.10):
+        r, g, b = mcolors.to_rgb(base_color)
+        h, s, v = mcolors.rgb_to_hsv([r, g, b])
+        h = (h + rng.uniform(-hue_jitter, hue_jitter)) % 1.0
+        s = float(np.clip(s + rng.uniform(-sat_jitter, sat_jitter), 0.0, 1.0))
+        v = float(np.clip(v + rng.uniform(-val_jitter, val_jitter), 0.0, 1.0))
+        r2, g2, b2 = mcolors.hsv_to_rgb([h, s, v])
+        return (float(r2), float(g2), float(g2 if False else b2))  # keep as (r,g,b)
+
+    # ----------------------------
+    # NEW: timestep selection for long T
+    # ----------------------------
+    def make_time_indices(T, *, max_T, n_head, gap, keep_last=True):
+        if max_T is None or T <= int(max_T):
+            return np.arange(T, dtype=int)
+
+        max_T = int(max_T)
+        n_head = int(max(0, n_head))
+        gap = int(max(1, gap))
+
+        # head indices (do not exceed T)
+        head = np.arange(min(n_head, T), dtype=int)
+
+        last = np.array([T - 1], dtype=int) if (keep_last and T > 0) else np.array([], dtype=int)
+
+        start_mid = int(head[-1] + 1) if head.size > 0 else 0
+        end_mid = (T - 1) if keep_last else T  # exclusive upper bound for mid
+        if end_mid < start_mid:
+            mid = np.array([], dtype=int)
+        else:
+            mid = np.arange(start_mid, end_mid, gap, dtype=int)
+
+        idx = np.unique(np.concatenate([head, mid, last]))
+        idx.sort()
+
+        # If still too many (e.g., n_head huge), cap to max_T while keeping last.
+        if idx.size > max_T:
+            keep = []
+            idx_set = set(idx.tolist())
+
+            # always keep last if requested
+            if keep_last and (T - 1) in idx_set:
+                keep.append(T - 1)
+
+            # always keep head (up to n_head)
+            for t in range(min(n_head, T)):
+                if t in idx_set and t not in keep:
+                    keep.append(t)
+
+            keep = sorted(set(keep))
+            remaining_budget = max_T - len(keep)
+            if remaining_budget > 0:
+                # fill from the middle uniformly
+                others = [t for t in idx.tolist() if t not in keep]
+                if len(others) <= remaining_budget:
+                    keep = sorted(set(keep + others))
+                else:
+                    # choose evenly spaced
+                    pick = np.linspace(0, len(others) - 1, remaining_budget)
+                    pick = np.unique(np.round(pick).astype(int))
+                    keep = sorted(set(keep + [others[i] for i in pick]))
+            idx = np.array(keep, dtype=int)
+            idx.sort()
+
+        return idx
+
+    # ----------------------------
+    # Convert + flatten inputs
+    # ----------------------------
+    X_raw = to_np(task_vecs_over_all_time)
+    F = to_np(final_task_vecs)
+    R2_raw = to_np(r2_scores)
+    L_raw = to_np(lambdas)
+
+    if any(v is None for v in (X_raw, F, R2_raw, L_raw)):
+        raise ValueError("task_vecs_over_all_time, final_task_vecs, r2_scores, lambdas are required.")
+
+    X, lead_shape, _ = flatten_leading(X_raw, name="task_vecs_over_all_time", tail_ndim=2)  # (K,T,D)
+    if X.ndim != 3:
+        raise ValueError(f"task_vecs_over_all_time must flatten to (K,T,D). Got {X.shape}")
+    K, T, D = X.shape
+    if K < 1:
+        raise ValueError("K=0: no trajectories to plot.")
+    if T < 1:
+        raise ValueError("T=0: no timesteps to plot.")
+
+    R2, _, _ = flatten_leading(R2_raw, name="r2_scores", tail_ndim=1)  # (K,T)
+    L, _, _ = flatten_leading(L_raw, name="lambdas", tail_ndim=2)      # (K,T,3)
+    if R2.shape != (K, T):
+        raise ValueError(f"r2_scores shape mismatch: expected {(K,T)}, got {R2.shape}")
+    if L.shape != (K, T, 3):
+        raise ValueError(f"lambdas shape mismatch: expected {(K,T,3)}, got {L.shape}")
+
+    labels = normalize_labels(task_labels, lead_shape, K)
+
+    if n_minors < 0 or n_minors > K:
+        raise ValueError(f"n_minors must be in [0, K]. Got n_minors={n_minors}, K={K}.")
+
+    # ----------------------------
+    # Projection plane from final_task_vecs
+    # ----------------------------
+    F = np.asarray(F)
+    if F.ndim != 2 or F.shape[0] != 3 or F.shape[1] != D:
+        raise ValueError(f"final_task_vecs must be (3,{D}), got {F.shape}")
+
+    F_center = F.mean(axis=0, keepdims=True)  # (1,D)
+    F0 = F - F_center                         # (3,D)
+    _, _, Vt = np.linalg.svd(F0, full_matrices=False)
+
+    basis = Vt[:2].T  # (D,2)
+    if basis.shape[1] == 1:
+        basis = np.concatenate([basis, np.zeros((D, 1), dtype=basis.dtype)], axis=1)
+    if basis.shape != (D, 2):
+        raise RuntimeError(f"Internal error: basis has shape {basis.shape}, expected {(D,2)}")
+
+    X_centered = X - F_center.reshape(1, 1, D)                       # (K,T,D)
+    X_proj_full = np.tensordot(X_centered, basis, axes=([2], [0]))   # (K,T,2)
+    if X_proj_full.shape != (K, T, 2):
+        raise RuntimeError(f"Internal error: X_proj has shape {X_proj_full.shape}, expected {(K,T,2)}")
+
+    # ----------------------------
+    # NEW: subsample timesteps if needed
+    # ----------------------------
+    t_idx = make_time_indices(T, max_T=max_T, n_head=n_head, gap=gap, keep_last=keep_last)
+    X_proj = X_proj_full[:, t_idx, :]      # (K,Ts,2)
+    R2 = R2[:, t_idx]                      # (K,Ts)
+    L = L[:, t_idx, :]                     # (K,Ts,3)  (kept for shape consistency; not used below)
+    T_plot = int(t_idx.size)
+
+    # ----------------------------
+    # Group indices (exactly as requested)
+    # ----------------------------
+    non_minor_end = K - n_minors if n_minors > 0 else K
+    major_end = min(3, non_minor_end)
+
+    idx_major = np.arange(0, major_end, dtype=int)
+    idx_ood = np.arange(major_end, non_minor_end, dtype=int)
+    idx_minor = np.arange(non_minor_end, K, dtype=int) if n_minors > 0 else np.array([], dtype=int)
+
+    group_specs = [
+        ("major tasks", idx_major, major_color, "o"),
+        ("OOD tasks",   idx_ood,   ood_color,   "s"),
+        ("minor tasks", idx_minor, minor_color, "D"),
+    ]
+
+    # ----------------------------
+    # Size scaling by R² (global, after subsampling)
+    # ----------------------------
+    r2_min, r2_max = float(R2.min()), float(R2.max())
+    if r2_max == r2_min:
+        size_lin = np.full_like(R2, (size_min + size_max) / 2.0, dtype=float)
+    else:
+        size_lin = size_min + (R2 - r2_min) / (r2_max - r2_min) * (size_max - size_min)
+    sizes_area = (size_lin ** 2).astype(float)  # (K,T_plot)
+
+    # ----------------------------
+    # Alpha scheme (computed on plotted timesteps)
+    # ----------------------------
+    alpha_mid = float(np.clip(alpha_start if alpha_mid is None else alpha_mid, 0.0, 1.0))
+    alpha_end = float(np.clip(alpha_end, 0.0, 1.0))
+    alpha_head = float(np.clip((min(1.0, alpha_mid * 1.6)) if alpha_head is None else alpha_head, 0.0, 1.0))
+
+    if T_plot == 1:
+        alphas = np.array([alpha_end], dtype=float)
+    else:
+        alphas = np.full(T_plot, alpha_mid, dtype=float)
+        nh = int(np.clip(n_head, 0, T_plot - 1))  # never includes last plotted point
+        if nh > 0:
+            alphas[:nh] = alpha_head
+        alphas[-1] = alpha_end
+
+    # ----------------------------
+    # Figure / Axes
+    # ----------------------------
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    else:
+        fig = ax.figure
+
+    # ----------------------------
+    # Draw
+    # ----------------------------
+    rng = np.random.default_rng(int(color_seed))
+
+    for legend_name, idxs, base_color, marker in group_specs:
+        if idxs.size == 0:
+            continue
+
+        traj_rgb = {}
+        for k in idxs.tolist():
+            traj_rgb[k] = jitter_color(
+                base_color,
+                rng,
+                hue_jitter=float(color_jitter),
+                sat_jitter=float(sat_jitter),
+                val_jitter=float(val_jitter),
+            )
+
+        # lines
+        for k in idxs.tolist():
+            ax.plot(
+                X_proj[k, :, 0],
+                X_proj[k, :, 1],
+                linewidth=line_width,
+                color=rgba_from_rgb(traj_rgb[k], line_alpha),
+                solid_capstyle="round",
+                zorder=1,
+            )
+
+        # markers
+        Kg = int(idxs.size)
+        x_pts = X_proj[idxs, :, 0].reshape(-1)
+        y_pts = X_proj[idxs, :, 1].reshape(-1)
+
+        point_colors = np.empty((Kg * T_plot, 4), dtype=float)
+        for g, k in enumerate(idxs.tolist()):
+            rgb = traj_rgb[k]
+            for t in range(T_plot):
+                point_colors[g * T_plot + t, :3] = rgb
+                point_colors[g * T_plot + t, 3] = alphas[t]
+
+        s_pts = sizes_area[idxs, :].reshape(-1)
+
+        ax.scatter(
+            x_pts,
+            y_pts,
+            s=s_pts,
+            c=point_colors,
+            marker=marker,
+            linewidths=0.0,
+            edgecolors="none",
+            zorder=2,
+        )
+
+        # endpoint overlay (endpoint is last plotted timestep; if keep_last=True this is the true final)
+        x_end = X_proj[idxs, -1, 0]
+        y_end = X_proj[idxs, -1, 1]
+        s_end = sizes_area[idxs, -1]
+
+        end_colors = [rgba_from_rgb(traj_rgb[k], end_marker_alpha) for k in idxs.tolist()]
+        ax.scatter(
+            x_end,
+            y_end,
+            s=s_end,
+            c=end_colors,
+            marker=marker,
+            linewidths=end_marker_edge_width,
+            edgecolors=[end_marker_edge_color],
+            zorder=3,
+        )
+
+        ax.scatter([], [], s=80, c=[rgba(base_color, 1.0)], marker=marker, label=legend_name)
+
+    # Optional: quick hint in title if subsampled
+    if T > max_T:
+        ax.set_title(f"{title}  (T={T} → plotted {T_plot}, gap={gap})")
+    else:
+        ax.set_title(title)
+
+    ax.set_xlabel("axis 1")
+    ax.set_ylabel("axis 2")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.legend(frameon=False, loc="best")
+    ax.grid(False)
+
+    return fig, ax
 

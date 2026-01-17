@@ -1,10 +1,10 @@
 import torch
 from typing import Tuple, Optional
 
-# from icl.latent_markov.latent_utils import generate_markov_chains
 
-# config specifies the number of different transitions
-# each time, we randomly sample a transition matrix to use
+import torch
+from typing import Tuple, Optional
+
 
 class Coins:
     """
@@ -13,169 +13,294 @@ class Coins:
     """
 
     def __init__(self, config):
-        self.seq_len = config.seq_len
-        self.pad = config.task.pad
+        self.seq_len = int(config.seq_len)
+        self.pad = bool(config.task.pad)
 
-        if config.task.pad:
-            self.num_states = config.vocab_size - 1
+        if self.pad:
+            self.num_states = int(config.vocab_size) - 1
         else:
-            self.num_states = config.vocab_size
+            self.num_states = int(config.vocab_size)
 
-        self.batch_size = config.batch_size
-        self.eval_size = config.eval_size
-        self.test_size = config.test_size
+        self.batch_size = int(config.batch_size)
+        self.eval_size = int(config.eval_size)
+        self.test_size = int(config.test_size)
         self.device = config.device
-        self.seed = config.seed
+        self.seed = int(getattr(config, "seed", 0))
 
         # Dirichlet concentration parameter for sampling categorical probabilities
-        self.alpha = float(config.task.alpha) if hasattr(config.task, "alpha") else 1.0
+        self.alpha = float(getattr(config.task, "alpha", 1.0))
 
-        self.n_major_tasks = int(config.task.n_tasks)
+        self.n_major_tasks = int(getattr(config.task, "n_tasks", 0))
         self.n_minor_tasks = int(getattr(config.task, "n_minor_tasks", 0))
-        self.p_minor = float(getattr(config.task, "p_minor", 0.0))
+        self.p_minor = float(getattr(config.task, "p_minor", 1e-12))
 
-        if self.n_major_tasks > 0:
-            dirichlet = torch.distributions.Dirichlet(
-                torch.full((self.num_states,), self.alpha, device=self.device)
-            )
-            self.major_p = dirichlet.sample((self.n_major_tasks,))  # (n_major_tasks, K)
-        else:
-            self.major_p = None
+        # Pre-sample major/minor pools (optional)
+        self.major_p = self._maybe_sample_task_pool(self.n_major_tasks, pool_name="major")
+        self.minor_p = self._maybe_sample_task_pool(self.n_minor_tasks, pool_name="minor")
 
-        if self.n_minor_tasks > 0:
-            dirichlet = torch.distributions.Dirichlet(
-                torch.full((self.num_states,), self.alpha, device=self.device)
-            )
-            self.minor_p = dirichlet.sample((self.n_minor_tasks,))  # (n_minor_tasks, K)
-        else:
-            self.minor_p = None
+    # -----------------------------
+    # Probability pool generation
+    # -----------------------------
+    def _dirichlet(self) -> torch.distributions.Dirichlet:
+        return torch.distributions.Dirichlet(
+            torch.full((self.num_states,), self.alpha, device=self.device)
+        )
+
+    def _sample_disjoint_uniform_pool(
+        self,
+        n_tasks: int,
+        *,
+        eps_outside: float = 0.001,
+    ) -> torch.Tensor:
+        """
+        Create n_tasks probability vectors with (almost) disjoint supports.
+        Each row is ~uniform on its support.
+
+        - eps_outside = 0.0  -> hard disjoint supports (exact zeros)
+        - eps_outside > 0.0  -> almost disjoint, numerically safer
+        """
+        K = self.num_states
+        n_tasks = int(n_tasks)
+
+        if n_tasks <= 0:
+            return self._dirichlet().sample((1,))
+
+        # If K < n_tasks, disjoint supports are impossible; fallback to Dirichlet.
+        if K < n_tasks:
+            return self._dirichlet().sample((n_tasks,))
+
+        # Reproducible permutation of states
+        g = torch.Generator(device=self.device)
+        g.manual_seed(self.seed)
+        perm = torch.randperm(K, generator=g, device=self.device)
+
+        # Split perm into n_tasks chunks as evenly as possible
+        sizes = [(K // n_tasks) + (1 if i < (K % n_tasks) else 0) for i in range(n_tasks)]
+        # Ensure each task gets at least 1 token in its support
+        assert all(s > 0 for s in sizes)
+
+        out = torch.full((n_tasks, K), float(eps_outside), device=self.device, dtype=torch.float32)
+
+        start = 0
+        for i, sz in enumerate(sizes):
+            idx = perm[start : start + sz]
+            # Uniform-ish on support by putting constant mass there (then normalize)
+            out[i, idx] = 1.0
+            start += sz
+
+        out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        return out
+
+    def _maybe_sample_task_pool(self, n_tasks: int, *, pool_name: str) -> torch.Tensor:
+        n_tasks = int(n_tasks)
+        if n_tasks <= 0:
+            return self._dirichlet().sample((1,))
+
+        # SPECIAL: make 3 major tasks highly distinctive / almost disjoint
+        if pool_name == "major" and n_tasks == 3:
+            return self._sample_disjoint_uniform_pool(n_tasks, eps_outside=0.005)
+
+        # Default: sample each task from a Dirichlet
+        return self._dirichlet().sample((n_tasks,))  # (n_tasks, K)
 
     def to(self, device):
         self.device = device
-        if self.major_p is not None:
-            self.major_p = self.major_p.to(device)
-        if self.minor_p is not None:
-            self.minor_p = self.minor_p.to(device)
+        self.major_p = self.major_p.to(device)
+        self.minor_p = self.minor_p.to(device)
 
     @property
     def total_tasks(self) -> int:
         return int(self.n_major_tasks + self.n_minor_tasks)
 
+    # -----------------------------
+    # Sampling utilities
+    # -----------------------------
     def _sample_categorical_sequence(self, probs: torch.Tensor, seq_len: int) -> torch.Tensor:
         """
-        probs: (N, K) row-stochastic
+        probs: (N, K) row-stochastic (or close)
         returns: (N, seq_len) int64 tokens in {0,...,K-1}
         """
-        # torch.multinomial expects nonnegative rows; rows need not be perfectly normalized,
-        # but it's good practice to ensure sum=1.
         probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-
-        # Sample N * seq_len draws, then reshape
         idx = torch.multinomial(probs, num_samples=seq_len, replacement=True)  # (N, seq_len)
         return idx.to(torch.long)
 
-    def generate(
-        self,
-        epochs=1,
-        mode: str = "train",
-        task=None,
-        num_samples: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        assert mode in ["train", "test", "testing", "eval", "ood", "major", "minor"], f"Invalid mode: {mode}"
-
+    def _num_samples_for_mode(self, mode: str, epochs: int, num_samples: Optional[int]) -> int:
         if mode == "train":
-            num_samples = num_samples if num_samples is not None else self.batch_size
+            base = self.batch_size if num_samples is None else int(num_samples)
         elif mode == "test":
-            num_samples = num_samples if num_samples is not None else self.test_size
+            base = self.test_size if num_samples is None else int(num_samples)
         elif mode in ["testing", "major", "minor"]:
-            num_samples = num_samples if num_samples is not None else 1
+            base = 1 if num_samples is None else int(num_samples)
         elif mode in ["eval", "ood"]:
-            num_samples = num_samples if num_samples is not None else self.eval_size
+            base = self.eval_size if num_samples is None else int(num_samples)
         else:
             raise ValueError(f"Invalid mode: {mode}")
+        return base * int(epochs)
 
-        num_samples *= epochs
+    def _sample_from_pool(
+        self,
+        pool: Optional[torch.Tensor],
+        n_tasks: int,
+        *,
+        num_samples: int,
+        task: Optional[int],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns:
+          probs:   (N, K)
+          latent:  (N,) task indices in [0, n_tasks) (meaningful only if n_tasks>0)
+        """
+        n_tasks = int(n_tasks)
+        num_samples = int(num_samples)
 
-        # probs will always be (num_samples, K)
+        if n_tasks <= 0 or pool is None:
+            # Fallback: fresh Dirichlet per sample (OOD-style)
+            probs = self._dirichlet().sample((num_samples,))
+            latent = torch.full((num_samples,), -1, dtype=torch.long, device=self.device)
+            return probs, latent
+
+        if task is None:
+            latent = torch.randint(high=n_tasks, size=(num_samples,), device=self.device)
+        else:
+            if not (0 <= task < n_tasks):
+                raise ValueError(f"task id out of range: task={task}, n_tasks={n_tasks}")
+            latent = torch.full((num_samples,), task, dtype=torch.long, device=self.device)
+
+        probs = pool[latent]  # (N, K)
+        return probs, latent
+
+    # -----------------------------
+    # Main API
+    # -----------------------------
+    def generate(
+        self,
+        epochs: int = 1,
+        mode: str = "train",
+        task: Optional[int] = None,
+        num_samples: Optional[int] = None,
+    ):
+        """
+        Modes:
+          - "major":   sample only from major pool
+          - "minor":   sample only from minor pool; if n_minor_tasks==0 -> random Dirichlet per sample
+          - "ood":     random Dirichlet per sample
+          - "train"/"test"/"testing"/"eval": mixture of major/minor pools using p_minor when both exist.
+            If one pool doesn't exist, uses the other.
+            If neither exist, falls back to random Dirichlet per sample.
+        """
+        assert mode in ["train", "test", "testing", "eval", "ood", "major", "minor"], f"Invalid mode: {mode}"
+
+        epochs = int(epochs)
+        N = self._num_samples_for_mode(mode, epochs, num_samples)
+
+        # --- choose probs (N,K) and latent (N,) if applicable ---
         if mode == "major":
-            if task is None:
-                latent_major = torch.randint(high=self.n_major_tasks, size=(num_samples,), device=self.device)
-            else:
-                assert 0 <= task < self.n_major_tasks, "task id out of range"
-                latent_major = torch.full((num_samples,), task, dtype=torch.long, device=self.device)
-
-            assert self.major_p is not None, "No major tasks available."
-            probs = self.major_p[latent_major]  # (N, K)
-            latent = latent_major
+            probs, latent_major = self._sample_from_pool(
+                self.major_p, self.n_major_tasks, num_samples=N, task=task
+            )
+            latent = latent_major  # (N,) or -1s if no major pool
 
         elif mode == "minor":
-            if self.n_minor_tasks == 0:
-                raise ValueError("No minor tasks available.")
-            if task is None:
-                latent_minor = torch.randint(high=self.n_minor_tasks, size=(num_samples,), device=self.device)
-            else:
-                assert 0 <= task < self.n_minor_tasks, "task id out of range"
-                latent_minor = torch.full((num_samples,), task, dtype=torch.long, device=self.device)
-
-            assert self.minor_p is not None, "No minor tasks available."
-            probs = self.minor_p[latent_minor]  # (N, K)
-            latent = self.n_major_tasks + latent_minor
-
-        elif mode in ["train", "test", "testing", "eval"]:
-            if task is None:
-                latent_major = torch.randint(high=self.n_major_tasks, size=(num_samples,), device=self.device) if self.n_major_tasks > 0 else None
-                latent_minor = torch.randint(high=self.n_minor_tasks, size=(num_samples,), device=self.device) if self.n_minor_tasks > 0 else None
-            else:
-                assert 0 <= task < self.n_major_tasks + self.n_minor_tasks, "task id out of range"
-                if task < self.n_major_tasks:
-                    latent_major = torch.full((num_samples,), task, dtype=torch.long, device=self.device)
-                    latent_minor = None
-                else:
-                    latent_major = None
-                    latent_minor = torch.full((num_samples,), task - self.n_major_tasks, dtype=torch.long, device=self.device)
-
-            trans_major = self.major_p[latent_major] if latent_major is not None else None  # (N, K)
-            trans_minor = self.minor_p[latent_minor] if latent_minor is not None else None  # (N, K)
-
-            if trans_major is not None and trans_minor is not None:
-                use_minor = (torch.rand(num_samples, device=self.device) < self.p_minor)  # (N,)
-                probs = torch.where(use_minor[:, None], trans_minor, trans_major)         # (N, K)
-                latent = torch.where(use_minor, self.n_major_tasks + latent_minor, latent_major)
-            elif trans_major is not None:
-                probs = trans_major
-                latent = latent_major
-            elif trans_minor is not None:
-                probs = trans_minor
-                latent = self.n_major_tasks + latent_minor
-            else:
-                raise ValueError("No transition matrices available.")
-
-        elif mode == "ood" or self.n_major_tasks + self.n_minor_tasks == 0:
-            # NEW: OOD -> sample a fresh categorical distribution per sample from Dirichlet
-            dirichlet = torch.distributions.Dirichlet(
-                torch.full((self.num_states,), self.alpha, device=self.device)
+            # if n_minor_tasks == 0, _sample_from_pool falls back to random Dirichlet per sample
+            probs, latent_minor = self._sample_from_pool(
+                self.minor_p, self.n_minor_tasks, num_samples=N, task=task
             )
-            probs = dirichlet.sample((num_samples,))  # (N, K)
+            # For consistency with the old indexing scheme:
+            latent = torch.where(
+                latent_minor >= 0,
+                latent_minor + self.n_major_tasks,
+                latent_minor,
+            )
 
-        # NEW: categorical sampling (tokens in {0..K-1})
+        elif mode == "ood":
+            probs = self._dirichlet().sample((N,))
+            latent = None
+
+        else:
+            # train/test/testing/eval
+            if task is not None:
+                # honor explicit task id if provided, with fallback behavior if pools missing
+                if task < 0:
+                    raise ValueError("task must be nonnegative when provided.")
+                if task < self.n_major_tasks:
+                    probs, latent_major = self._sample_from_pool(
+                        self.major_p, self.n_major_tasks, num_samples=N, task=task
+                    )
+                    latent = latent_major
+                else:
+                    minor_id = task - self.n_major_tasks
+                    probs, latent_minor = self._sample_from_pool(
+                        self.minor_p, self.n_minor_tasks, num_samples=N, task=minor_id
+                    )
+                    latent = torch.where(
+                        latent_minor >= 0,
+                        latent_minor + self.n_major_tasks,
+                        latent_minor,
+                    )
+            else:
+                # mixture logic
+                has_major = self.n_major_tasks > 0
+                has_minor = self.n_minor_tasks > 0
+
+                if has_major and has_minor:
+                    latent_major = torch.randint(self.n_major_tasks, (N,), device=self.device)
+                    latent_minor = torch.randint(self.n_minor_tasks, (N,), device=self.device)
+                    trans_major = self.major_p[latent_major]
+                    trans_minor = self.minor_p[latent_minor]
+
+                    use_minor = (torch.rand(N, device=self.device) < self.p_minor)
+                    probs = torch.where(use_minor[:, None], trans_minor, trans_major)
+                    latent = torch.where(use_minor, self.n_major_tasks + latent_minor, latent_major)
+
+                elif has_major:
+                    # sample major tasks from the major pool
+                    latent_major = torch.randint(self.n_major_tasks, (N,), device=self.device)
+                    trans_major = self.major_p[latent_major]  # (N, K)
+
+                    # sample "minor" tasks as fresh Dirichlet draws (OOD-style), since no minor pool exists
+                    trans_minor = self._dirichlet().sample((N,))  # (N, K)
+
+                    # mix using p_minor
+                    use_minor = (torch.rand(N, device=self.device) < self.p_minor)  # (N,)
+                    probs = torch.where(use_minor[:, None], trans_minor, trans_major)
+
+                    # latent: major id if major chosen; -1 if the "minor"/OOD draw was chosen
+                    latent = torch.where(
+                        use_minor,
+                        torch.full((N,), -1, dtype=torch.long, device=self.device),
+                        latent_major,
+                    )
+
+                elif has_minor:
+                    probs, latent_minor = self._sample_from_pool(
+                        self.minor_p, self.n_minor_tasks, num_samples=N, task=None
+                    )
+                    latent = self.n_major_tasks + latent_minor
+
+                else:
+                    # no pools at all -> random dirichlet per sample
+                    probs = self._dirichlet().sample((N,))
+                    latent = None
+
+        # --- sample tokens ---
         samples = self._sample_categorical_sequence(probs, self.seq_len)  # (N, seq_len)
 
+        # --- optional padding pattern ---
         if self.pad:
-            padded_samples = torch.zeros((num_samples, 2 * self.seq_len - 1), dtype=torch.long, device=self.device)
-            padded_samples[:, 1::2] = self.num_states  # pad token id
-            padded_samples[:, ::2] = samples
-            samples = padded_samples
+            padded = torch.zeros((N, 2 * self.seq_len - 1), dtype=torch.long, device=self.device)
+            padded[:, 1::2] = self.num_states  # pad token id
+            padded[:, ::2] = samples
+            samples = padded
 
+        # --- return shapes / extras consistent with your old API ---
         if mode == "train":
             # probs returned as (epochs, batch, K)
             return (
-                samples.reshape(epochs, num_samples // epochs, -1),
-                probs.reshape(epochs, num_samples // epochs, -1),
+                samples.reshape(epochs, N // epochs, -1),
+                probs.reshape(epochs, N // epochs, -1),
             )
 
         if mode in ["testing", "major", "minor"] and task is None:
             return samples, probs, latent
 
         return samples, probs
-    
-

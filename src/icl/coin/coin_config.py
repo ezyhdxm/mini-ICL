@@ -9,8 +9,8 @@ def get_config_coin() -> ConfigDict:
     config = ConfigDict()
     config.profile = False  # Default profiling flag, can be set to True for performance profiling
     config.mixed_precision = False  # Default mixed precision flag, can be set to True for mixed precision training
-    config.seq_len = 129
-    config.vocab_size = 4
+    config.seq_len = 221
+    config.vocab_size = 27
     config.seed = 10086
     config.batch_size = 64
     config.eval_size = 512
@@ -67,9 +67,9 @@ def get_config_coin() -> ConfigDict:
     config.training.weight_decay = 4e-4
     config.training.warmup_steps = 10_000
     config.training.learning_rate = 4e-4
-    config.training.eval_iter = 50
+    config.training.eval_iter = 25
     config.training.get_attn = 5000
-    config.training.get_checkpoints = 100
+    config.training.get_checkpoints = 50
     config.training.scheduler = True
     config.training.T_max = 20
     

@@ -20,6 +20,10 @@ import pickle
 from datetime import datetime
 import hashlib
 
+from icl.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
 try:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -95,7 +99,7 @@ def extract_experiment_metadata(root_dir=os.path.join("results", "latent")):
                 }
                 records.append(record)
             except Exception as e:
-                print(f"Failed to read {config_path}: {e}")
+                logger.warning(f"Failed to read {config_path}: {e}")
     
     return pd.DataFrame(records)
 
@@ -191,7 +195,14 @@ def list_checkpoints(checkpoint_dir):
     }
 
 
-def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verbose=True):
+def load_checkpoint(config, 
+                    step=None, 
+                    checkpoint_dir=None, 
+                    use_final=True, 
+                    verbose=False, 
+                    exp_name=None,
+                    return_actual_step=False,
+                    ):
     """
     Load a model checkpoint from the checkpoint directory.
     
@@ -218,7 +229,8 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
     """
     # Auto-construct checkpoint_dir from config if not provided
     if checkpoint_dir is None:
-        exp_name = f"train_{get_hash(config)}"
+        if exp_name is None:
+            exp_name = f"train_{get_hash(config)}" 
         exp_dir = os.path.join(config.work_dir, exp_name)
         
         # Handle notebooks directory case
@@ -226,10 +238,12 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
         if cur_dir.endswith("notebooks"):
             exp_dir = os.path.join("..", exp_dir)
         
-        checkpoint_dir = os.path.join(exp_dir, "checkpoints")
-        
+        if config.task.name!="noisy_linear_regression":
+            checkpoint_dir = os.path.join(exp_dir, "checkpoints")
+        else:
+            checkpoint_dir = exp_dir
         if verbose:
-            print(f"Auto-detected checkpoint directory: {checkpoint_dir}")
+            logger.info(f"Auto-detected checkpoint directory: {checkpoint_dir}")
     
     checkpoint_dir = os.path.abspath(checkpoint_dir)
     
@@ -251,7 +265,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
             step_num, filename = checkpoints['final'][-1]
             model_path = os.path.join(checkpoint_dir, filename)
             if verbose:
-                print(f"Loading latest final checkpoint: {filename} (step {step_num})")
+                logger.info(f"Loading latest final checkpoint: {filename} (step {step_num})")
         else:
             # Load latest regular checkpoint
             if len(checkpoints['regular']) == 0:
@@ -259,14 +273,14 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
                     step_num, filename = checkpoints['final'][-1]
                     model_path = os.path.join(checkpoint_dir, filename)
                     if verbose:
-                        print(f"Only final checkpoints available. Loading: {filename} (step {step_num})")
+                        logger.info(f"Only final checkpoints available. Loading: {filename} (step {step_num})")
                 else:
                     raise ValueError("No checkpoints found")
             else:
                 step_num, filename = checkpoints['regular'][-1]
                 model_path = os.path.join(checkpoint_dir, filename)
                 if verbose:
-                    print(f"Loading latest checkpoint: {filename} (step {step_num})")
+                    logger.info(f"Loading latest checkpoint: {filename} (step {step_num})")
     
     elif step == "final":
         if len(checkpoints['final']) == 0:
@@ -274,7 +288,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
         step_num, filename = checkpoints['final'][-1]
         model_path = os.path.join(checkpoint_dir, filename)
         if verbose:
-            print(f"Loading latest final checkpoint: {filename} (step {step_num})")
+            logger.info(f"Loading latest final checkpoint: {filename} (step {step_num})")
     
     elif isinstance(step, int):
         # Try to find checkpoint with this step number
@@ -287,7 +301,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
                 model_path = os.path.join(checkpoint_dir, fname)
                 step_num = s
                 if verbose:
-                    print(f"Loading checkpoint: {fname} (step {step})")
+                    logger.info(f"Loading checkpoint: {fname} (step {step})")
                 break
         
         # If not found, try exact match in final checkpoints
@@ -297,7 +311,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
                     model_path = os.path.join(checkpoint_dir, fname)
                     step_num = s
                     if verbose:
-                        print(f"Loading final checkpoint: {fname} (step {step})")
+                        logger.info(f"Loading final checkpoint: {fname} (step {step})")
                     break
         
         # If still not found, try direct file paths
@@ -308,7 +322,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
                 model_path = candidate
                 step_num = step
                 if verbose:
-                    print(f"Loading checkpoint: model_{step}.pt (step {step})")
+                    logger.info(f"Loading checkpoint: model_{step}.pt (step {step})")
             else:
                 # Try final format
                 candidate = os.path.join(checkpoint_dir, f"model_final_{step}.pt")
@@ -316,7 +330,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
                     model_path = candidate
                     step_num = step
                     if verbose:
-                        print(f"Loading final checkpoint: model_final_{step}.pt (step {step})")
+                        logger.info(f"Loading final checkpoint: model_final_{step}.pt (step {step})")
         
         # If still not found, find the closest step
         if model_path is None or (model_path is not None and not os.path.exists(model_path)):
@@ -331,7 +345,7 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
             
             if verbose:
                 diff = abs(closest_step - step)
-                print(f"Step {step} not found. Loading closest checkpoint: {closest_filename} (step {closest_step}, diff={diff})")
+                logger.warning(f"Step {step} not found. Loading closest checkpoint: {closest_filename} (step {closest_step}, diff={diff})")
     
     else:
         raise ValueError(f"Invalid step parameter: {step}. Must be None, int, 'latest', or 'final'")
@@ -344,15 +358,23 @@ def load_checkpoint(config, step=None, checkpoint_dir=None, use_final=True, verb
     
     # Initialize model and load state
     try:
-        model = Transformer(config)
+        if config.task.name == "noisy_linear_regression":
+            from icl.linear.lr_models import get_model
+            data_type = torch.float
+            model = get_model(**config["model"], dtype=data_type)
+        else:
+            model = Transformer(config)
         model.load_state_dict(checkpoint['model'])
         model.eval()
         model = model.to(device)
         
         if verbose and 'step' in checkpoint:
-            print(f"Checkpoint info: step={checkpoint.get('step', 'N/A')}")
+            logger.info(f"Checkpoint info: step={checkpoint.get('step', 'N/A')}")
         
-        return model
+        if not return_actual_step:
+            return model
+        else:
+            return model, step_num
     except Exception as e:
         raise RuntimeError(f"Failed to initialize model from checkpoint: {e}")
 
@@ -1305,7 +1327,7 @@ def bayes_emp_ood_plot(
     if len(folder_name) > 0:
         _, sampler, _ = load_everything("latent", folder_name[0])
     else:
-        print("The configuration does not exist.")
+        logger.warning("The configuration does not exist.")
         return
 
     batch, _, trans_mat, _ = sampler.generate(mode="ood", num_samples=num_samples, return_trans_mat=True)
@@ -1465,7 +1487,7 @@ def all_kl_plot(file_path=None, task=None, num_samples=1000, compute_bayes=True)
     bayes_mean_losses = None
     bayes_std_losses = None
     if compute_bayes and total_trans < 300:
-        print(f"Computing Bayesian baseline for {T_raw-1} positions...")
+        logger.info(f"Computing Bayesian baseline for {T_raw-1} positions...")
         bayes_mean_losses = np.zeros(T_raw-1)
         bayes_std_losses = np.zeros(T_raw-1)
         

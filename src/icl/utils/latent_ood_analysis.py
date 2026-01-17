@@ -8,8 +8,11 @@ import pickle
 import torch
 from typing import Dict, Sequence, Any, Optional
 from tqdm.notebook import tqdm
+import copy
 
+import icl.utils.notebook_utils as nu
 from icl.linear.linear_utils import estimate_lambda_with_r2
+from icl.utils.simple_markov_sampler import get_all_samples_base_only
 
 
 def _get_exp_dir(config, exp_name: str) -> str:
@@ -222,3 +225,152 @@ def process_latent_ood_evolve_checkpoints(
     _save_results(cache_path, results_dict)
     
     return results_dict
+
+
+def _check_cache(result_path: str, forced: bool = False):
+    """Check if cached results exist and load if available."""
+    if (not forced) and os.path.exists(result_path):
+        print(f"Already computed. Loading existing results from {result_path}.")
+        with open(result_path, "rb") as f:
+            return pickle.load(f)
+    return None
+
+def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96):
+    model, sampler, config = nu.load_everything("latent", exp_name)
+    sampler_clone0 = copy.deepcopy(sampler)
+
+    # Original minor count in the clone (capacity before expansion)
+    k_minor = min(n_minor, sampler_clone0.n_minor_tasks)
+    n_tasks = k_minor + n_ood
+    sampler_clone0.n_minor_tasks = n_tasks
+
+    orig = sampler_clone0.minor_trans_mat
+
+    # Sample new OOD matrices (match device/dtype/shape)
+    ood = sampler_clone0._sample_banded_trans_mats(n_ood)
+    # Make sure ood is on same device/dtype as orig if needed
+    ood = ood.to(device=orig.device, dtype=orig.dtype)
+
+    # Create expanded matrix: (n_tasks, ...)
+    new_shape = (n_tasks, *orig.shape[1:])
+    new_minor = orig.new_empty(new_shape)  # same dtype/device as orig
+
+    # Fill: first k_ood are new; remaining are old shifted later
+    new_minor[:n_ood].copy_(ood)
+    new_minor[n_ood:].copy_(orig[:k_minor])
+
+    # Swap in
+    sampler_clone0.minor_trans_mat = new_minor
+    all_samples = get_all_samples_base_only(n_tasks, sampler_clone0, B)
+
+    return all_samples, k_minor
+
+def process_latent_ood_evolve_task_diversity(
+    exp_names: Sequence[str],
+    steps: Sequence[int],
+    n_minor: int = 256,
+    layer_indices: Sequence[int] = list(range(6)),
+    device: str = "cuda",
+    k_step: int = 32,
+    b_step: int = 32,
+    t_step: int = 4,
+    forced: bool = False,
+):
+    from icl.utils.kv_latent_task_vec_beta import compute_hiddens_onepos_all_layers_kvcache_beta
+    import icl.utils.notebook_utils as nu
+
+    print(f"Processing {len(exp_names)} experiments for task diversity analysis...")
+    _, _, base_config = nu.load_everything("latent", exp_names[0])
+    layer_indices = list(range(6)) if layer_indices is None else layer_indices
+    
+    # Check for cached results
+    exp_dir = os.path.join(base_config.work_dir, "task_diversity_analysis")
+    cur_dir = os.getcwd()
+    if cur_dir.endswith("notebooks"):
+        exp_dir = os.path.join("..", exp_dir)
+    exp_names_hash = hash(tuple(sorted(exp_names))) & 0xFFFFFFFF
+    
+    base_file_name = (
+        f'task_diversity_{len(exp_names)}_hash_{exp_names_hash:08x}.pkl'
+    )
+    result_path = os.path.join(exp_dir, base_file_name)
+    cached = _check_cache(result_path, forced)
+    if cached is not None:
+        return cached
+    
+    print("Computing results from scratch...")
+    
+    # Storage for results
+    summary_r2_ood: Dict[int, Dict[int, float]] = {L: {} for L in layer_indices}
+    lambda_dispersion_ood: Dict[int, Dict[int, float]] = {L: {} for L in layer_indices}
+    processed_experiments = []
+    processed_steps = []
+
+    try:
+        for i, exp_name in enumerate(tqdm(exp_names, desc="Processing experiments")):
+            # Load sampler + config once
+            print(f"\nProcessing experiment: {exp_name}")
+            exp_step = 60000
+            model, sampler, config = nu.load_everything("latent", exp_name)
+            all_samples, k_minor = get_all_samples(
+                exp_name=exp_name,
+                n_minor=n_minor,
+                n_ood=40,
+                B=96
+            )
+        
+            try:
+                # Load model at this checkpoint
+                model = nu.load_checkpoint(config, step=exp_step)
+                model = model.to(device)
+                model.eval()
+                
+                with torch.no_grad():
+                    # Compute hiddens for all layers at once
+                    hiddens = compute_hiddens_onepos_all_layers_kvcache_beta(
+                        config, model, all_samples,
+                        k_step=k_step,
+                        b_step=b_step,
+                        t_step=t_step
+                    )
+                    
+                    # Permute to get (L, K, V, T, B, D)
+                    hiddens_voc = hiddens.permute(0, 1, 3, 2, 4, 5)
+                    
+                    # Process each layer
+                    for L in layer_indices:
+                        hiddens_layer = hiddens_voc[L]  # (K, V, T, B, D)
+                        
+                        # Compute metrics
+                        summary_r2, lambda_dispersion = compute_latent_ood_metrics(
+                            hiddens_layer, k_minor=k_minor, device=device
+                        )
+                        
+                        summary_r2_ood[L][steps[i]] = summary_r2
+                        lambda_dispersion_ood[L][steps[i]] = lambda_dispersion
+                
+                processed_steps.append(steps[i])
+                
+            except Exception as e:
+                print(f"Error processing step {steps[i]}: {e}")
+                continue
+        
+    except KeyboardInterrupt:
+        print(f"\nInterrupted. Processed {len(processed_experiments)} experiments so far.")
+    
+    if not processed_steps:
+        print("No checkpoints processed successfully.")
+        return {}
+    
+    results_dict = {
+        "steps": processed_steps,
+        "layers": layer_indices,
+        "summary_r2_ood": summary_r2_ood,
+        "lambda_dispersion_ood": lambda_dispersion_ood,
+    }
+    
+    # Save results to cache
+    _save_results(result_path, results_dict)
+    
+    return results_dict
+    

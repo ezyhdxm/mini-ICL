@@ -117,21 +117,54 @@ def decompose_points(points, centers):
     return W
 
 def sample_points_from_balls(centers, r, n_per_ball=100, dtype=torch.float32, generator=None):
+    """
+    Sample points uniformly from M d-dim balls centered at `centers` with radius `r`.
+
+    Args:
+        centers: (M, d) tensor
+        r: float or scalar tensor (shared radius for all balls)
+        n_per_ball: int or 1D sequence/tensor of length M (counts per center)
+        dtype: dtype for sampling
+        generator: torch.Generator (optional)
+
+    Returns:
+        points: (M + sum(n_per_ball), d) tensor, includes centers first
+        W: decompose_points(points, centers)
+    """
     device = centers.device
     M, d = centers.shape
-    all_points = []
-        
-    for c in centers:
-        dirs = torch.randn(n_per_ball, d, device=device, dtype=dtype, generator=generator)
-        dirs = dirs / dirs.norm(dim=1, keepdim=True)
-        U = torch.rand(n_per_ball, device=device, dtype=dtype, generator=generator)
-        radii = r * U.pow(1.0/d)
 
-        pts = c + dirs * radii[:, None]
-        all_points.append(pts)
+    # --- normalize n_per_ball to a 1D LongTensor of length M ---
+    if isinstance(n_per_ball, int):
+        n_counts = torch.full((M,), n_per_ball, device=device, dtype=torch.long)
+    else:
+        n_counts = torch.as_tensor(n_per_ball, device=device)
+        if n_counts.ndim != 1 or n_counts.numel() != M:
+            raise ValueError(f"n_per_ball must be an int or a 1D sequence/tensor of length M={M}.")
+        n_counts = n_counts.to(dtype=torch.long)
 
-    points = torch.cat(all_points, dim=0)
-    points = torch.cat([centers, points], dim=0)
+    if (n_counts < 0).any():
+        raise ValueError("n_per_ball must be nonnegative.")
+    total = int(n_counts.sum().item())
+
+    # If nothing to sample, just return centers and W
+    if total == 0:
+        points = centers
+        W = decompose_points(points, centers)
+        return points, W
+
+    # --- sample all directions/radii in one go ---
+    dirs = torch.randn(total, d, device=device, dtype=dtype, generator=generator)
+    dirs = dirs / dirs.norm(dim=1, keepdim=True).clamp_min(torch.finfo(dtype).tiny)
+
+    U = torch.rand(total, device=device, dtype=dtype, generator=generator)
+    radii = r * U.pow(1.0 / d)  # uniform-in-volume for d-ball
+
+    # Repeat centers according to per-ball counts, then offset
+    centers_rep = centers.repeat_interleave(n_counts, dim=0).to(dtype=dtype)
+    sampled = centers_rep + dirs * radii[:, None]
+
+    points = torch.cat([centers.to(dtype=dtype), sampled], dim=0)
     W = decompose_points(points, centers)
 
     return points, W

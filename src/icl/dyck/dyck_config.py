@@ -9,11 +9,11 @@ def get_config_dyck() -> ConfigDict:
     config = ConfigDict()
     config.profile = False  # Default profiling flag, can be set to True for performance profiling
     config.mixed_precision = False  # Default mixed precision flag, can be set to True for mixed precision training
-    config.seq_len = 169
-    config.vocab_size = 9
+    config.seq_len = 201
+    config.vocab_size = 8
     config.seed = 10086
     config.batch_size = 64
-    config.eval_size = 128
+    config.eval_size = 512
     config.test_size = 512
     config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
     TASKNAME = "dyck"  # Default task name, can be overridden in config

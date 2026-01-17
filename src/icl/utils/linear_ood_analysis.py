@@ -62,7 +62,8 @@ def _create_eval_task_pool(
     K: int,
     radius: float,
     include_minor: bool,
-    device: str
+    device: str,
+    n_minor = 256,
 ) -> Tuple[torch.Tensor, int]:
     """
     Create evaluation task pool with OOD tasks and optional minority tasks.
@@ -74,20 +75,32 @@ def _create_eval_task_pool(
     anchor_pool = train_task.task_pool.squeeze(-1).to(device)
     
     # Generate OOD evaluation task pool
-    n_per_ball = K // 3
-    eval_task_pool, _ = sample_points_from_balls(anchor_pool, r=radius, n_per_ball=n_per_ball)
+    M = anchor_pool.shape[0]   # should be 3 here
+
+    base = K // M
+    rem  = K % M
+
+    # distribute the remainder to the first `rem` anchors
+    n_per_ball = torch.full((M,), base, dtype=torch.long, device=anchor_pool.device)
+    n_per_ball[:rem] += 1
+
+    eval_task_pool, _ = sample_points_from_balls(
+        anchor_pool,
+        r=radius,
+        n_per_ball=n_per_ball,
+    )
     
     n_minor_sampled = 0
     if include_minor:
         minor_pool = train_task.minor_pool.squeeze(-1).to(device)
         
         # Sample minority tasks if too many
-        if train_task.n_minor_tasks > 64:
-            print(f"Too many minority tasks ({train_task.n_minor_tasks}). Randomly sampling 64.")
-            torch.manual_seed(42)
-            indices = torch.randperm(train_task.n_minor_tasks)[:64]
+        if train_task.n_minor_tasks > n_minor:
+            # print(f"Too many minority tasks ({train_task.n_minor_tasks}). Randomly sampling {n_minor}.")
+            # torch.manual_seed(42)
+            indices = torch.randperm(train_task.n_minor_tasks)[:n_minor]
             minor_pool = minor_pool[indices]
-            n_minor_sampled = 64
+            n_minor_sampled = n_minor
         else:
             n_minor_sampled = train_task.n_minor_tasks
         
@@ -101,7 +114,7 @@ def _setup_eval_task(config, eval_task_pool: torch.Tensor, batch_size: int, devi
     K = eval_task_pool.shape[0]
     
     eval_config = config.copy() if isinstance(config, dict) else config
-    eval_config["task"].n_tasks = K + 3
+    eval_config["task"].n_tasks = K
     eval_config["device"] = device
     
     eval_task = get_task(**eval_config["task"], device=device)
@@ -174,10 +187,15 @@ def _compute_ood_metrics(
     return summary_r2, dispersion
 
 
-def process_ood_evolve(exp_name: str, K: int = 300, layer_index: int = 3, 
-                      orthogonal_offset: float = 0, is_on_sphere: bool = False, include_minor: bool = False,
-                      radius: float = 2, device: Optional[str] = None,
-                      batch_size: int = 256):
+def process_ood_evolve(exp_name: str, 
+                       K: int = 300, 
+                       layer_index: int = 3, 
+                       orthogonal_offset: float = 0, is_on_sphere: bool = False, include_minor: bool = False,
+                       radius: float = 2, device: Optional[str] = None,
+                       batch_size: int = 256,
+                       random_projection: bool = False,
+                       minor_projection: bool = False
+                       ):
     """
     Process OOD evolution analysis with PCA projections and lambda estimation.
     
@@ -219,6 +237,17 @@ def process_ood_evolve(exp_name: str, K: int = 300, layer_index: int = 3,
     # Compute hiddens and task vectors
     hiddens_all_time, _ = compute_hiddens(config, model, eval_task, layer_index)
     _, task_vecs_over_all_time, final_task_vecs = _compute_task_vectors(hiddens_all_time)
+
+    if random_projection:
+        random_vecs = torch.randn_like(final_task_vecs)
+        task_mean = random_vecs.mean(dim=0).unsqueeze(0) # (1, d_emb)
+        # Final anchor vectors at last time step
+        final_task_vecs = random_vecs - task_mean # (3, d_emb)
+    elif minor_projection and include_minor and n_minor_sampled >= 3:
+        idx = np.random.choice(n_minor_sampled, size=3, replace=False)
+        minor_vecs = task_vecs_over_all_time[-n_minor_sampled:,-1][idx]  # (3, d_emb)
+        # task_mean = minor_vecs.mean(dim=0).unsqueeze(0) # (1, d_emb)
+        final_task_vecs = minor_vecs[:3]  # (3, d_emb)
     
     # Estimate lambdas and R²
     lambdas, r2_scores, task_norms, ortho_norms = estimate_lambda_with_r2(

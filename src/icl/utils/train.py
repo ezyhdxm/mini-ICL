@@ -11,6 +11,10 @@ import nvtx
 from contextlib import contextmanager, nullcontext
 import timeit
 
+from icl.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
 
 from icl.latent_markov import *
 from icl.coin.coin import Coins
@@ -36,9 +40,9 @@ def maybe_nvtx_range(message, color="blue", enabled=True):
             start_time = timeit.default_timer()
         yield
         if enabled:
-            torch.cuda.synchronize() 
+            torch.cuda.synchronize()
             end_time = timeit.default_timer()
-            print(f"{message}: {end_time - start_time:.6f} s")
+            logger.debug(f"{message}: {end_time - start_time:.6f} s")
             
 # turn off flash attention to obtain attention scores
 def flash_off(model):
@@ -79,7 +83,7 @@ class BaseTrainer:
         self.MAX_SIZE = 1024
         self.log_path = os.path.join(self.exp_dir, "log.json")
         if os.path.exists(self.log_path):
-            print(f"{self.exp_name} already completed")
+            logger.info(f"{self.exp_name} already completed")
             return
         os.makedirs(self.exp_dir, exist_ok=True)
         with open(os.path.join(self.exp_dir, "config.json"), "w") as f: 
@@ -139,7 +143,7 @@ class BaseTrainer:
     def train(self, model, verbose=False):
         sampler = get_sampler(self.config)
         if verbose:
-            print(tabulate_model(model, self.config.seq_len, self.config.batch_size, self.config.device))
+            logger.info(f"Model architecture:\n{tabulate_model(model, self.config.seq_len, self.config.batch_size, self.config.device)}")
 
         optimizer = torch.optim.AdamW(model.parameters(), 
                                     lr=self.config.training.learning_rate, 
@@ -184,7 +188,7 @@ class BaseTrainer:
 
         wandb.init(config=self.config, name=self.exp_name, **self.config["wandb"])
 
-        if verbose: print("Starting training...")
+        if verbose: logger.info("Starting training...")
         for iters in range(tot_iters): 
             with maybe_nvtx_range(f"Generate Training Samples {iters}", color="green", enabled=self.config.profile):
                 train_data = sampler.generate(epochs=epochs)
@@ -192,7 +196,7 @@ class BaseTrainer:
             sample, sample_info = train_data
             for i in range(epochs): 
                 if self.profile:
-                    print("="*50)
+                    logger.debug("="*50)
                 self.step += 1
                 model.train()
                 batch, _ = sample[i], sample_info[i]
@@ -238,20 +242,20 @@ class BaseTrainer:
 
                 if (self.step % self.config.training.eval_iter == 0) or (self.step < min(self.config.training.eval_iter, 100) and self.step % 5 == 0):
                     if verbose: 
-                        print(f"Step: {self.step}")
+                        logger.info(f"Step: {self.step}")
                     self.log["train/step"].append(self.step)
                     lr_val = scheduler.get_last_lr()[0] if scheduler else self.config.training.learning_rate
                     self.log["train/lr"].append(lr_val)
                     wandb.log({"train/lr": lr_val}, step=self.step)
                     self.log_eval(model, data, infos)
 
-        print("Saving final model...")
+        logger.info("Saving final model...")
         self.save_checkpoint(model, optimizer, is_final=True)
         with open(self.log_path, "w") as f:
             json.dump(self.log, f, indent=2)
 
         if verbose:
-            print("Training complete.")
+            logger.info("Training complete.")
 
         return get_train_result(log=self.log, config=self.config, sampler=sampler, attn_maps=self.attn_maps, probes=self.probes)
 
@@ -284,11 +288,14 @@ def train_model_with_plot(model, config, show=False, verbose=False):
     if cur_dir.endswith("notebooks"):
         exp_dir = os.path.join("..", exp_dir)
 
-    print("Experiment directory: ", exp_dir) 
+    if verbose:
+        logger.info(f"Experiment directory: {exp_dir}") 
 
     if os.path.exists(os.path.join(exp_dir, "log.json")):
-        print(f"{exp_name} already completed")
-        return
+        if verbose:
+            logger.info(f"{exp_name} already completed")
+        log_path = os.path.join(exp_dir, "log.json")
+        return (json.load(open(log_path, "r")), exp_dir)
     
     trainer = train_model(config)
 
@@ -299,8 +306,6 @@ def train_model_with_plot(model, config, show=False, verbose=False):
     os.makedirs(plot_path, exist_ok=True)
 
     get_loss_plots(config, train_results, folder=plot_path, show=show)
-    #plot_attn_scores(train_results, config, folder=plot_path, show=True, log=False)
-    #plot_attn_scores(train_results, config, folder=plot_path, show=True, log=True)
 
     if len(train_results["attn_maps"]) > 0:
         last_key = sorted(list(train_results["attn_maps"].keys()))[-1]
