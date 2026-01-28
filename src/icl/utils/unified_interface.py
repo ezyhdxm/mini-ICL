@@ -72,9 +72,16 @@ def _get_hiddens(
         if verbose:
             logger.info("Getting samples...")
         sampler_clone, k_minor = get_new_sampler(exp_name, n_minor, n_ood)
-        hiddens = compute_hiddens(config, model, sampler_clone, B)
+        if kwargs.get("return_data", False):
+            hiddens, demo_data = compute_hiddens(config, model, sampler_clone, B, return_data=True)
+        else:
+            hiddens = compute_hiddens(config, model, sampler_clone, B)
+        
         if kwargs.get("return_p", False):
             return hiddens, k_minor, torch.concat([sampler_clone.major_p, sampler_clone.minor_p])
+        if kwargs.get("return_data", False):
+            return hiddens, k_minor, demo_data, sampler_clone
+
     
     elif task_name == "dyck":
         _, sampler, config = nu.load_everything("dyck", exp_name)

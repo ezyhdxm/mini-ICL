@@ -124,7 +124,27 @@ def _get_traj_plot_cache_path(
     cache_file = f"traj_projplot_{proj_type}_{task_name}_kminor_{k_minor}_kood_{n_ood}_b_{B}_{exp_name}.png"
     return os.path.join(exp_dir, cache_file)
 
-
+def _get_traj_post_plot_cache_path(
+        config,
+        task_name,
+        exp_name: str,
+        k_minor: int,
+        n_ood: int,
+        B: int,
+        voc: Optional[int]=None,
+        layer_index: Optional[int] = None,
+        minor_projection: bool = False,
+    ) -> str:
+    """Generate cache file path for projection plot data."""
+    exp_dir = _get_exp_dir(config, exp_name)
+    proj_type = "minorproj" if minor_projection else "stdproj"
+    if layer_index is None:
+        layer_index = config.model.n_layer-1 if task_name == "linear" else config.model.num_layers-1
+    if voc is not None and task_name == "latent":
+        exp_name += f"_voc{voc}"
+    exp_name += f"_layer{layer_index}"
+    cache_file = f"traj_post_projplot_{proj_type}_{task_name}_kminor_{k_minor}_kood_{n_ood}_b_{B}_{exp_name}.png"
+    return os.path.join(exp_dir, cache_file)
 
 def _get_metrics_cache_path(
         config,

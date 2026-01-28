@@ -15,6 +15,7 @@ def compute_hiddens(
     model: torch.nn.Module,
     sampler,
     B: int = 64,
+    return_data=False,
 ):
     """
     Extract hidden representations from the attention blocks of ALL layers.
@@ -60,6 +61,9 @@ def compute_hiddens(
 
         return cache  # layer -> (B, P, d)
 
+    if return_data:
+        data_collector = torch.empty((n_tasks, B, seq_len))
+
     for i in range(n_tasks):
         demo_data, _ = sampler.generate(
             mode="testing", task=i, num_samples=B
@@ -70,8 +74,13 @@ def compute_hiddens(
         for l in range(n_layers):
             # (B, P, d) -> (P, B, d)
             all_hiddens[l, i] = layer_vecs[l].permute(1, 0, 2)
+        if return_data:
+            data_collector[i] = demo_data[:, ::2]
+    
+    if return_data:
+        return all_hiddens, data_collector # (n_layers, n_tasks, seq_len-1, B, n_embd)
 
-    return all_hiddens # (n_layers, n_tasks, seq_len-1, B, n_embd)
+    return all_hiddens
 
 
 
@@ -371,6 +380,26 @@ def project_with_r2_size(
         idx_major = np.arange(0, n_major)
         idx_ood = np.arange(n_major, K) if n_ood > 0 else None
         idx_minor = None
+    
+    # ----------------------------
+    # NEW: Prepare OOD posterior colors (optional)
+    # ----------------------------
+    P_ood_plot = None
+    major_palette_rgb = None
+
+    if ood_posterior is not None and ood_count > 0:
+        # palette for the K major anchors
+        if major_palette is None:
+            cmap = plt.get_cmap("tab10")
+            major_palette = [cmap(i) for i in range(int(k_major))]
+        major_palette_rgb = np.asarray([mcolors.to_rgb(c) for c in major_palette], dtype=float)
+
+        P_ood_full = _normalize_ood_posterior(
+            ood_posterior, T_full=T, Kmaj=int(k_major), ood_count=int(ood_count), b_ood=b_ood
+        )
+        # downsample with same indices as trajectories
+        P_ood_plot = P_ood_full[:, t_idx, :]  # (ood_count, T_plot, k_major)
+
 
     major_labels = [all_labels[i] for i in idx_major.tolist()]
     ood_labels = [all_labels[i] for i in idx_ood.tolist()] if idx_ood is not None else []
@@ -919,392 +948,4 @@ def project_with_r2_trajectories_group_colors(
 
 
 
-
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-
-
-def project_with_r2_trajectories_group_colors_mpl(
-    task_vecs_over_all_time,
-    final_task_vecs,
-    r2_scores,
-    lambdas,
-    task_labels=None,
-    n_minors=0,
-    # --- size mapping (uses R²) ---
-    size_min=3,
-    size_max=18,
-    # --- alpha scheme ---
-    alpha_start=0.25,   # kept for backwards compat; used as default alpha_mid
-    alpha_end=0.85,     # last point alpha (highest)
-    alpha_head=0.1,     # if None -> min(1.0, alpha_mid * 1.6)
-    alpha_mid=0.01,     # if None -> alpha_start
-    n_head=1,           # "first few points"
-    # --- NEW: downsampling for long T ---
-    max_T=64,           # if T > max_T, we subsample timesteps for plotting
-    gap=2,              # keep every `gap` steps in the middle (>=1); e.g. 2 keeps every other step
-    keep_last=True,     # always keep the final timestep
-    # --- group colors (ALL tasks in group share same color, but per-trajectory jitter is applied) ---
-    major_color="#1f77b4",
-    ood_color="#ff7f0e",
-    minor_color="#2ca02c",
-    # --- per-trajectory color jitter (within each group) ---
-    color_seed=0,
-    color_jitter=0.05,
-    sat_jitter=0.10,
-    val_jitter=0.10,
-    # --- trajectory styling ---
-    line_alpha=0.35,
-    line_width=1.1,
-    # --- endpoint emphasis (NO size change; just edge + full opacity) ---
-    end_marker_alpha=0.9,
-    end_marker_edge_color=(0, 0, 0, 0.8),
-    end_marker_edge_width=1.2,
-    # --- figure ---
-    figsize=(9, 7),
-    dpi=150,
-    ax=None,
-    title="Overlapped trajectories (group colors, emphasized endpoints)",
-):
-    """
-    Matplotlib version of your Plotly plot.
-
-    Alpha rule:
-      - first n_head points: higher alpha (alpha_head)
-      - all middle points except last: low alpha (alpha_mid)
-      - last point: highest alpha (alpha_end)
-
-    Coloring rule:
-      - First 3 (after flattening): MAJOR color
-      - Last n_minors: MINOR color
-      - Everything in-between: OOD color
-
-    NEW (subsampling for long sequences):
-      If T > max_T, we plot a subset of timesteps:
-        - keep first n_head timesteps
-        - keep last timestep (if keep_last)
-        - for the middle, keep every `gap` steps
-      Subsampling is applied consistently to:
-        - X_proj (points + lines)
-        - R2-based sizes
-        - alphas
-      so endpoint remains the true final step.
-    """
-    # ----------------------------
-    # Helpers
-    # ----------------------------
-    def to_np(x):
-        if x is None:
-            return None
-        if hasattr(x, "detach"):
-            return x.detach().cpu().numpy()
-        return np.asarray(x)
-
-    def prod(shape):
-        out = 1
-        for s in shape:
-            out *= int(s)
-        return int(out)
-
-    def flatten_leading(X, *, name, tail_ndim):
-        X = np.asarray(X)
-        if X.ndim < tail_ndim:
-            raise ValueError(f"{name} must have ≥ {tail_ndim} dims, got {X.shape}")
-        lead_shape = X.shape[: X.ndim - tail_ndim]
-        tail_shape = X.shape[X.ndim - tail_ndim :]
-        K = prod(lead_shape) if len(lead_shape) > 0 else 1
-        return X.reshape((K, *tail_shape)), lead_shape, tail_shape
-
-    def normalize_labels(task_labels, lead_shape, K):
-        if task_labels is None:
-            if len(lead_shape) == 2:
-                a, b = lead_shape
-                return [f"task{i}|vocab{j}" for i in range(a) for j in range(b)]
-            return [f"item_{k}" for k in range(K)]
-        arr = to_np(task_labels)
-        if isinstance(arr, np.ndarray):
-            flat = arr.reshape(-1)
-            if flat.shape[0] == K:
-                return [str(x) for x in flat.tolist()]
-        task_labels = list(task_labels)
-        if len(task_labels) != K:
-            raise ValueError(f"task_labels must have length {K}")
-        return [str(x) for x in task_labels]
-
-    def rgba(color, a):
-        r, g, b, _ = mcolors.to_rgba(color)
-        a = float(np.clip(a, 0.0, 1.0))
-        return (r, g, b, a)
-
-    def rgba_from_rgb(rgb, a):
-        a = float(np.clip(a, 0.0, 1.0))
-        return (float(rgb[0]), float(rgb[1]), float(rgb[2]), a)
-
-    def jitter_color(base_color, rng, hue_jitter=0.03, sat_jitter=0.10, val_jitter=0.10):
-        r, g, b = mcolors.to_rgb(base_color)
-        h, s, v = mcolors.rgb_to_hsv([r, g, b])
-        h = (h + rng.uniform(-hue_jitter, hue_jitter)) % 1.0
-        s = float(np.clip(s + rng.uniform(-sat_jitter, sat_jitter), 0.0, 1.0))
-        v = float(np.clip(v + rng.uniform(-val_jitter, val_jitter), 0.0, 1.0))
-        r2, g2, b2 = mcolors.hsv_to_rgb([h, s, v])
-        return (float(r2), float(g2), float(g2 if False else b2))  # keep as (r,g,b)
-
-    # ----------------------------
-    # NEW: timestep selection for long T
-    # ----------------------------
-    def make_time_indices(T, *, max_T, n_head, gap, keep_last=True):
-        if max_T is None or T <= int(max_T):
-            return np.arange(T, dtype=int)
-
-        max_T = int(max_T)
-        n_head = int(max(0, n_head))
-        gap = int(max(1, gap))
-
-        # head indices (do not exceed T)
-        head = np.arange(min(n_head, T), dtype=int)
-
-        last = np.array([T - 1], dtype=int) if (keep_last and T > 0) else np.array([], dtype=int)
-
-        start_mid = int(head[-1] + 1) if head.size > 0 else 0
-        end_mid = (T - 1) if keep_last else T  # exclusive upper bound for mid
-        if end_mid < start_mid:
-            mid = np.array([], dtype=int)
-        else:
-            mid = np.arange(start_mid, end_mid, gap, dtype=int)
-
-        idx = np.unique(np.concatenate([head, mid, last]))
-        idx.sort()
-
-        # If still too many (e.g., n_head huge), cap to max_T while keeping last.
-        if idx.size > max_T:
-            keep = []
-            idx_set = set(idx.tolist())
-
-            # always keep last if requested
-            if keep_last and (T - 1) in idx_set:
-                keep.append(T - 1)
-
-            # always keep head (up to n_head)
-            for t in range(min(n_head, T)):
-                if t in idx_set and t not in keep:
-                    keep.append(t)
-
-            keep = sorted(set(keep))
-            remaining_budget = max_T - len(keep)
-            if remaining_budget > 0:
-                # fill from the middle uniformly
-                others = [t for t in idx.tolist() if t not in keep]
-                if len(others) <= remaining_budget:
-                    keep = sorted(set(keep + others))
-                else:
-                    # choose evenly spaced
-                    pick = np.linspace(0, len(others) - 1, remaining_budget)
-                    pick = np.unique(np.round(pick).astype(int))
-                    keep = sorted(set(keep + [others[i] for i in pick]))
-            idx = np.array(keep, dtype=int)
-            idx.sort()
-
-        return idx
-
-    # ----------------------------
-    # Convert + flatten inputs
-    # ----------------------------
-    X_raw = to_np(task_vecs_over_all_time)
-    F = to_np(final_task_vecs)
-    R2_raw = to_np(r2_scores)
-    L_raw = to_np(lambdas)
-
-    if any(v is None for v in (X_raw, F, R2_raw, L_raw)):
-        raise ValueError("task_vecs_over_all_time, final_task_vecs, r2_scores, lambdas are required.")
-
-    X, lead_shape, _ = flatten_leading(X_raw, name="task_vecs_over_all_time", tail_ndim=2)  # (K,T,D)
-    if X.ndim != 3:
-        raise ValueError(f"task_vecs_over_all_time must flatten to (K,T,D). Got {X.shape}")
-    K, T, D = X.shape
-    if K < 1:
-        raise ValueError("K=0: no trajectories to plot.")
-    if T < 1:
-        raise ValueError("T=0: no timesteps to plot.")
-
-    R2, _, _ = flatten_leading(R2_raw, name="r2_scores", tail_ndim=1)  # (K,T)
-    L, _, _ = flatten_leading(L_raw, name="lambdas", tail_ndim=2)      # (K,T,3)
-    if R2.shape != (K, T):
-        raise ValueError(f"r2_scores shape mismatch: expected {(K,T)}, got {R2.shape}")
-    if L.shape != (K, T, 3):
-        raise ValueError(f"lambdas shape mismatch: expected {(K,T,3)}, got {L.shape}")
-
-    labels = normalize_labels(task_labels, lead_shape, K)
-
-    if n_minors < 0 or n_minors > K:
-        raise ValueError(f"n_minors must be in [0, K]. Got n_minors={n_minors}, K={K}.")
-
-    # ----------------------------
-    # Projection plane from final_task_vecs
-    # ----------------------------
-    F = np.asarray(F)
-    if F.ndim != 2 or F.shape[0] != 3 or F.shape[1] != D:
-        raise ValueError(f"final_task_vecs must be (3,{D}), got {F.shape}")
-
-    F_center = F.mean(axis=0, keepdims=True)  # (1,D)
-    F0 = F - F_center                         # (3,D)
-    _, _, Vt = np.linalg.svd(F0, full_matrices=False)
-
-    basis = Vt[:2].T  # (D,2)
-    if basis.shape[1] == 1:
-        basis = np.concatenate([basis, np.zeros((D, 1), dtype=basis.dtype)], axis=1)
-    if basis.shape != (D, 2):
-        raise RuntimeError(f"Internal error: basis has shape {basis.shape}, expected {(D,2)}")
-
-    X_centered = X - F_center.reshape(1, 1, D)                       # (K,T,D)
-    X_proj_full = np.tensordot(X_centered, basis, axes=([2], [0]))   # (K,T,2)
-    if X_proj_full.shape != (K, T, 2):
-        raise RuntimeError(f"Internal error: X_proj has shape {X_proj_full.shape}, expected {(K,T,2)}")
-
-    # ----------------------------
-    # NEW: subsample timesteps if needed
-    # ----------------------------
-    t_idx = make_time_indices(T, max_T=max_T, n_head=n_head, gap=gap, keep_last=keep_last)
-    X_proj = X_proj_full[:, t_idx, :]      # (K,Ts,2)
-    R2 = R2[:, t_idx]                      # (K,Ts)
-    L = L[:, t_idx, :]                     # (K,Ts,3)  (kept for shape consistency; not used below)
-    T_plot = int(t_idx.size)
-
-    # ----------------------------
-    # Group indices (exactly as requested)
-    # ----------------------------
-    non_minor_end = K - n_minors if n_minors > 0 else K
-    major_end = min(3, non_minor_end)
-
-    idx_major = np.arange(0, major_end, dtype=int)
-    idx_ood = np.arange(major_end, non_minor_end, dtype=int)
-    idx_minor = np.arange(non_minor_end, K, dtype=int) if n_minors > 0 else np.array([], dtype=int)
-
-    group_specs = [
-        ("major tasks", idx_major, major_color, "o"),
-        ("OOD tasks",   idx_ood,   ood_color,   "s"),
-        ("minor tasks", idx_minor, minor_color, "D"),
-    ]
-
-    # ----------------------------
-    # Size scaling by R² (global, after subsampling)
-    # ----------------------------
-    r2_min, r2_max = float(R2.min()), float(R2.max())
-    if r2_max == r2_min:
-        size_lin = np.full_like(R2, (size_min + size_max) / 2.0, dtype=float)
-    else:
-        size_lin = size_min + (R2 - r2_min) / (r2_max - r2_min) * (size_max - size_min)
-    sizes_area = (size_lin ** 2).astype(float)  # (K,T_plot)
-
-    # ----------------------------
-    # Alpha scheme (computed on plotted timesteps)
-    # ----------------------------
-    alpha_mid = float(np.clip(alpha_start if alpha_mid is None else alpha_mid, 0.0, 1.0))
-    alpha_end = float(np.clip(alpha_end, 0.0, 1.0))
-    alpha_head = float(np.clip((min(1.0, alpha_mid * 1.6)) if alpha_head is None else alpha_head, 0.0, 1.0))
-
-    if T_plot == 1:
-        alphas = np.array([alpha_end], dtype=float)
-    else:
-        alphas = np.full(T_plot, alpha_mid, dtype=float)
-        nh = int(np.clip(n_head, 0, T_plot - 1))  # never includes last plotted point
-        if nh > 0:
-            alphas[:nh] = alpha_head
-        alphas[-1] = alpha_end
-
-    # ----------------------------
-    # Figure / Axes
-    # ----------------------------
-    if ax is None:
-        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    else:
-        fig = ax.figure
-
-    # ----------------------------
-    # Draw
-    # ----------------------------
-    rng = np.random.default_rng(int(color_seed))
-
-    for legend_name, idxs, base_color, marker in group_specs:
-        if idxs.size == 0:
-            continue
-
-        traj_rgb = {}
-        for k in idxs.tolist():
-            traj_rgb[k] = jitter_color(
-                base_color,
-                rng,
-                hue_jitter=float(color_jitter),
-                sat_jitter=float(sat_jitter),
-                val_jitter=float(val_jitter),
-            )
-
-        # lines
-        for k in idxs.tolist():
-            ax.plot(
-                X_proj[k, :, 0],
-                X_proj[k, :, 1],
-                linewidth=line_width,
-                color=rgba_from_rgb(traj_rgb[k], line_alpha),
-                solid_capstyle="round",
-                zorder=1,
-            )
-
-        # markers
-        Kg = int(idxs.size)
-        x_pts = X_proj[idxs, :, 0].reshape(-1)
-        y_pts = X_proj[idxs, :, 1].reshape(-1)
-
-        point_colors = np.empty((Kg * T_plot, 4), dtype=float)
-        for g, k in enumerate(idxs.tolist()):
-            rgb = traj_rgb[k]
-            for t in range(T_plot):
-                point_colors[g * T_plot + t, :3] = rgb
-                point_colors[g * T_plot + t, 3] = alphas[t]
-
-        s_pts = sizes_area[idxs, :].reshape(-1)
-
-        ax.scatter(
-            x_pts,
-            y_pts,
-            s=s_pts,
-            c=point_colors,
-            marker=marker,
-            linewidths=0.0,
-            edgecolors="none",
-            zorder=2,
-        )
-
-        # endpoint overlay (endpoint is last plotted timestep; if keep_last=True this is the true final)
-        x_end = X_proj[idxs, -1, 0]
-        y_end = X_proj[idxs, -1, 1]
-        s_end = sizes_area[idxs, -1]
-
-        end_colors = [rgba_from_rgb(traj_rgb[k], end_marker_alpha) for k in idxs.tolist()]
-        ax.scatter(
-            x_end,
-            y_end,
-            s=s_end,
-            c=end_colors,
-            marker=marker,
-            linewidths=end_marker_edge_width,
-            edgecolors=[end_marker_edge_color],
-            zorder=3,
-        )
-
-        ax.scatter([], [], s=80, c=[rgba(base_color, 1.0)], marker=marker, label=legend_name)
-
-    # Optional: quick hint in title if subsampled
-    if T > max_T:
-        ax.set_title(f"{title}  (T={T} → plotted {T_plot}, gap={gap})")
-    else:
-        ax.set_title(title)
-
-    ax.set_xlabel("axis 1")
-    ax.set_ylabel("axis 2")
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.legend(frameon=False, loc="best")
-    ax.grid(False)
-
-    return fig, ax
 

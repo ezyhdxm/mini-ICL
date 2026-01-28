@@ -362,3 +362,269 @@ def plot_training_curves_all_experiments(
     
     return figs
 
+import json
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def ema_smooth(y, alpha=0.25):
+    """
+    Exponential moving average smoothing.
+    """
+    y = np.asarray(y, dtype=float)
+    if y.size == 0:
+        return y
+    y_smooth = np.empty_like(y)
+    y_smooth[0] = y[0]
+    for i in range(1, len(y)):
+        y_smooth[i] = alpha * y[i] + (1.0 - alpha) * y_smooth[i - 1]
+    return y_smooth
+
+
+def plot_training_curves_all_experiments_mpl(
+    task_name,
+    steps,
+    k_list,
+    n_minor: int = 64,
+    n_ood: int = 30,
+    B: int = 64,
+    metric="maj_r2_ood",
+    layer_index=None,
+    show_first_plot=True,
+    show_second_plot=True,
+    verbose=False,
+    vocab_size=8,
+    # ---- smoothing controls ----
+    ema_alpha=0.99,
+    shadow_alpha=0.4,
+    shadow_lw=1.2,
+    smooth_lw=2.5,
+    # ---- log scale ----
+    logx_first=True,
+    logx_second=True,
+):
+    """
+    Matplotlib version with:
+      - consistent colors across figures
+      - raw + smoothed overlay for first plot
+      - aligned x-axis limits between the two figures
+    """
+    results = {}
+
+    if layer_index is None:
+        layer_index = 15 if task_name == "linear" else 5
+
+    # -------------------------
+    # Collect data
+    # -------------------------
+    for k in k_list:
+        if task_name == "coin":
+            exp_name = get_exp_name(task_name, k, vocab_size=vocab_size)
+        else:
+            exp_name = get_exp_name(task_name, k)
+
+        n_minor_tasks = 2 ** k
+
+        try:
+            results_dict = process_ood_minor_metric(
+                task_name=task_name,
+                exp_name=exp_name,
+                steps=steps,
+                n_minor=n_minor,
+                n_ood=n_ood,
+                B=B,
+                force_recompute=False,
+            )
+
+            layer_metric = results_dict[metric][layer_index]
+            ood_steps = sorted(layer_metric.keys())
+            ood_values = [layer_metric[s] for s in ood_steps]
+
+            if task_name == "linear":
+                log_path = f"../results/linear/{exp_name}/log.json"
+                with open(log_path, "r") as f:
+                    data = json.load(f)
+
+                train_steps = data["train/step"]
+                transformer_true = data["eval/Latent_false"]["Transformer | True"]
+                ood_loss = [float(np.mean(v)) for v in transformer_true]
+            else:
+                log_path = f"../results/{task_name}/{exp_name}/log.json"
+                with open(log_path, "r") as f:
+                    data = json.load(f)
+
+                train_steps = data["eval/step"]
+                ood_loss = data["eval/OODLoss"]
+
+            results[k] = dict(
+                n_minor=n_minor_tasks,
+                ood_steps=np.asarray(ood_steps, dtype=float),
+                ood_values=np.asarray(ood_values, dtype=float),
+                train_steps=np.asarray(train_steps, dtype=float),
+                ood_loss=np.asarray(ood_loss, dtype=float),
+            )
+
+        except Exception as e:
+            print(f"Warning: Could not process k={k}: {e}")
+
+    # -------------------------
+    # FIXED COLOR MAP (per k)
+    # -------------------------
+    ks_sorted = sorted(results.keys())
+    cmap = plt.get_cmap("tab10") if len(ks_sorted) <= 10 else plt.get_cmap("tab20")
+    color_map = {k: cmap(i % cmap.N) for i, k in enumerate(ks_sorted)}
+
+    figs = []
+
+    # -------------------------
+    # Precompute a GLOBAL x-range to align both figures
+    # -------------------------
+    global_xmins = []
+    global_xmaxs = []
+
+    for k in ks_sorted:
+        d = results[k]
+
+        # Figure 1 x candidates: ood_steps (after log filtering if needed)
+        x1 = d["ood_steps"]
+        if logx_first:
+            x1 = x1[x1 > 0]
+        if x1.size > 0:
+            global_xmins.append(np.min(x1))
+            global_xmaxs.append(np.max(x1))
+
+        # Figure 2 x candidates: train_steps clipped to [ood_steps.min, ood_steps.max],
+        # then log filtering if needed
+        xs = d["train_steps"]
+        if d["ood_steps"].size > 0:
+            lo, hi = d["ood_steps"].min(), d["ood_steps"].max()
+            l = np.searchsorted(xs, lo, side="left")
+            r = np.searchsorted(xs, hi, side="right")
+            x2 = xs[l:r]
+        else:
+            x2 = xs
+
+        if logx_second:
+            x2 = x2[x2 > 0]
+        if x2.size > 0:
+            global_xmins.append(np.min(x2))
+            global_xmaxs.append(np.max(x2))
+
+    xlim_shared = None
+    if len(global_xmins) > 0 and len(global_xmaxs) > 0:
+        xmin = float(np.min(global_xmins))
+        xmax = float(np.max(global_xmaxs))
+        if np.isfinite(xmin) and np.isfinite(xmax) and xmax > xmin:
+            xlim_shared = (xmin, xmax)
+
+    # -------------------------
+    # Figure 1: Metric vs steps (raw + smoothed)
+    # -------------------------
+    fig1, ax1 = plt.subplots(figsize=(12, 6))
+
+    for k in ks_sorted:
+        d = results[k]
+        color = color_map[k]
+
+        x = d["ood_steps"]
+        y = d["ood_values"]
+
+        if logx_first:
+            mask = x > 0
+            x, y = x[mask], y[mask]
+
+        if x.size == 0:
+            continue
+
+        # Raw shadow
+        ax1.plot(
+            x,
+            y,
+            color=color,
+            alpha=shadow_alpha,
+            linewidth=shadow_lw,
+        )
+
+        # Smoothed curve
+        y_s = ema_smooth(y, alpha=ema_alpha)
+        ax1.plot(
+            x,
+            y_s,
+            color=color,
+            linewidth=smooth_lw,
+            marker="o",
+            markersize=4,
+            label=f"number of minority={d['n_minor']}",
+        )
+
+    if logx_first:
+        ax1.set_xscale("log")
+    if xlim_shared is not None:
+        ax1.set_xlim(*xlim_shared)
+
+    ax1.set_title(f"{metric} Across Training Steps\nLayer {layer_index}, All Experiments")
+    ax1.set_xlabel("Training Step")
+    ax1.set_ylabel(metric)
+    ax1.grid(True, which="both", alpha=0.25)
+    ax1.legend(title="Experiment")
+    fig1.tight_layout()
+    figs.append(fig1)
+
+    # -------------------------
+    # Figure 2: OOD loss vs steps (same colors!)
+    # -------------------------
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+
+    for k in ks_sorted:
+        d = results[k]
+        color = color_map[k]
+
+        xs = d["train_steps"]
+        ys = d["ood_loss"]
+
+        lo, hi = d["ood_steps"].min(), d["ood_steps"].max()
+        l = np.searchsorted(xs, lo, side="left")
+        r = np.searchsorted(xs, hi, side="right")
+
+        xs = xs[l:r]
+        ys = ys[l:r]
+
+        if logx_second:
+            mask = xs > 0
+            xs, ys = xs[mask], ys[mask]
+
+        if xs.size == 0:
+            continue
+
+        ax2.plot(
+            xs,
+            ys,
+            color=color,
+            linewidth=2.0,
+            label=f"number of minority={d['n_minor']}",
+        )
+
+    if logx_second:
+        ax2.set_xscale("log")
+    if xlim_shared is not None:
+        ax2.set_xlim(*xlim_shared)
+
+    ax2.set_title("OOD Loss Across Training Steps\nAll Experiments")
+    ax2.set_xlabel("Training Step")
+    ax2.set_ylabel("OOD Loss")
+    ax2.grid(True, which="both", alpha=0.25)
+    ax2.legend(title="Experiment")
+    fig2.tight_layout()
+    figs.append(fig2)
+
+    # Display
+    if not show_first_plot:
+        plt.close(fig1)
+    if not show_second_plot:
+        plt.close(fig2)
+    if show_first_plot or show_second_plot:
+        plt.show()
+
+    return figs
+
+
