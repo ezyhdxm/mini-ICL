@@ -249,10 +249,10 @@ def project_with_r2_trajectories_group_colors_mpl(
     # If you want the 20th annotated, include 19 in must_include_times.
     annotate_times=(0, -1),           # Start + End only by default (can still add others)
 
-    annotation_fontsize=8,
+    annotation_fontsize=9,
     annotation_box_alpha=0.45,
-    annotation_box_pad=0.14,
-    annotation_box_lw=0.75,
+    annotation_box_pad=0.20,
+    annotation_box_lw=0.90,
     annotation_line_alpha=0.60,
     annotation_line_width=0.95,
     annotation_pad_px=7,
@@ -289,6 +289,13 @@ def project_with_r2_trajectories_group_colors_mpl(
     b_maj=None,  # alias for b_major
     step=None,
     show_legend=True,
+    
+    # --- NEW: rigid alignment in 2D after projection ---
+    align_major_rigid=True,
+    align_major_target=(0.0, 0.0),     # where to pin major-1 star
+    align_major_use_rotation=True,     # also fix orientation using (major1->major2)
+    align_major_ref_dir=(1.0, 0.0),    # desired direction in 2D for (major1->major2)
+    align_major_rotate_about="major1", # "major1" or "origin"
 ):
     """
     Key behavior:
@@ -353,6 +360,62 @@ def project_with_r2_trajectories_group_colors_mpl(
                 ax_.legend_.remove()
             except Exception:
                 pass
+    
+    def _rigid_align_2d(X2, F2, *, target=(0.0, 0.0), use_rotation=True,
+                    ref_dir=(1.0, 0.0), rotate_about="major1", eps=1e-12):
+        """
+        X2: (K,T,2), F2: (3,2)
+        Returns aligned (X2a, F2a)
+
+        - Always translates so F2[0] lands on `target`.
+        - If use_rotation=True, rotates so (F2[1]-F2[0]) aligns to `ref_dir`.
+        This removes random rotation/flip across plots (up to your chosen ref_dir).
+        """
+        X2 = np.asarray(X2, dtype=float)
+        F2 = np.asarray(F2, dtype=float)
+        tgt = np.asarray(target, dtype=float).reshape(1, 2)
+
+        # choose pivot point for rotation
+        if rotate_about == "origin":
+            pivot = np.zeros((1, 2), dtype=float)
+        else:
+            pivot = F2[0:1, :]  # major1
+
+        # --- optional rotation ---
+        if use_rotation:
+            d = F2[1] - F2[0]          # current direction (major1->major2)
+            rd = np.asarray(ref_dir, dtype=float).reshape(2,)
+            nd = np.linalg.norm(d)
+            nrd = np.linalg.norm(rd)
+
+            if nd > eps and nrd > eps:
+                d = d / nd
+                rd = rd / nrd
+
+                # angle from d to rd in 2D
+                # cos = d·rd, sin = cross2(d,rd)
+                c = float(np.clip(d[0]*rd[0] + d[1]*rd[1], -1.0, 1.0))
+                s = float(d[0]*rd[1] - d[1]*rd[0])
+
+                # rotation matrix that maps d -> rd
+                R = np.array([[c, -s],
+                            [s,  c]], dtype=float)
+
+                # rotate around pivot
+                Xr = (X2 - pivot.reshape(1, 1, 2)) @ R.T + pivot.reshape(1, 1, 2)
+                Fr = (F2 - pivot) @ R.T + pivot
+            else:
+                # degenerate: can't define direction, skip rotation
+                Xr, Fr = X2, F2
+        else:
+            Xr, Fr = X2, F2
+
+        # --- translation so major1 goes to target ---
+        shift = tgt - Fr[0:1, :]   # (1,2)
+        Xa = Xr + shift.reshape(1, 1, 2)
+        Fa = Fr + shift
+        return Xa, Fa
+
 
     # ============================================================
     # Convert inputs
@@ -607,6 +670,16 @@ def project_with_r2_trajectories_group_colors_mpl(
     # ============================================================
 
     X_proj, F_proj = _project_to_plane(X, np.asarray(F, dtype=float))
+
+    if align_major_rigid:
+        X_proj, F_proj = _rigid_align_2d(
+            X_proj, F_proj,
+            target=align_major_target,
+            use_rotation=align_major_use_rotation,
+            ref_dir=align_major_ref_dir,
+            rotate_about=align_major_rotate_about,
+        )
+
 
     # ============================================================
     # Time indices shown (pow2 + dense + must_include + annotate)
@@ -1003,7 +1076,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     
     if show_legend:
         # --- Legend 1 (groups) ---
-        leg1 = ax.legend(handles=handles, frameon=False, loc="best")
+        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left")
 
         # --- Legend 2 (size ~ R²) ---
         r2_min = float(np.min(R2))
@@ -1046,7 +1119,7 @@ def project_with_r2_trajectories_group_colors_mpl(
             title="Marker size",
             scatterpoints=1,
             frameon=False,
-            loc="lower right",
+            loc="upper right",
             borderpad=0.3,
             labelspacing=0.6,
             handletextpad=0.8,

@@ -235,8 +235,9 @@ def _check_cache(result_path: str, forced: bool = False):
             return pickle.load(f)
     return None
 
-def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96):
-    model, sampler, config = nu.load_everything("latent", exp_name)
+
+def get_latent_sampler(exp_name, n_minor=256, n_ood=40):
+    _, sampler, _ = nu.load_everything("latent", exp_name)
     sampler_clone0 = copy.deepcopy(sampler)
 
     # Original minor count in the clone (capacity before expansion)
@@ -261,6 +262,11 @@ def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96):
 
     # Swap in
     sampler_clone0.minor_trans_mat = new_minor
+    
+    return sampler_clone0, k_minor, n_tasks
+
+def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96):
+    sampler_clone0, k_minor, n_tasks = get_latent_sampler(exp_name, n_minor, n_ood)
     all_samples = get_all_samples_base_only(n_tasks, sampler_clone0, B)
 
     return all_samples, k_minor
