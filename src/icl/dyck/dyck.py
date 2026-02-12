@@ -310,6 +310,140 @@ class DyckPathTask:
 
 
 
+import torch
+
+@torch.no_grad()
+def dyck_task_posterior_over_time_nonpadded(
+    task,                       # DyckPathTask instance
+    samples: torch.Tensor,      # (B,L_obs) or (E,B,L_obs)
+    masks: torch.Tensor,        # same shape as samples; 1 where Dyck token was planted
+    *,
+    return_log: bool = False,
+    eps: float = 1e-30,
+) -> torch.Tensor:
+    """
+    Compute filtering posterior P(Z=k | s_{0:t}) over Dyck-path identity Z for each t,
+    but ONLY at the non-padded (real-token) steps, following the style of task_posterior_over_time.
+
+    If task.pad == True, we use samples[..., ::2] and masks[..., ::2] as the real tokens/masks.
+
+    Args:
+        task: DyckPathTask.
+        samples: Long tensor (B,L_obs) or (E,B,L_obs).
+                 If task.pad==True, L_obs should be task.seq_len (as returned by your DyckPathTask.generate),
+                 and we will use samples[..., ::2] as the real tokens.
+        masks:   Long/bool tensor same shape as samples.
+        return_log: return log posterior if True.
+        eps: numerical floor for probabilities (used when normalizing / degenerate rows).
+
+    Returns:
+        post: Tensor shape (B,L_real,T) or (E,B,L_real,T),
+              where L_real = (task.seq_len+1)//2 if padded else task.seq_len,
+              and T = task.total_trans.
+              post[..., t, k] = P(Z=k | s_{0:t}) (or log if return_log) on the real-token timeline.
+    """
+    device = samples.device
+    dtype = torch.float32
+
+    # Allow (E,B,L) or (B,L)
+    if samples.dim() == 2:
+        samples_ = samples.unsqueeze(0)  # (1,B,L_obs)
+        masks_ = masks.unsqueeze(0)
+        squeeze_E = True
+    elif samples.dim() == 3:
+        samples_ = samples
+        masks_ = masks
+        squeeze_E = False
+    else:
+        raise ValueError(f"samples must have shape (B,L) or (E,B,L), got {samples.shape}")
+
+    if masks_.shape != samples_.shape:
+        raise ValueError(f"masks must match samples shape; got masks={masks_.shape}, samples={samples_.shape}")
+
+    # Keep only real token positions when padded (match the user's reference implementation)
+    if getattr(task, "pad", False):
+        x = samples_[..., ::2]
+        m = masks_[..., ::2]
+    else:
+        x = samples_
+        m = masks_
+
+    E, B, L = x.shape
+    T = task.total_trans
+    assert T > 0, "No tasks available: total_trans == 0"
+
+    # Build task pool of Dyck strings: (T, L_dyck)
+    if task.n_minor_tasks > 0:
+        dyck_all = torch.cat([task.major_task_pool, task.minor_task_pool], dim=0).to(device=device)
+    else:
+        dyck_all = task.major_task_pool.to(device=device)
+    assert dyck_all.shape[0] == T
+
+    # Prior over tasks (match generate() mixture)
+    if task.n_minor_tasks == 0:
+        prior = torch.full((T,), 1.0 / max(1, task.n_major_tasks), device=device, dtype=dtype)
+    else:
+        prior_major = (1.0 - float(task.p_minor)) / max(1, task.n_major_tasks)
+        prior_minor = float(task.p_minor) / max(1, task.n_minor_tasks)
+        prior = torch.cat([
+            torch.full((task.n_major_tasks,), prior_major, device=device, dtype=dtype),
+            torch.full((task.n_minor_tasks,), prior_minor, device=device, dtype=dtype),
+        ], dim=0)
+    prior = torch.clamp(prior, min=eps)
+    log_prior = prior.log()  # (T,)
+
+    # Output: (E,B,L,T)
+    log_post = torch.empty((E, B, L, T), device=device, dtype=dtype)
+
+    # Running unnormalized log-belief
+    running = log_prior.view(1, 1, T).expand(E, B, T).clone()
+
+    # planted index j = cumsum(m==1)-1, computed on the REAL timeline
+    m_bool = m.to(torch.bool)
+    planted_idx = m_bool.to(torch.long).cumsum(dim=-1) - 1  # (E,B,L)
+
+    neg_inf = torch.tensor(-float("inf"), device=device, dtype=dtype)
+
+    for t in range(L):
+        is_planted = m_bool[:, :, t]  # (E,B)
+        if is_planted.any():
+            eb = torch.nonzero(is_planted, as_tuple=False)  # (N,2)
+            e_idx = eb[:, 0]
+            b_idx = eb[:, 1]
+
+            j = planted_idx[e_idx, b_idx, t].long()   # (N,)
+            obs = x[e_idx, b_idx, t].long()           # (N,)
+
+            # expected tokens for each task: (N,T) where expected[n,k]=dyck_all[k, j[n]]
+            expected = dyck_all.transpose(0, 1).index_select(0, j)  # (N,T)
+
+            mismatch = expected != obs.unsqueeze(1)  # (N,T)
+            running[e_idx, b_idx, :] = torch.where(mismatch, neg_inf, running[e_idx, b_idx, :])
+
+        # Normalize to posterior at time t
+        maxv = torch.max(running, dim=-1, keepdim=True).values  # (E,B,1)
+        all_neg_inf = torch.isneginf(maxv)                      # (E,B,1)
+
+        stabilized = running - maxv
+        probs = torch.exp(stabilized)
+        probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(eps)
+
+        if all_neg_inf.any():
+            probs = torch.where(all_neg_inf.expand_as(probs), torch.full_like(probs, 1.0 / T), probs)
+
+        log_post[:, :, t, :] = torch.log(probs.clamp_min(eps))
+
+        # carry forward log posterior
+        running = log_post[:, :, t, :].clone()
+
+    out = log_post if return_log else torch.exp(log_post)
+    return out.squeeze(0) if squeeze_E else out
+
+
+
+
+
+
 
 
 
@@ -478,3 +612,355 @@ class DyckBayes:
         probs = self.pos_prob(seq)
         preds = torch.argmax(probs, dim=-1)
         return preds
+
+
+# ----------------------------------------------------------------
+# Mutual-information estimation: prefix vs. (height, remaining)
+# ----------------------------------------------------------------
+import math
+from dataclasses import dataclass
+from collections import defaultdict
+
+
+@dataclass
+class _WTrieNode:
+    children: dict
+    w_total: float
+    w_plus: float  # weight mass of paths whose next step is +1
+
+    def __init__(self):
+        self.children = {}      # key: +1/-1, value: _WTrieNode
+        self.w_total = 0.0
+        self.w_plus = 0.0
+
+
+class WeightedDyckTrie:
+    """
+    Weighted prefix trie over a finite pool of Dyck paths.
+    Supports Bayes-optimal next-step prob under a specified prior over tasks.
+    """
+    def __init__(self):
+        self.root = _WTrieNode()
+
+    def insert(self, steps, weight: float):
+        node = self.root
+        node.w_total += float(weight)
+        for s in steps:
+            if s not in node.children:
+                node.children[s] = _WTrieNode()
+            if s == +1:
+                node.w_plus += float(weight)
+            node = node.children[s]
+            node.w_total += float(weight)
+
+    def p_next_plus(self, prefix_steps):
+        node = self.root
+        for s in prefix_steps:
+            if s not in node.children:
+                return None
+            node = node.children[s]
+        if node.w_total <= 0.0:
+            return None
+        return node.w_plus / node.w_total
+
+
+def _binary_entropy_bits(p: float, eps: float = 1e-12) -> float:
+    p = float(min(max(p, eps), 1.0 - eps))
+    return -(p * math.log2(p) + (1.0 - p) * math.log2(1.0 - p))
+
+
+@torch.no_grad()
+def estimate_mi_prefix_vs_height_train(
+    task=None,
+    *,
+    exp_name: str = None,
+    num_samples: int = 8192,
+    min_dyck_position: int = 0,
+    max_dyck_position: int = None,
+    uniform_prior: bool = True,
+    eps: float = 1e-12,
+    seed=None,
+):
+    """
+    Approximate I(prefix; next_step | height, remaining) in bits,
+    under the *training-mode* distribution (major/minor mixed by p_minor).
+
+    The mutual information measures how much more the specific Dyck prefix
+    tells us about the next step compared to knowing only (height, remaining).
+
+    Parameters
+    ----------
+    task : DyckPathTask, optional
+        A DyckPathTask instance. If None, loaded from exp_name.
+    exp_name : str, optional
+        Experiment name (folder under results/dyck/). Used to load the sampler
+        when task is not provided.
+    num_samples : int, default=8192
+        Number of sequences to generate for the estimate.
+    min_dyck_position : int, default=0
+        Only include Dyck positions with index >= this value (0-indexed among
+        the planted Dyck tokens). Useful for skipping early uninformative positions.
+    max_dyck_position : int, optional
+        Only include Dyck positions with index < this value. If None, uses all
+        positions from min_dyck_position onward.
+    uniform_prior : bool, default=True
+        If True, temporarily sets p_minor so that every task (major and minor)
+        has equal prior probability for both the trie weights and sampling.
+        If False, uses the sampler's original p_minor.
+    eps : float, default=1e-12
+        Numerical floor for entropy computation.
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    dict with keys:
+        - MI_bits: estimated mutual information in bits
+        - H_next_given_HR_bits: H(next | height, remaining)
+        - H_next_given_prefix_bits: H(next | prefix)
+        - n_pairs_used: number of (prefix -> next) pairs used
+        - n_groups_HR: number of distinct (height, remaining) groups
+        - pad: whether the task uses padding
+        - includes_minor: whether minor tasks were included
+    """
+    # Allow passing exp_name as first positional arg
+    if isinstance(task, str):
+        if exp_name is not None:
+            raise ValueError("Got exp_name both as positional arg and keyword arg.")
+        exp_name = task
+        task = None
+
+    if task is None and exp_name is None:
+        raise ValueError("Must provide either task or exp_name.")
+
+    if task is None:
+        import icl.utils.notebook_utils as nu
+        _, task, _ = nu.load_everything("dyck", exp_name)
+
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    one, neg = task.one, task.neg
+
+    # Optionally set uniform prior
+    original_p_minor = float(getattr(task, "p_minor", 0.0))
+    if uniform_prior and int(getattr(task, "n_minor_tasks", 0)) > 0:
+        task.p_minor = task.n_minor_tasks / (task.n_major_tasks + task.n_minor_tasks)
+
+    # ---- Build weighted trie to match current prior over tasks ----
+    trie = WeightedDyckTrie()
+
+    n_major = int(getattr(task, "n_major_tasks", 0))
+    n_minor = int(getattr(task, "n_minor_tasks", 0))
+    p_minor = float(getattr(task, "p_minor", 0.0))
+
+    if n_major <= 0:
+        raise ValueError("Need n_major_tasks > 0 for train-mode task prior.")
+
+    w_major = (1.0 - p_minor) / max(1, n_major)
+    w_minor = (p_minor / max(1, n_minor)) if n_minor > 0 else 0.0
+
+    # Insert major pool
+    for seq in task.major_task_pool:
+        steps = [(+1 if int(s) == int(one) else -1) for s in seq.tolist()]
+        trie.insert(steps, w_major)
+
+    # Insert minor pool (if present)
+    if n_minor > 0 and task.minor_task_pool is not None:
+        for seq in task.minor_task_pool:
+            steps = [(+1 if int(s) == int(one) else -1) for s in seq.tolist()]
+            trie.insert(steps, w_minor)
+
+    L_dyck = int(task.major_task_pool.shape[1])  # = 2 * dyck_length
+
+    # ---- Sample sequences in training mode ----
+    samples, masks = task.generate(mode="train", num_samples=num_samples)
+
+    # generate(mode="train") returns (1, B, L) — squeeze the epoch dimension
+    if samples.dim() == 3:
+        samples = samples.squeeze(0)
+        masks = masks.squeeze(0)
+
+    # Use non-padded timeline
+    if getattr(task, "pad", False):
+        x = samples[:, ::2]
+        m = masks[:, ::2]
+    else:
+        x = samples
+        m = masks
+
+    B, _ = x.shape
+    m_bool = m.to(torch.bool)
+
+    # ---- Collect prefix-based probs and group by (height, remaining) ----
+    p_list = []
+    group_ps = defaultdict(list)
+
+    for b in range(B):
+        pos = torch.nonzero(m_bool[b], as_tuple=False).squeeze(1)
+        if pos.numel() < 2:
+            continue
+
+        dyck_tokens = x[b, pos]
+        steps = [(+1 if int(tok) == int(one) else -1) for tok in dyck_tokens.tolist()]
+
+        height = 0
+        for i in range(len(steps) - 1):
+            height += steps[i]
+            remaining = L_dyck - (i + 1)
+
+            # i is the 0-indexed Dyck position of the prefix end;
+            # we predict step i+1, so filter on position i
+            if i < min_dyck_position:
+                continue
+            if max_dyck_position is not None and i >= max_dyck_position:
+                continue
+
+            prefix = steps[: i + 1]
+            p = trie.p_next_plus(prefix)
+            if p is None:
+                continue
+
+            p_list.append(p)
+            group_ps[(height, remaining)].append(p)
+
+    n = len(p_list)
+    if n == 0:
+        raise RuntimeError("No usable (prefix -> next) pairs found in train samples.")
+
+    # H(next | prefix)
+    H_given_P = sum(_binary_entropy_bits(p, eps=eps) for p in p_list) / n
+
+    # H(next | height, remaining): average p within each (h,r) group, then entropy
+    H_given_HR = 0.0
+    for _, ps in group_ps.items():
+        w = len(ps) / n
+        q = sum(ps) / len(ps)
+        H_given_HR += w * _binary_entropy_bits(q, eps=eps)
+
+    MI = H_given_HR - H_given_P
+
+    # Restore original p_minor
+    task.p_minor = original_p_minor
+
+    return {
+        "MI_bits": MI,
+        "H_next_given_HR_bits": H_given_HR,
+        "H_next_given_prefix_bits": H_given_P,
+        "n_pairs_used": n,
+        "n_groups_HR": len(group_ps),
+        "pad": bool(getattr(task, "pad", False)),
+        "includes_minor": bool(n_minor > 0 and p_minor > 0),
+        "uniform_prior": uniform_prior,
+    }
+
+
+def plot_mi_vs_k_dyck(
+    k_values,
+    num_samples: int = 8192,
+    min_dyck_position: int = 0,
+    max_dyck_position: int = None,
+    uniform_prior: bool = True,
+    seed=None,
+    figsize: tuple = (10, 6),
+    save_path=None,
+    show: bool = True,
+    verbose: bool = False,
+):
+    """
+    Compute I(prefix; next_step | height, remaining) for each k and plot MI vs k.
+
+    Parameters
+    ----------
+    k_values : list of int
+        List of k values where number of minor tasks = 2^k.
+    num_samples : int, default=8192
+        Number of sequences per experiment for MI estimation.
+    min_dyck_position : int, default=0
+        Only include Dyck positions >= this index in the MI computation.
+    max_dyck_position : int, optional
+        Only include Dyck positions < this index. None = no upper bound.
+    seed : int, optional
+        Random seed (incremented per k for independence).
+    figsize : tuple, default=(10, 6)
+        Figure size.
+    save_path : str, optional
+        Path to save the figure.
+    show : bool, default=True
+        Whether to display the plot.
+    verbose : bool, default=False
+        Print progress.
+
+    Returns
+    -------
+    dict with keys:
+        - 'k_values': list of k values
+        - 'mi_bits': list of MI values in bits
+        - 'H_prefix': list of H(next | prefix) values
+        - 'H_hr': list of H(next | height, remaining) values
+        - 'fig': matplotlib Figure
+    """
+    import matplotlib.pyplot as plt
+    from icl.utils.unified_interface import get_exp_name
+
+    mi_bits = []
+    h_prefix = []
+    h_hr = []
+
+    for i, k in enumerate(k_values):
+        exp_name = get_exp_name("dyck", k)
+        if verbose:
+            print(f"Processing k={k} (2^k={2**k} minor tasks), exp={exp_name}")
+
+        try:
+            s = seed + i if seed is not None else None
+            result = estimate_mi_prefix_vs_height_train(
+                exp_name=exp_name, num_samples=num_samples,
+                min_dyck_position=min_dyck_position,
+                max_dyck_position=max_dyck_position,
+                uniform_prior=uniform_prior,
+                seed=s,
+            )
+            mi_bits.append(result["MI_bits"])
+            h_prefix.append(result["H_next_given_prefix_bits"])
+            h_hr.append(result["H_next_given_HR_bits"])
+
+            if verbose:
+                print(f"  MI={result['MI_bits']:.4f} bits, "
+                      f"H(next|prefix)={result['H_next_given_prefix_bits']:.4f}, "
+                      f"H(next|h,r)={result['H_next_given_HR_bits']:.4f}")
+        except Exception as e:
+            print(f"Warning: k={k} failed: {e}")
+            mi_bits.append(float('nan'))
+            h_prefix.append(float('nan'))
+            h_hr.append(float('nan'))
+
+    # Plot
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(k_values, mi_bits, 'o-', linewidth=2, markersize=8, color='blue',
+            label='I(prefix; next | h, r)')
+    ax.plot(k_values, h_hr, 's--', linewidth=1.5, markersize=6, color='gray',
+            alpha=0.7, label='H(next | h, r)')
+    ax.plot(k_values, h_prefix, '^--', linewidth=1.5, markersize=6, color='orange',
+            alpha=0.7, label='H(next | prefix)')
+    ax.set_xlabel('k (log2 of number of minor tasks)', fontsize=12)
+    ax.set_ylabel('Bits', fontsize=12)
+    ax.set_title('Mutual Information: Prefix vs (Height, Remaining)\nDyck Task', fontsize=14)
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return {
+        'k_values': k_values,
+        'mi_bits': mi_bits,
+        'H_prefix': h_prefix,
+        'H_hr': h_hr,
+        'fig': fig,
+    }

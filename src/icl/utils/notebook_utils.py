@@ -461,8 +461,62 @@ def load_log(log_path):
 #####################
 
 def load_sampler(sampler_path):
-    sampler = pickle.load(open(sampler_path, "rb"))
-    return sampler
+    """
+    Load a sampler from a pickle file.
+    
+    Parameters:
+    -----------
+    sampler_path : str
+        Path to the sampler pickle file
+    
+    Returns:
+    --------
+    sampler : object
+        The loaded sampler object
+    
+    Raises:
+    -------
+    FileNotFoundError
+        If the sampler file doesn't exist
+    EOFError
+        If the file is empty or corrupted
+    """
+    import os
+    
+    # Check if file exists
+    if not os.path.exists(sampler_path):
+        raise FileNotFoundError(
+            f"Sampler file not found: {sampler_path}\n"
+            f"Please ensure the experiment has been trained and the sampler was saved."
+        )
+    
+    # Check if file is empty
+    file_size = os.path.getsize(sampler_path)
+    if file_size == 0:
+        raise EOFError(
+            f"Sampler file is empty (0 bytes): {sampler_path}\n"
+            f"This usually means the training was interrupted before the sampler could be saved."
+        )
+    
+    # Try to load the sampler with better error handling
+    try:
+        with open(sampler_path, "rb") as f:
+            sampler = pickle.load(f)
+        return sampler
+    except EOFError as e:
+        raise EOFError(
+            f"Failed to load sampler from {sampler_path}: file appears to be corrupted or incomplete.\n"
+            f"File size: {file_size} bytes\n"
+            f"This usually means:\n"
+            f"  1. The training was interrupted before the sampler could be fully saved\n"
+            f"  2. The file was corrupted during save/transfer\n"
+            f"  3. The file is from an incomplete experiment\n"
+            f"Original error: {e}"
+        ) from e
+    except Exception as e:
+        raise RuntimeError(
+            f"Unexpected error loading sampler from {sampler_path}: {e}"
+        ) from e
 
 
 def load_everything(task_name, train_folder, get_log=False):

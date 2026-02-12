@@ -249,3 +249,82 @@ def get_task(name: str, **kwargs) -> Task:
 
 def get_task_name(task: "Task") -> str:
     return "Latent" if task.name.endswith("(0)") else "Pretrain"
+
+
+
+@torch.no_grad()
+def task_posterior_linear_regression(
+    task,  # NoisyLinearRegression instance
+    data: torch.Tensor,      # (B, T, D)
+    targets: torch.Tensor,   # (B, T)  (or (B,T,1))
+    *,
+    include_minor: bool = True,
+    return_log: bool = False,
+    eps: float = 1e-30,
+) -> torch.Tensor:
+    """
+    Compute posterior P(Z=k | X,Y) over discrete task pools (major + optional minor).
+
+    Returns:
+        post: (B, K) where K = n_tasks + (n_minor_tasks if included and available)
+    """
+    device = data.device
+    dtype = torch.float32
+
+    if targets.dim() == 3 and targets.size(-1) == 1:
+        targets = targets.squeeze(-1)
+    assert data.dim() == 3 and targets.dim() == 2
+    B, T, D = data.shape
+    assert targets.shape == (B, T)
+
+    # ----- candidate task weights: W_all (K, D, 1)
+    if task.n_tasks <= 0 or task.task_pool is None:
+        raise ValueError("Posterior needs a finite task_pool (n_tasks > 0).")
+
+    W_major = task.task_pool.to(device)  # (Kmaj, D, 1)
+    if include_minor and (task.n_minor_tasks > 0) and (task.minor_pool is not None):
+        W_minor = task.minor_pool.to(device)  # (Kmin, D, 1)
+        W_all = torch.cat([W_major, W_minor], dim=0)
+        Kmaj, Kmin = W_major.shape[0], W_minor.shape[0]
+    else:
+        W_all = W_major
+        Kmaj, Kmin = W_major.shape[0], 0
+
+    K = W_all.shape[0]
+    assert W_all.shape == (K, D, 1)
+
+    # ----- prior over tasks
+    if Kmin == 0:
+        prior = torch.full((K,), 1.0 / Kmaj, device=device, dtype=dtype)
+    else:
+        p0 = float(task.p_minor)
+        prior_major = (1.0 - p0) / Kmaj
+        prior_minor = p0 / Kmin
+        prior = torch.cat([
+            torch.full((Kmaj,), prior_major, device=device, dtype=dtype),
+            torch.full((Kmin,), prior_minor, device=device, dtype=dtype),
+        ], dim=0)
+
+    prior = torch.clamp(prior, min=eps)
+    log_prior = prior.log()  # (K,)
+
+    # ----- log-likelihood under each task
+    # preds[b,t,k] = x[b,t,:] @ w[k]
+    # W_all: (K,D,1) -> (K,D)
+    W2 = W_all.squeeze(-1)               # (K, D)
+    preds = torch.einsum("btd,kd->btk", data, W2)  # (B, T, K)
+
+    resid = targets.unsqueeze(-1) - preds         # (B, T, K)
+    sse = (resid ** 2).sum(dim=1)                 # (B, K)
+
+    sigma2 = float(task.noise_scale) ** 2
+    sigma2 = max(sigma2, eps)
+
+    # log p(y|x,w) = const - (1/(2σ^2)) * SSE
+    loglik = -0.5 * sse / sigma2                  # (B, K)
+
+    # ----- posterior
+    unnorm = loglik + log_prior.view(1, K)        # (B, K)
+    log_post = unnorm - torch.logsumexp(unnorm, dim=-1, keepdim=True)
+
+    return log_post if return_log else torch.exp(log_post)

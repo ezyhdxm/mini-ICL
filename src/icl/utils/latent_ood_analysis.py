@@ -240,25 +240,37 @@ def get_latent_sampler(exp_name, n_minor=256, n_ood=40):
     _, sampler, _ = nu.load_everything("latent", exp_name)
     sampler_clone0 = copy.deepcopy(sampler)
 
+    # Handle -1 case: use no minor tasks (placeholder)
+    if n_minor == -1:
+        n_minor = 0
+    
     # Original minor count in the clone (capacity before expansion)
-    k_minor = min(n_minor, sampler_clone0.n_minor_tasks)
+    k_minor = min(n_minor, sampler_clone0.n_minor_tasks) if n_minor >= 0 else 0
     n_tasks = k_minor + n_ood
     sampler_clone0.n_minor_tasks = n_tasks
 
     orig = sampler_clone0.minor_trans_mat
 
-    # Sample new OOD matrices (match device/dtype/shape)
-    ood = sampler_clone0._sample_banded_trans_mats(n_ood)
-    # Make sure ood is on same device/dtype as orig if needed
-    ood = ood.to(device=orig.device, dtype=orig.dtype)
+    # Handle edge case: if n_tasks is 0, return empty matrix
+    if n_tasks == 0:
+        new_shape = (0, *orig.shape[1:])
+        new_minor = orig.new_empty(new_shape)
+    else:
+        # Sample new OOD matrices (match device/dtype/shape)
+        ood = sampler_clone0._sample_banded_trans_mats(n_ood) if n_ood > 0 else orig.new_empty((0, *orig.shape[1:]))
+        # Make sure ood is on same device/dtype as orig if needed
+        if n_ood > 0:
+            ood = ood.to(device=orig.device, dtype=orig.dtype)
 
-    # Create expanded matrix: (n_tasks, ...)
-    new_shape = (n_tasks, *orig.shape[1:])
-    new_minor = orig.new_empty(new_shape)  # same dtype/device as orig
+        # Create expanded matrix: (n_tasks, ...)
+        new_shape = (n_tasks, *orig.shape[1:])
+        new_minor = orig.new_empty(new_shape)  # same dtype/device as orig
 
-    # Fill: first k_ood are new; remaining are old shifted later
-    new_minor[:n_ood].copy_(ood)
-    new_minor[n_ood:].copy_(orig[:k_minor])
+        # Fill: first n_ood are new; remaining are old shifted later
+        if n_ood > 0:
+            new_minor[:n_ood].copy_(ood)
+        if k_minor > 0:
+            new_minor[n_ood:].copy_(orig[:k_minor])
 
     # Swap in
     sampler_clone0.minor_trans_mat = new_minor

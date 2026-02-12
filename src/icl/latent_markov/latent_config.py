@@ -9,7 +9,7 @@ def get_config_base() -> ConfigDict:
     config = ConfigDict()
     config.profile = False  # Default profiling flag, can be set to True for performance profiling
     config.mixed_precision = False  # Default mixed precision flag, can be set to True for mixed precision training
-    config.seq_len = 129
+    config.seq_len = 161
     config.vocab_size = 8
     config.seed = 10086
     config.batch_size = 64

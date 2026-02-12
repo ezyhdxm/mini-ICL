@@ -418,10 +418,7 @@ def plot_training_curves_all_experiments_mpl(
     # Collect data
     # -------------------------
     for k in k_list:
-        if task_name == "coin":
-            exp_name = get_exp_name(task_name, k, vocab_size=vocab_size)
-        else:
-            exp_name = get_exp_name(task_name, k)
+        exp_name = get_exp_name(task_name, k, vocab_size=vocab_size)
 
         n_minor_tasks = 2 ** k
 
@@ -626,5 +623,152 @@ def plot_training_curves_all_experiments_mpl(
         plt.show()
 
     return figs
+
+
+def plot_ood_loss_vs_steps_dyck(
+    k_list,
+    vocab_size=None,
+    figsize=(12, 6),
+    logx=True,
+    start_step=None,
+    end_step=None,
+    ema_alpha=0.99,
+    shadow_alpha=0.4,
+    shadow_lw=1.2,
+    smooth_lw=2.5,
+    show=True,
+    save_path=None,
+    verbose=False,
+):
+    """
+    Plot OOD loss across training steps for multiple Dyck experiments.
+
+    Parameters
+    ----------
+    k_list : list of int
+        List of k values where number of minor tasks = 2^k.
+    vocab_size : int, optional
+        Vocabulary size. If None, uses default from config.
+    figsize : tuple, default=(12, 6)
+        Figure size.
+    logx : bool, default=True
+        Use log scale for x-axis.
+    start_step : int or float, optional
+        Only plot steps >= start_step. If None, starts from the beginning.
+    end_step : int or float, optional
+        Only plot steps <= end_step. If None, goes to the end.
+    ema_alpha : float, default=0.99
+        EMA smoothing factor (1 = no smoothing, 0 = max smoothing).
+    shadow_alpha : float, default=0.4
+        Opacity of the raw (unsmoothed) trace.
+    shadow_lw : float, default=1.2
+        Line width of the raw trace.
+    smooth_lw : float, default=2.5
+        Line width of the smoothed trace.
+    show : bool, default=True
+        Whether to display the plot.
+    save_path : str, optional
+        Path to save the figure.
+    verbose : bool, default=False
+        Print progress.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    import os
+
+    results = {}
+
+    for k in k_list:
+        exp_name = get_exp_name("dyck", k, vocab_size=vocab_size)
+        n_minor_tasks = 2 ** k
+
+        try:
+            # Try both relative paths (running from notebooks/ or project root)
+            for prefix in ["../results", "results"]:
+                log_path = os.path.join(prefix, "dyck", exp_name, "log.json")
+                if os.path.exists(log_path):
+                    break
+
+            with open(log_path, "r") as f:
+                data = json.load(f)
+
+            train_steps = np.asarray(data["eval/step"], dtype=float)
+            ood_loss = np.asarray(data["eval/OODLoss"], dtype=float)
+
+            results[k] = dict(
+                n_minor=n_minor_tasks,
+                train_steps=train_steps,
+                ood_loss=ood_loss,
+            )
+
+            if verbose:
+                logger.info(f"Loaded log for k={k} ({n_minor_tasks} minor tasks): {len(train_steps)} eval steps")
+
+        except Exception as e:
+            print(f"Warning: Could not load k={k}, exp={exp_name}: {e}")
+
+    if not results:
+        print("No experiments loaded successfully.")
+        return None
+
+    # Color map
+    ks_sorted = sorted(results.keys())
+    cmap = plt.get_cmap("tab10") if len(ks_sorted) <= 10 else plt.get_cmap("tab20")
+    color_map = {k: cmap(i % cmap.N) for i, k in enumerate(ks_sorted)}
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for k in ks_sorted:
+        d = results[k]
+        color = color_map[k]
+
+        xs = d["train_steps"]
+        ys = d["ood_loss"]
+
+        # Filter to [start_step, end_step]
+        mask = np.ones(len(xs), dtype=bool)
+        if start_step is not None:
+            mask &= xs >= start_step
+        if end_step is not None:
+            mask &= xs <= end_step
+        xs, ys = xs[mask], ys[mask]
+
+        if logx:
+            pos = xs > 0
+            xs, ys = xs[pos], ys[pos]
+
+        if xs.size == 0:
+            continue
+
+        # Raw shadow
+        ax.plot(xs, ys, color=color, alpha=shadow_alpha, linewidth=shadow_lw)
+
+        # Smoothed curve
+        ys_smooth = ema_smooth(ys, alpha=ema_alpha)
+        ax.plot(
+            xs, ys_smooth, color=color, linewidth=smooth_lw,
+            label=f"k={k} ({d['n_minor']} minor)",
+        )
+
+    if logx:
+        ax.set_xscale("log")
+
+    ax.set_title("OOD Loss Across Training Steps (Dyck Task)")
+    ax.set_xlabel("Training Step")
+    ax.set_ylabel("OOD Loss")
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(title="Experiment", fontsize=9)
+    fig.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return fig
 
 
