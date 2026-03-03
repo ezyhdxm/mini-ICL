@@ -3,7 +3,7 @@
 import pytest
 import torch
 from unittest.mock import Mock, MagicMock, patch
-from icl.utils.kv_latent_task_vec import (
+from icl.latent_markov.legacy.kv_task_vec import (
     _get_n_emb,
     _infer_n_head_head_dim,
     _make_kv_caches_like_model,

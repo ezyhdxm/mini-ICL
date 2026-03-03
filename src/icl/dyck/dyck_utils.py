@@ -13,11 +13,11 @@ def sample_binary_mask(config, device=None):
         device (str or torch.device): target device
     """
     device = device or torch.device("cpu")
-    seq_len = config.seq_len
+    seq_len = config.seq_len  # number of real tokens
     p = config.task.repeat_prob
     keep_n = 2*config.task.dyck_length
     
-    short_len = (seq_len + 1) // 2  # number of "active" positions before expansion
+    short_len = seq_len  # number of real-token positions
 
     # Step 1: Bernoulli sampling
     x = torch.bernoulli(torch.full((short_len,), p, device=device))

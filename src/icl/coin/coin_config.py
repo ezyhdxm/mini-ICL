@@ -9,10 +9,10 @@ def get_config_coin() -> ConfigDict:
     config = ConfigDict()
     config.profile = False  # Default profiling flag, can be set to True for performance profiling
     config.mixed_precision = False  # Default mixed precision flag, can be set to True for mixed precision training
-    config.seq_len = 221
-    config.vocab_size = 27
+    config.seq_len = 128
+    config.vocab_size = 8  # Must match unified_train default
     config.seed = 10086
-    config.batch_size = 64
+    config.batch_size = 128
     config.eval_size = 512
     config.test_size = 512
     config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -33,7 +33,8 @@ def get_config_coin() -> ConfigDict:
     config.task.p_minor = 0.1  # Probability of tasks from the minor task pool
     config.task.n_minor_tasks = 0  # Number of minor tasks, if needed
     config.task.init_task_pool = None
-    config.task.pad = True  # Whether to pad the sequences with a special token
+    config.task.pad = "none"  # Padding: True (interleave pad tokens), False or "none" (no padding)
+    config.task.major_pool_type = "dirichlet"  # "dirichlet" (random Dirichlet, same as minor tasks) or "disjoint" (near-uniform disjoint supports)
 
     ######################
     #     Model          #
@@ -67,9 +68,9 @@ def get_config_coin() -> ConfigDict:
     config.training.weight_decay = 4e-4
     config.training.warmup_steps = 10_000
     config.training.learning_rate = 4e-4
-    config.training.eval_iter = 25
-    config.training.get_attn = 5000
-    config.training.get_checkpoints = 50
+    config.training.eval_iter = 200
+    config.training.get_attn = 0
+    config.training.get_checkpoints = 200
     config.training.scheduler = True
     config.training.T_max = 20
     

@@ -2,6 +2,7 @@ import os
 from typing import Sequence, Optional
 
 import icl.utils.notebook_utils as nu
+from icl.utils.basic import get_hash
 from icl.linear.lr_config import get_config
 from icl.latent_markov.latent_config import get_config_base
 from icl.linear.linear_path_utils import load_model_task_config
@@ -21,11 +22,20 @@ def unified_get_config(
         config = get_config_dyck()
     else:
         raise ValueError(f"Unknown task_name: {task_name}")
-    config.training.warmup_steps = 30_000
+    config.training.warmup_steps = 15_000
+    if task_name == "latent":
+        config.training.warmup_steps = 20_000
+        config.training.num_epochs = 40_000
+        return config
+    if task_name == "dyck":
+        config.training.warmup_steps = 8_000
+        config.training.num_epochs = 32_000
+        return config
     if task_name == "linear":
-        config.training.total_steps = 60_000
+        config.training.warmup_steps = 15_000
+        config.training.total_steps = 30_000
     else:
-        config.training.num_epochs = 60_000
+        config.training.num_epochs = 30_000
     return config
 
 def _get_exp_config_and_k_minor(
@@ -165,3 +175,30 @@ def _get_metrics_cache_path(
             cache_file = f"metrics_{task_name}_kminor_{k_minor}_kood_{n_ood}_b_{B}_{layer_index}_{exp_name}_{step}.pkl"
             cache_files[step][layer_index] = os.path.join(exp_dir, cache_file)
     return cache_files
+
+
+def get_exp_name(
+    task_name,
+    k: int,
+    vocab_size=None,
+    log2: bool = True,
+    pad=None,
+) -> str:
+    """Generate standardized experiment name based on task and parameters."""
+    config = unified_get_config(task_name)
+    if task_name != "linear" and vocab_size is not None:
+        config.vocab_size = vocab_size
+    if k >= 0:
+        if log2:
+            config.task.n_minor_tasks = 2 ** k
+        else:
+            config.task.n_minor_tasks = k
+    else:
+        config.task.n_minor_tasks = 1
+        config.task.p_minor = 1e-12
+    if pad is not None:
+        if task_name == "linear":
+            config.model.pad = pad
+    
+    exp_name = f"train_{get_hash(config)}"
+    return exp_name

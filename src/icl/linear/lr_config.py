@@ -17,7 +17,7 @@ def get_config() -> ConfigDict:
     config.task.n_tasks = 3
     config.task.n_dims = NDIMS
     config.task.n_points = NPOINTS
-    config.task.batch_size = 128
+    config.task.batch_size = 256
     config.task.data_seed = 101
     config.task.task_seed = 102
     config.task.noise_seed = 103
@@ -38,7 +38,7 @@ def get_config() -> ConfigDict:
     config.model.n_embd = 128
     config.model.n_head = 2
     config.model.seed = 100
-    config.model.pad = "mapsto"  # Padding strategy, can be "bos" or "mapsto"
+    config.model.pad = "none"  # Padding strategy: "bos", "mapsto", or "none"
 
     config.training = ConfigDict()
     config.training.optimizer = "adamw"
@@ -54,8 +54,8 @@ def get_config() -> ConfigDict:
     config.eval.data_seed = 104
     config.eval.task_seed = 105
     config.eval.noise_seed = 106
-    config.eval.every = 25
-    config.eval.save_every = 100
+    config.eval.every = 200
+    config.eval.save_every = 200
 
     config.wandb = ConfigDict()
     config.wandb.project = "mini-ICL-linear"  # Specify wandb project

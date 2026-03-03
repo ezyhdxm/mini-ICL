@@ -16,7 +16,7 @@ from icl.utils.unified_ood_analysis import (
 )
 from icl.utils.unified_interface import get_exp_name
 from icl.linear.linear_utils import estimate_lambda_with_r2
-from icl.utils.latent_task_vec import project_with_r2_size
+from icl.latent_markov.legacy.latent_task_vec import project_with_r2_size
 from icl.utils.traj_plot import project_with_r2_trajectories_group_colors_mpl
 from icl.utils.posterior_plot import project_with_r2_ood_posterior_colors_mpl
 

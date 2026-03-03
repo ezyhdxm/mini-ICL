@@ -10,6 +10,7 @@ import json
 import nvtx
 from contextlib import contextmanager, nullcontext
 import timeit
+import math
 
 from icl.utils.logger import setup_logger
 
@@ -148,19 +149,38 @@ class BaseTrainer:
         optimizer = torch.optim.AdamW(model.parameters(), 
                                     lr=self.config.training.learning_rate, 
                                     weight_decay=self.config.training.weight_decay)  # torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+        grad_clip_norm = getattr(self.config.training, "grad_clip_norm", None)
         
         if self.config.training.scheduler is True:
-            max_lr = self.config.training.learning_rate
-            min_lr = 1e-5
+            max_lr = float(self.config.training.learning_rate)
+            min_lr = float(getattr(self.config.training, "min_learning_rate", 1e-5))
+            warmup_steps = int(getattr(self.config.training, "warmup_steps", 0))
+            total_steps = int(self.config.training.num_epochs)
+            scheduler_type = str(getattr(self.config.training, "scheduler_type", "triangle")).lower()
 
-            def triangle_lr_lambda(epoch):
-                if epoch < self.config.training.warmup_steps:
-                    return (min_lr + (max_lr - min_lr) * epoch / self.config.training.warmup_steps) / self.config.training.learning_rate
-                else:
-                    decay_epochs = self.config.training.num_epochs - self.config.training.warmup_steps
-                    return (max_lr - (max_lr - min_lr) * (epoch - self.config.training.warmup_steps) / decay_epochs) / self.config.training.learning_rate
+            def _triangle_lr_lambda(step_idx):
+                if warmup_steps > 0 and step_idx < warmup_steps:
+                    return (min_lr + (max_lr - min_lr) * step_idx / warmup_steps) / max_lr
+                decay_steps = max(1, total_steps - warmup_steps)
+                prog = min(max((step_idx - warmup_steps) / decay_steps, 0.0), 1.0)
+                return (max_lr - (max_lr - min_lr) * prog) / max_lr
 
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=triangle_lr_lambda)
+            def _cosine_warmup_lr_lambda(step_idx):
+                if warmup_steps > 0 and step_idx < warmup_steps:
+                    return (min_lr + (max_lr - min_lr) * step_idx / warmup_steps) / max_lr
+                decay_steps = max(1, total_steps - warmup_steps)
+                prog = min(max((step_idx - warmup_steps) / decay_steps, 0.0), 1.0)
+                cosine = 0.5 * (1.0 + math.cos(math.pi * prog))
+                lr = min_lr + (max_lr - min_lr) * cosine
+                return lr / max_lr
+
+            if scheduler_type in ("cosine_warmup", "warmup_cosine", "cosine"):
+                lr_lambda = _cosine_warmup_lr_lambda
+            else:
+                # Backward-compatible default behavior.
+                lr_lambda = _triangle_lr_lambda
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         else:
             scheduler = None
         
@@ -223,6 +243,12 @@ class BaseTrainer:
                         scaler.scale(loss).backward()
                     else:
                         loss.backward()
+
+                if grad_clip_norm is not None and float(grad_clip_norm) > 0:
+                    # For AMP we must unscale before clipping gradients.
+                    if self.mixed_precision:
+                        scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(grad_clip_norm))
 
                 with maybe_nvtx_range(f"Optimizer Step {iters}:{i}", color="orange", enabled=self.config.profile):
                     if self.mixed_precision:

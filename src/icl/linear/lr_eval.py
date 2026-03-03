@@ -52,7 +52,7 @@ def get_bsln_preds(
     }
 
     for task_name, sample_batch_fn in batch_samplers.items():
-        preds[task_name] = {"True": []}
+        preds[task_name] = {"True": [], "targets": []}
         for model_name in baseline_models:
             preds[task_name][model_name] = []
 
@@ -63,6 +63,7 @@ def get_bsln_preds(
             # Oracle predictions
             true_preds = oracle_fn(xs, ws).reshape(batch_size, n_points)
             preds[task_name]["True"].append(true_preds)
+            preds[task_name]["targets"].append(ys.reshape(batch_size, n_points))
 
             # Baseline model predictions
             for model_name, model_fn in baseline_models.items():
@@ -71,6 +72,7 @@ def get_bsln_preds(
 
         # Concatenate all collected predictions along batch axis
         preds[task_name]["True"] = torch.cat(preds[task_name]["True"], dim=0)
+        preds[task_name]["targets"] = torch.cat(preds[task_name]["targets"], dim=0)
         for model_name in baseline_models:
             preds[task_name][model_name] = torch.cat(preds[task_name][model_name], dim=0)
 
@@ -83,21 +85,23 @@ def get_model_preds(
     n_samples: int,
     batch_size: int
 ) -> Dict[str, Dict[str, torch.Tensor]]:
+    """Return transformer predictions **and** noisy targets for each eval task."""
     preds = {}
 
     for task_name, sample_batch_fn in batch_samplers.items():
-        preds[task_name] = {"Transformer": []}
+        preds[task_name] = {"Transformer": [], "targets": []}
         for i in range(1, n_samples // batch_size + 1):
             xs, _, ys = sample_batch_fn(i)
             _, _, n_points = ys.shape
 
             with torch.no_grad():
-                pred = eval_step(model, xs, ys)  # shape: (batch_size, n_points)
+                pred = eval_step(model, xs, ys)
                 pred = pred.reshape(batch_size, n_points)
 
             preds[task_name]["Transformer"].append(pred)
+            preds[task_name]["targets"].append(ys.reshape(batch_size, n_points))
 
-        # Concatenate along the batch dimension
         preds[task_name]["Transformer"] = torch.cat(preds[task_name]["Transformer"], dim=0)
+        preds[task_name]["targets"] = torch.cat(preds[task_name]["targets"], dim=0)
 
     return preds

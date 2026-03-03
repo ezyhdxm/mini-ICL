@@ -249,7 +249,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     # If you want the 20th annotated, include 19 in must_include_times.
     annotate_times=(0, -1),           # Start + End only by default (can still add others)
 
-    annotation_fontsize=9,
+    annotation_fontsize=12,
     annotation_box_alpha=0.45,
     annotation_box_pad=0.20,
     annotation_box_lw=0.90,
@@ -284,6 +284,9 @@ def project_with_r2_trajectories_group_colors_mpl(
     annotation_max_leader_growth=1.55,
     annotation_polish_passes=2,       # coordinate-descent on chosen candidates
     annotation_debug=False,
+
+    # --- override the automatic t_show selection ---
+    t_show_override=None,
 
     # --- compatibility alias ---
     b_maj=None,  # alias for b_major
@@ -716,18 +719,24 @@ def project_with_r2_trajectories_group_colors_mpl(
     if (not annotate_end) and ((T - 1) in ann_times) and ((T - 1) not in must_times):
         ann_times.discard(T - 1)
 
-    t_base_full = _pow2_time_indices(T, include_last=include_last)
+    if t_show_override is not None:
+        t_show = np.unique(np.array(t_show_override, dtype=int))
+        t_show = t_show[(t_show >= 0) & (t_show < T)]
+        t_show.sort()
+        t_base_full = np.array([], dtype=int)
+    else:
+        t_base_full = _pow2_time_indices(T, include_last=include_last)
 
-    m = int(max(2, min(T, int(max_points))))
-    t_dense = np.unique(np.round(np.linspace(0, T - 1, m)).astype(int))
+        m = int(max(2, min(T, int(max_points))))
+        t_dense = np.unique(np.round(np.linspace(0, T - 1, m)).astype(int))
 
-    t_show = np.unique(np.concatenate([t_base_full, t_dense, np.array([0, T - 1], dtype=int)]))
-    if must_times:
-        t_show = np.unique(np.concatenate([t_show, np.array(sorted(must_times), dtype=int)]))
-    if annotate and ann_times:
-        t_show = np.unique(np.concatenate([t_show, np.array(sorted(ann_times), dtype=int)]))
+        t_show = np.unique(np.concatenate([t_base_full, t_dense, np.array([0, T - 1], dtype=int)]))
+        if must_times:
+            t_show = np.unique(np.concatenate([t_show, np.array(sorted(must_times), dtype=int)]))
+        if annotate and ann_times:
+            t_show = np.unique(np.concatenate([t_show, np.array(sorted(ann_times), dtype=int)]))
 
-    t_show.sort()
+        t_show.sort()
     time_to_show_idx = {int(t): i for i, t in enumerate(t_show.tolist())}
 
     # ============================================================
@@ -1015,7 +1024,7 @@ def project_with_r2_trajectories_group_colors_mpl(
                 color=_rgba(ood_base_color, 0.95),
                 lw=2.4,
                 linestyle="--",
-                label="OOD trajectories (varied styles)",
+                label="OOD trajectories",
             )
         )
 
@@ -1058,7 +1067,7 @@ def project_with_r2_trajectories_group_colors_mpl(
                 color=_rgba(ood_base_color, 0.95),
                 lw=2.4,
                 linestyle="--",
-                label="OOD trajectories (varied styles)",
+                label="OOD trajectories",
             )
         )
 
@@ -1076,7 +1085,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     
     if show_legend:
         # --- Legend 1 (groups) ---
-        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left")
+        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left", fontsize=14)
 
         # --- Legend 2 (size ~ R²) ---
         r2_min = float(np.min(R2))
@@ -1123,6 +1132,8 @@ def project_with_r2_trajectories_group_colors_mpl(
             borderpad=0.3,
             labelspacing=0.6,
             handletextpad=0.8,
+            fontsize=14,
+            title_fontsize=14,
         )
 
         # Keep both legends
@@ -1131,7 +1142,7 @@ def project_with_r2_trajectories_group_colors_mpl(
         if getattr(ax, "legend_", None) is not None:
             ax.legend_.remove()
         
-    ax.set_title(title)
+    ax.set_title(title, fontsize=16)
     ax.set_aspect("equal", adjustable="datalim")
     ax.grid(False)
 
@@ -1141,8 +1152,9 @@ def project_with_r2_trajectories_group_colors_mpl(
         ax.set_xlabel("")
         ax.set_ylabel("")
     else:
-        ax.set_xlabel("axis 1")
-        ax.set_ylabel("axis 2")
+        ax.set_xlabel("axis 1", fontsize=16)
+        ax.set_ylabel("axis 2", fontsize=16)
+        ax.tick_params(labelsize=14)
 
     if despine:
         for sp in ("top", "right"):

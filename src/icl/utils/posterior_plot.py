@@ -431,6 +431,7 @@ def project_with_r2_ood_posterior_colors_mpl(
 
     # reference vectors (major task locations)
     show_final_task_vecs=True,
+    show_ref_labels=True,
     final_marker="*",
     final_marker_size=130,
     final_edge_color=(0, 0, 0, 0.95),
@@ -444,6 +445,7 @@ def project_with_r2_ood_posterior_colors_mpl(
     # ============================================================
     # Posterior annotations using adjustText
     # ============================================================
+    annotation_names=None,
     annotate_posterior=True,
 
     # how to pick annotation points: "change" | "fixed" | "both"
@@ -915,18 +917,19 @@ def project_with_r2_ood_posterior_colors_mpl(
             )
             _set_gid(ref, f"ref_vec:{i}")
 
-            txt = ax.annotate(
-                maj_names[i] if i < len(maj_names) else f"Task {i + 1}",
-                xy=(F_proj[i, 0], F_proj[i, 1]),
-                xytext=(F_proj[i, 0] + dx, F_proj[i, 1] + dy),
-                fontsize=11,
-                ha="left",
-                va="bottom",
-                color="black",
-                bbox=dict(boxstyle="round,pad=0.22", fc="white", ec="none", alpha=0.75),
-                zorder=5,
-            )
-            _set_gid(txt, f"ref_label:{i}")
+            if show_ref_labels:
+                txt = ax.annotate(
+                    maj_names[i] if i < len(maj_names) else f"Task {i + 1}",
+                    xy=(F_proj[i, 0], F_proj[i, 1]),
+                    xytext=(F_proj[i, 0] + dx, F_proj[i, 1] + dy),
+                    fontsize=11,
+                    ha="left",
+                    va="bottom",
+                    color="black",
+                    bbox=dict(boxstyle="round,pad=0.22", fc="white", ec="none", alpha=0.75),
+                    zorder=5,
+                )
+                _set_gid(txt, f"ref_label:{i}")
 
     # ----------------------------
     # Legend
@@ -1018,11 +1021,12 @@ def project_with_r2_ood_posterior_colors_mpl(
             p = P[int(t)]
             rgb = np.clip(p @ corner_rgbs, 0.0, 1.0)
 
+            ann_n = annotation_names if annotation_names is not None else maj_names
             text = (
                 f"{_fmt_step_label(int(t))}\n"
-                f"{maj_names[0]}: {p[0]:.1f}\n"
-                f"{maj_names[1]}: {p[1]:.1f}\n"
-                f"{maj_names[2]}: {p[2]:.1f}"
+                f"{ann_n[0]}: {p[0]:.2f}\n"
+                f"{ann_n[1]}: {p[1]:.2f}\n"
+                f"{ann_n[2]}: {p[2]:.2f}"
             )
 
             x = float(Pood[t, 0])

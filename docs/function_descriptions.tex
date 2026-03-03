@@ -1,0 +1,803 @@
+% Function descriptions for coin task analysis on non-padded sequences.
+% Assumes math_commands.tex is loaded. Each paragraph is self-contained
+% and suitable for inclusion in a NeurIPS/ICML/ICLR methods or appendix section.
+
+\subsection{Coin Task}
+
+We study a collection of coin-flipping tasks indexed by $k \in [K]$. For each
+task and batch sample $b \in [B]$, let
+\[
+x^{(k,b)}_{1:t} = \bigl(x^{(k,b)}_1, \ldots, x^{(k,b)}_t\bigr)
+\]
+denote the length-$t$ prefix. From layer $l$ we extract the hidden state at
+position $t$ and write it as $\vh^{(l,b)}_{k,t} \in \R^d$. When the layer index
+is not essential we suppress it and write $\vh^{(b)}_{k,t}$.
+
+\paragraph{Bayesian posterior over tasks.}
+Each task $k$ is a categorical distribution over $V$ symbols with probability
+vector $\vp_k = (p_k(0), \ldots, p_k(V{-}1)) \in \Delta^{V-1}$.
+Because the coin task is i.i.d., the likelihood of the observed prefix
+$x_{1:t}$ under task~$k$ factorises as
+\[
+  \P(x_{1:t} \mid Z = k)
+  = \prod_{\tau=1}^{t} p_k(x_\tau)
+  = \prod_{v=0}^{V-1} p_k(v)^{\,n_v^{(t)}},
+\]
+where $n_v^{(t)} = \sum_{\tau=1}^{t} \mathbf{1}[x_\tau = v]$ is the count of
+symbol~$v$ in the first $t$ tokens.
+The task pool contains $K_{\mathrm{tot}} = K_{\mathrm{maj}} + K_{\mathrm{min}}$
+tasks with prior
+\[
+  \pi_k =
+  \begin{cases}
+    (1 - p_0) / K_{\mathrm{maj}} & k \in \{1, \ldots, K_{\mathrm{maj}}\}, \\
+    p_0 / K_{\mathrm{min}}       & k \in \{K_{\mathrm{maj}}+1, \ldots, K_{\mathrm{tot}}\},
+  \end{cases}
+\]
+where $p_0$ is the minor-task mixing probability.
+Bayes' rule gives the posterior after $t$ tokens:
+\begin{equation}
+\label{eq:coin_posterior}
+  \P(Z = k \mid x_{1:t})
+  = \frac{\pi_k \prod_{v} p_k(v)^{\,n_v^{(t)}}}
+         {\sum_{j=1}^{K_{\mathrm{tot}}} \pi_j \prod_{v} p_j(v)^{\,n_v^{(t)}}}.
+\end{equation}
+Taking logarithms, the unnormalised log-posterior is
+\[
+  \log \pi_k + \sum_{v=0}^{V-1} n_v^{(t)} \log p_k(v),
+\]
+so the posterior depends on the data only through the sufficient statistic
+$\vn^{(t)} = (n_0^{(t)}, \ldots, n_{V-1}^{(t)})$.
+In practice we compute~\eqref{eq:coin_posterior} incrementally via cumulative
+counts and log-sum-exp normalisation for numerical stability.
+
+\paragraph{Representation model.}
+We adopt the additive decomposition
+\begin{equation}
+\label{eq:coin_rep_model}
+\vh^{(b)}_{k,t}
+= \vmu_t
++ \vtheta_{k,t}\!\bigl(x^{(k,b)}_t\bigr)
++ \vepsilon^{(b)}_{k,t}\!\bigl(x^{(k,b)}_{1:t}\bigr),
+\end{equation}
+where $\vmu_t$ is a position-dependent mean shared across tasks and tokens,
+$\vtheta_{k,t}(\cdot)$ captures the joint effect of task identity and the
+current token, and $\vepsilon^{(b)}_{k,t}$ is a residual that may depend on the
+full history. Since the current token distribution depends on $k$ in the coin
+task, task and token information are generally entangled in
+$\vtheta_{k,t}(\cdot)$.
+
+Our analysis focuses on two testable properties of~\eqref{eq:coin_rep_model}.
+
+\paragraph{(P1) Vanishing residual variance.}
+In the coin task, all information needed for next-token prediction is captured
+by a sufficient statistic (equivalently, the Bayesian posterior), which becomes
+increasingly stable as more tokens are observed. Accordingly, we expect the
+residual to become batch-invariant once $(k, x_t)$ is fixed:
+\begin{equation}
+\label{eq:p1_limit}
+\Var_b\!\Bigl[\vepsilon^{(b)}_{k,t}\bigl(x^{(k,b)}_{1:t}\bigr)\,\Big|\, x_t, k\Bigr]
+\to 0
+\qquad \text{as } t \to \infty .
+\end{equation}
+
+\emph{Empirical P1 variance.}
+To estimate this conditional variability, for each $(t,k,v)$ we generate $B$
+sequences from task $k$, set the current token to $x_t=v$, and extract the
+corresponding hidden states $\{\vh^{(b)}_{k,t}\}_{b=1}^B$. Define the
+conditional mean estimator
+\[
+\hat{\vmu}_{t,v,k} := \frac{1}{B}\sum_{b=1}^B \vh^{(b)}_{k,t},
+\]
+and the normalized P1 variance
+\begin{equation}
+\label{eq:p1var_def}
+\widehat{\mathrm{P1Var}}(l,t)
+:= \frac{
+\frac{1}{|\gV_t|}\sum_{v\in\gV_t}\frac{1}{K}\sum_{k=1}^K
+\frac{1}{B}\sum_{b=1}^B
+\bigl\|\vh^{(l,b)}_{k,t}-\hat{\vmu}_{t,v,k}\bigr\|_2^2
+}{
+\frac{1}{|\gV_t|}\sum_{v\in\gV_t}\frac{1}{K}\sum_{k=1}^K
+\bigl\|\hat{\vmu}_{t,v,k}\bigr\|_2^2
+}.
+\end{equation}
+Low values of $\widehat{\mathrm{P1Var}}(l,t)$ indicate that $\vh^{(l,b)}_{k,t}$
+is (nearly) determined by the pair $(k,x_t)$, consistent with~\eqref{eq:p1_limit}.
+
+\Figref{fig:p1_variance} shows $\widehat{\mathrm{P1Var}}(l,t)$ versus position~$t$ for layers $l \in \{2,3,4,5\}$, computed on a model trained with $K_{\mathrm{maj}} = 3$ major tasks and $K_{\mathrm{min}} = 8$ minor tasks ($k = 3$, so $n_{\mathrm{minor}} = 2^3$), using $B = 32$ batch samples per (task, token, position) triple. At all layers, the normalised P1~variance decreases with position, confirming that the residual~$\vepsilon$ diminishes as the model observes more tokens. Later layers exhibit lower P1~variance throughout, indicating that deeper representations more rapidly converge to a function of $(x_t, k)$ alone.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.65\textwidth]{Figs/p1_variance_coin_3.png}
+  \caption{Normalised P1 variance \eqref{eq:p1var_def} versus position $t$ for
+  layers 2--5 when $K_{\text{min}} = 8$. The decrease toward zero supports (P1):
+  residual variance diminishes as evidence accumulates, with deeper layers
+  converging faster.}
+  \label{fig:p1_variance}
+\end{figure}
+
+\paragraph{(P2) Linear task--token decomposition.}
+Motivated by the belief-state hypothesis, we expect the hidden state to encode
+both the current token and a posterior over tasks. Writing
+\[
+\alpha^{(b)}_{t,k'} := \P\!\left(Z=k' \mid x^{(k,b)}_{1:t}\right),
+\]
+a convenient sufficient condition is the existence of a (possibly learned) map
+$g$ such that $g(\vtheta_{k,t}(x))$ recovers $(\alpha^{(b)}_{t,1:K},x)$.
+If nonlinear interactions between task identity and the token are weak, this
+suggests the approximation
+\begin{equation}
+\label{eq:linear_decomp}
+\vtheta_{k,t}(x) \approx \vnu_{k,t} + \vphi_t(x),
+\end{equation}
+where $\vnu_{k,t}$ is task-specific (encoding the belief state) and $\vphi_t(x)$
+depends only on the token. We refer to~\eqref{eq:linear_decomp} as a
+\emph{linear task--token decomposition}. Its failure indicates genuinely
+token-dependent task representations.
+
+\emph{Empirical task-centered variance.}
+Under~\eqref{eq:linear_decomp}, token effects cancel when centering across
+tasks. Accordingly, we define the task-centered vector
+\[
+\vd^{(b)}_{k,t}
+:= \vh^{(b)}_{k,t} - \frac{1}{K}\sum_{k'=1}^K \vh^{(b)}_{k',t},
+\]
+and its batch mean $\hat{\vd}_{k,t} := \frac{1}{B}\sum_{b=1}^B \vd^{(b)}_{k,t}$.
+We measure the variability across batches via
+\begin{equation}
+\label{eq:taskvar_def}
+\widehat{\mathrm{TaskVar}}(l,t)
+:= \frac{
+\frac{1}{K}\sum_{k=1}^K \frac{1}{B}\sum_{b=1}^B
+\bigl\|\vd^{(l,b)}_{k,t}-\hat{\vd}_{k,t}\bigr\|_2^2
+}{
+\bigl\|\hat{\vmu}_t\bigr\|_2^2
+},
+\qquad
+\hat{\vmu}_t := \frac{1}{KB}\sum_{k=1}^K\sum_{b=1}^B \vh^{(b)}_{k,t}.
+\end{equation}
+If~\eqref{eq:linear_decomp} holds and the residual in~\eqref{eq:coin_rep_model}
+is small, then $\vd^{(b)}_{k,t}$ is approximately batch-invariant (equal to
+$\vnu_{k,t}-\frac{1}{K}\sum_{k'}\vnu_{k',t}$), so
+$\widehat{\mathrm{TaskVar}}(l,t)$ should approach zero as $t$ grows. Persistent
+task-centered variance provides direct evidence of nonlinear task--token
+interactions and/or substantial history-dependent residual structure.
+
+\Figref{fig:task_variance} shows $\widehat{\mathrm{TaskVar}}(l,t)$ versus
+position~$t$ for layers $l \in \{2,3,4,5\}$, computed on the same model as
+\figref{fig:p1_variance} ($K_{\mathrm{maj}} = 3$, $K_{\mathrm{min}} = 8$,
+$k = 3$), using $B = 64$ batch samples.
+In the early layers, the task-centered variance is large and persists across
+positions, indicating that the task--token interaction is not yet disentangled.
+In later layers the variance decreases, consistent with the hidden
+representation converging toward the linear decomposition~\eqref{eq:linear_decomp}.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.65\textwidth]{Figs/p2_variance_coin_3.png}
+  \caption{Normalised task-centered variance~\eqref{eq:taskvar_def} versus
+  position~$t$ for layers 2--5 when $K_{\text{min}} = 8$. Deeper layers exhibit
+  lower variance, supporting the linear task--token
+  decomposition~\eqref{eq:linear_decomp}.}
+  \label{fig:task_variance}
+\end{figure}
+
+
+
+\paragraph{Historical perturbation analysis.}
+To assess how much the model's next-token prediction relies on historical
+hidden representations, we perform a layer-wise perturbation experiment.
+For each task~$k$ in the pool (major and minor), we generate $B$ sequences
+from that task's distribution.
+At a target position~$t$ in layer~$l$, we leave the hidden state at
+position~$t$ unchanged but randomly replace each historical hidden state
+$\vh_l^{(j)}$ for $j \in \{0, \ldots, t{-}1\}$ with noise
+$\vr \sim \gN(\vzero, \mI)$, independently with probability~$p$.
+We then measure the change in next-token log-probability:
+\[
+  \Delta \log \P(x_{t+1})
+    = \log \P_{\mathrm{pert}}(x_{t+1} \mid x_{0:t})
+    - \log \P_{\mathrm{base}}(x_{t+1} \mid x_{0:t})\,,
+\]
+averaged over the $B$ batch samples and all $K$ tasks.
+A value of $\Delta \log \P \approx 0$ indicates that the model does not rely on
+historical hidden states at that layer for its prediction, suggesting that the
+relevant information has already been compressed into the current position's
+hidden state.
+A strongly negative $\Delta \log \P$ indicates that historical representations
+carry critical information at that layer.
+
+\Figref{fig:hist_inject} shows $\Delta \log \P$ versus position~$t$ for
+layers $l \in \{0,1,2,3,4\}$, with perturbation probability $p = 0.9$ and
+$B = 64$ batch samples, evaluated at every 3rd position up to $t = 60$.
+\figleft\ uses a model with $K_{\mathrm{min}} = 32$ ($k = 5$); \figright\ uses
+$K_{\mathrm{min}} = 1024$ ($k = 10$).
+In both cases, early layers (layer~0, 1) show the largest drop in
+$\Delta \log \P$, indicating that they carry the most critical historical
+information.
+Later layers (layer~4, 5) are nearly unaffected, suggesting that by those
+layers the model has compressed the relevant history into the current
+position's representation.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.48\textwidth]{Figs/hist_inject_coin_k5.png}
+  \hfill
+  \includegraphics[width=0.48\textwidth]{Figs/hist_inject_coin_k10.png}
+  \caption{Historical perturbation $\Delta \log \P(x_{t+1})$ versus
+  position~$t$ for layers 0--4 with $p = 0.9$.
+  \figleft\ $K_{\text{min}} = 32$ ($k = 5$).
+  \figright\ $K_{\text{min}} = 1024$ ($k = 10$).
+  Early layers carry more critical historical information; later layers are
+  largely unaffected by perturbation.}
+  \label{fig:hist_inject}
+\end{figure}
+
+
+
+\paragraph{Forward linear probe: predicting the posterior from hidden states.}
+To test whether the hidden representation at a given layer encodes the Bayesian
+posterior over tasks, we train a linear probe that maps hidden states to
+posterior predictions.
+
+\emph{Data collection.}
+We draw $N = 2^{13}$ sequences from the training mixture (major and minor tasks
+sampled uniformly) and run a single forward pass through the frozen model for
+each batch of $B = 256$ sequences.
+At layer~$l$, a forward hook on the attention block captures the residual-stream
+output $\vh_{l,t} \in \R^D$ at every position $t \in \{5, 6, \ldots, 24\}$.
+The ground-truth Bayesian posterior
+$\vp^*_t = \P(Z = k \mid x_{1:t}) \in \Delta^{K_{\mathrm{tot}}-1}$
+is computed from the known task distributions using cumulative token counts.
+Because the coin task is i.i.d., the same posterior applies to all positions for
+a given sequence; it is therefore replicated across the $P = 20$ extracted
+positions.
+This yields $N \times P$ training pairs $(\vh_{l,t},\, \vp^*_t)$.
+
+\emph{Linear-softmax model.}
+We fit
+$\hat{\vp}(Z \mid \vh) = \softmax(\mW \vh + \vb)$
+with $\mW \in \R^{K_{\mathrm{tot}} \times D}$, $\vb \in \R^{K_{\mathrm{tot}}}$,
+minimising the KL divergence
+\[
+  \gL = \KL\bigl(\vp^* \,\|\, \hat{\vp}\bigr)
+      = \sum_{k} p^*_k \log \frac{p^*_k}{\hat{p}_k}
+\]
+via Adam (learning rate $10^{-2}$, 200 epochs, mini-batch size 4096).
+The data are split 80/20 into training and validation sets.
+The validation KL loss measures how much posterior information is linearly
+decodable from the hidden state at each layer.
+
+\Figref{fig:forward_probe} shows the validation KL loss as a function of
+$k = \log_2 K_{\mathrm{min}}$ for layers~0--3.
+All layers track each other closely at small~$k$, where the posterior has few
+components and is easy to decode. As the number of minor tasks grows, the loss
+increases in~$k$. 
+%with deeper layers consistently achieving
+%lower loss. This confirms that later layers encode the task posterior more
+%faithfully, even as the posterior becomes higher-dimensional.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.65\textwidth]{Figs/forward_probe_coin.png}
+  \caption{Validation KL divergence of the forward linear probe
+  (hidden state $\to$ task posterior) versus $k = \log_2 K_{\text{min}}$
+  for layers~0--3.
+  Each experiment uses $K_{\text{maj}} = 3$ major tasks and
+  $K_{\text{min}} = 2^k$ minor tasks, with $B = 256$, $N = 2^{13}$ sequences,
+  and positions $5$--$24$.
+  Deeper layers achieve lower loss, indicating more linearly accessible
+  posterior information.}
+  \label{fig:forward_probe}
+\end{figure}
+
+
+
+\paragraph{Reverse linear probe: decomposing hidden states into interpretable
+components.}
+While the forward probe tests \emph{whether} posterior information is present,
+the reverse probe quantifies \emph{how much} of the hidden-state variance each
+information source explains.
+
+\emph{Data collection.}
+We draw $N = 2^{13}$ sequences in \emph{major-task mode} (sampling only from the
+$K_{\mathrm{maj}} = 3$ major tasks) and extract, for each sequence at each
+position $t \in \{40, 41, \ldots, 79\}$:
+(i)~the hidden vector $\vh_{l,t} \in \R^D$ via a forward hook on the attention
+block of layer~$l$,
+(ii)~the model's output logits $\bm{\ell}_t \in \R^V$,
+(iii)~the one-hot encoding of the current token
+$\mathrm{onehot}(x_t) \in \{0,1\}^V$,
+and (iv)~the ground-truth Bayesian posterior
+$\vp^*_t = \P(Z = k \mid x_{1:t}) \in \Delta^{K_{\mathrm{maj}}-1}$
+computed with \texttt{include\_minor=False} so that only the 3 major-task
+components appear.
+Because the coin task is i.i.d., the same posterior applies to all extracted
+positions within a sequence; it is replicated across the $P = 40$ positions.
+This yields $N \times P$ data pairs that are split 80/20 into training and
+validation sets.
+
+\emph{Closed-form linear regression.}
+For each predictor $\vz \in \{\vp^*,\, \bm{\ell},\, \mathrm{onehot}(x_t)\}$,
+we fit
+$\hat{\vh} = \mW \vz + \vb$
+via the pseudoinverse $[\mW; \vb] = (\tilde{\mZ}^\top \tilde{\mZ})^{-1}
+\tilde{\mZ}^\top \mH$,
+where $\tilde{\mZ}$ augments $\mZ$ with a column of ones, and report the
+coefficient of determination
+\[
+  R^2 = 1 - \frac{\sum_i \|\vh_i - \hat{\vh}_i\|^2}
+                  {\sum_i \|\vh_i - \bar{\vh}\|^2}
+\]
+on the held-out validation set.
+A combined predictor that concatenates all three feature vectors is also fitted.
+When the individual~$R^2$ values are approximately additive
+($R^2_{\mathrm{combined}} \approx R^2_{\mathrm{post}} + R^2_{\mathrm{logit}}
+  + R^2_{\mathrm{token}}$),
+the three information components occupy approximately orthogonal subspaces
+of the hidden representation.
+
+\Figref{fig:reverse_probe} shows the validation~$R^2$ across layers~0--5 for
+three experiments with increasing numbers of minor tasks.
+When no minor tasks are present ($k = -1$, panel~a), the token one-hot
+dominates in early layers while the posterior~$R^2$ grows steadily, reaching
+$0.92$ at layer~5.
+Logits contribute negligibly, consistent with the model not needing to
+distinguish tasks at the output level.
+With a small minor-task pool ($k = 2$, $K_{\mathrm{min}} = 4$, panel~b),
+the token component decreases in later layers while the posterior component
+rises more sharply, and the logits baseline remains near zero.
+With a larger pool ($k = 8$, $K_{\mathrm{min}} = 256$, panel~c), the logits
+baseline becomes substantial in deeper layers, nearly matching the
+posterior~$R^2$ at layer~5 ($0.89$ vs.\ $0.99$).
+This is expected: the Bayes-optimal next-token distribution is a linear
+function of the posterior,
+$\P(x_{t+1} \mid x_{1:t}) = \sum_k \P(Z{=}k \mid x_{1:t})\, p_k(x_{t+1})$,
+so when the task pool is large and its distributions are diverse, this linear
+map is nearly injective and the logits become an almost lossless encoding of
+the posterior.
+In the final layer the representation is being prepared for the output
+projection, so the logits naturally capture the same posterior information.
+Across all settings, the posterior~$R^2$ increases monotonically with depth,
+confirming that later layers devote more representational capacity to encoding
+the Bayesian posterior.
+
+Panel~(d) of \figref{fig:reverse_probe} repeats the analysis using the
+\emph{training mixture} (\texttt{sample\_mode="train"}) instead of major-task
+mode, for $k = 2$ ($K_{\mathrm{min}} = 4$, $K_{\mathrm{tot}} = 7$).
+The posterior now has all $K_{\mathrm{tot}}$ components and the data include
+both major and minor task sequences.
+The overall pattern is similar---posterior~$R^2$ grows with depth, token~$R^2$
+declines---but two differences stand out.
+First, the logits baseline rises sharply from layer~2 onward, reaching
+$R^2 = 0.89$ at layer~5, nearly matching the posterior ($R^2 = 0.95$).
+This contrasts with the major-only setting (panel~b), where the logits
+baseline was essentially zero.
+The explanation is that the training mixture contains minor tasks with distinct
+categorical distributions; predicting the next token accurately requires the
+model to encode which task is active, so the output logits carry substantial
+posterior information even at moderate~$k$.
+Second, the token~$R^2$ remains elevated through layer~1 ($0.52$) before
+dropping, reflecting the fact that in the training mixture the token
+distribution varies across tasks, so early layers retain more token-level
+signal to help disambiguate tasks.
+
+\begin{figure}[ht]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/reverse_probe_coin_k-1.png}
+    \caption{Major mode, $k = -1$ (no minor tasks)}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/reverse_probe_coin_k2.png}
+    \caption{Major mode, $k = 2$ ($K_{\text{min}} = 4$)}
+  \end{subfigure}
+
+  \vspace{0.5em}
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/reverse_probe_coin_k8.png}
+    \caption{Major mode, $k = 8$ ($K_{\text{min}} = 256$)}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/reverse_probe_coin_k2_train.png}
+    \caption{Train mode, $k = 2$ ($K_{\text{min}} = 4$)}
+  \end{subfigure}
+  \caption{Validation~$R^2$ of the reverse linear probe
+  (predictor $\to$ hidden state) across layers~0--5, with $N = 2^{13}$
+  sequences and positions $40$--$79$.
+  Panels~(a)--(c): major-task sampling mode (posterior has $K_{\text{maj}}$
+  components).
+  Panel~(d): training-mixture mode (posterior has all $K_{\text{tot}}$
+  components, data include minor tasks).
+  The logits baseline is near zero in the major-only setting but rises sharply
+  in the training mixture, where the model must encode task identity in its
+  output distribution.}
+  \label{fig:reverse_probe}
+\end{figure}
+
+\paragraph{Posterior-plane trajectory projection.}
+To visualise how the model's internal representation of task identity evolves
+over a sequence, we project hidden-state trajectories onto a two-dimensional
+plane derived from the posterior--hidden linear fit.
+
+\emph{Projection basis.}
+From the reverse linear probe (fitted in major mode at late positions
+$t \in \{100, \ldots, 127\}$), we obtain the weight matrix
+$\mW \in \R^{K_{\mathrm{maj}} \times D}$ mapping the major-task posterior
+to hidden space.
+We define the final task vectors as the centred rows
+$\bm{\tau}_j = \mW_j - \bar{\mW}$,
+$j \in \{1, \ldots, K_{\mathrm{maj}}\}$,
+where $\bar{\mW} = \frac{1}{K_{\mathrm{maj}}}\sum_j \mW_j$,
+rescaled so that their Frobenius norm matches the actual hidden deviations at
+the final time step.
+
+\emph{Trajectory computation.}
+For each task~$k$ (major, minor, or OOD) and time step~$t$, we compute the
+batch-averaged hidden deviation
+$\bar{\vh}_{k,t} - \bar{\vmu}_t$
+(where
+$\bar{\vmu}_t = \frac{1}{K_{\mathrm{maj}}}\sum_{j=1}^{K_{\mathrm{maj}}}
+  \bar{\vh}_{j,t}$
+is the mean over the major tasks) and project it onto the
+plane spanned by $\{\bm{\tau}_j\}$ via least-squares regression with the
+constraint $\sum_j \lambda_j = 1$.
+The $R^2$ of this fit measures how much of the hidden trajectory lies in the
+posterior plane.
+The resulting plot shows each task's trajectory in the projected 2D~space, with
+major tasks converging to their respective reference stars and OOD/minor~tasks
+converging to positions within the major-task simplex.
+Marker size encodes~$R^2$ and displayed time points are selected via
+farthest-point sampling on the projected coordinates to avoid visual
+clustering.
+
+\emph{Experiments.}
+We evaluate at layer~4 with $B = 64$ batch samples per task.
+\Figref{fig:traj_proj} shows two settings.
+In the first ($k = -1$, no minor tasks, panel~a), we generate $32$ OOD tasks
+(fresh Dirichlet draws).
+The three major-task trajectories (blue shades) start near the centre and
+converge cleanly to their respective reference stars, with $R^2$ values
+growing from~${\sim}0.66$ to~${\sim}0.96$ along the trajectory.
+The OOD trajectories (red, dashed) fan out across the interior of the
+major-task simplex: each OOD task converges toward a convex combination of the
+major-task endpoints determined by its posterior under the major-task pool.
+The high final~$R^2$ confirms that the posterior plane captures the dominant
+structure of the hidden representation.
+
+In the second setting ($k = 11$, $K_{\mathrm{min}} = 2048$, panel~b), we
+include 16~OOD and 16~minor tasks.
+The major-task trajectories still converge to their reference stars, but the
+$R^2$ values are markedly lower (${\sim}0.03$--$0.14$), indicating that the
+posterior plane explains only a small fraction of the hidden-state variance.
+The OOD (red) and minor (green, dotted) trajectories cluster tightly in the
+centre of the simplex rather than spreading toward individual corners.
+This reflects the richer task structure: with 2048~minor tasks the model's
+representation encodes a high-dimensional posterior that cannot be well
+approximated by a 3-dimensional major-task plane.
+
+\begin{figure}[ht]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/traj_proj_coin_k-1.png}
+    \caption{$k = -1$ (no minor tasks), 32 OOD tasks}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/traj_proj_coin_k11.png}
+    \caption{$k = 11$ ($K_{\text{min}} = 2048$), 16 OOD + 16 minor}
+  \end{subfigure}
+  \caption{Posterior-plane trajectory projection at layer~4 ($B = 64$).
+  Major-task trajectories (blue) converge to reference stars~($\bigstar$);
+  OOD trajectories (red, dashed) and minor trajectories (green, dotted)
+  settle within the simplex.
+  Marker size encodes~$R^2$.
+  With few tasks~(a) the posterior plane captures most variance ($R^2$ up
+  to~$0.96$); with many minor tasks~(b) the plane explains little
+  ($R^2 \sim 0.03$--$0.14$), reflecting a higher-dimensional posterior.}
+  \label{fig:traj_proj}
+\end{figure}
+
+\paragraph{Comparing projected coefficients with the Bayesian posterior.}
+To directly assess whether the model's hidden representation tracks the
+Bayesian posterior, we compare the projection coefficients
+$\bm{\lambda}(t) = (\lambda_1(t), \ldots, \lambda_{K_{\mathrm{maj}}}(t))$
+from the trajectory projection with the true Bayesian posterior
+$\P(Z = k \mid x_{1:t})$ computed from the known task distributions.
+
+\emph{Computing $\bm{\lambda}(t)$.}
+For a single sequence sample~$b$, let $\vd(t) = \vh_{k,t}^{(b)} - \bar{\vmu}_t
+\in \R^D$ denote the hidden deviation at time~$t$, where $\bar{\vmu}_t$ is the
+major-task mean as before.
+We seek coefficients $\bm{\lambda}(t)$ satisfying
+$\vd(t) \approx \sum_{j=1}^{K_{\mathrm{maj}}} \lambda_j(t)\, \bm{\tau}_j$
+subject to $\sum_j \lambda_j = 1$.
+With $K_{\mathrm{maj}} = 3$, the sum-to-one constraint is enforced by solving
+the reduced system: let $\mX = [\bm{\tau}_1 \mid \bm{\tau}_2] \in \R^{D
+\times 2}$ (dropping the last task vector since the basis is zero-mean).
+We compute $\hat{\bm{w}} = (\mX^\top \mX)^{-1} \mX^\top \vd(t) \in \R^2$
+via least-squares, set $\lambda_j = \hat{w}_j$ for $j \in \{1,2\}$, and
+recover $\lambda_3 = 1 - \lambda_1 - \lambda_2$.
+A uniform shift $s = (1 - \sum_j \hat{w}_j) / K_{\mathrm{maj}}$ is added to
+all entries to ensure the constraint holds exactly.
+
+Since the unconstrained $\bm{\lambda}$ may fall outside the probability
+simplex, we project it onto $\Delta^{K_{\mathrm{maj}}-1}$ using the Euclidean
+simplex projection of~\citet{duchi2008efficient}:
+given $\bm{\lambda} \in \R^n$, sort in decreasing order, find
+$\rho = \max\bigl\{j : \lambda_{(j)} - \tfrac{1}{j}
+  \bigl(\sum_{i=1}^{j}\lambda_{(i)} - 1\bigr) > 0\bigr\}$,
+set $\theta = \tfrac{1}{\rho}\bigl(\sum_{i=1}^{\rho}\lambda_{(i)} - 1\bigr)$,
+and return $\max(\lambda_i - \theta, 0)$.
+
+Since the reverse linear probe uses posterior probabilities (not
+log-probabilities), the ideal relationship is
+$\lambda_k(t) = \P(Z{=}k \mid x_{1:t})$ when the hidden state perfectly
+encodes the posterior via the learned linear map.
+
+\emph{Experiments.}
+We evaluate at layer~5 on the $k = -1$ model (no minor tasks, $K_{\mathrm{tot}}
+= 3$).
+For each chosen task, 3~random sequence samples are drawn from the $B = 64$
+batch.
+For each sample, $\bm{\lambda}(t)$ is computed at every position and the true
+Bayesian posterior $\P(Z{=}k \mid x_{1:t})$ is calculated from the raw token
+sequence using the known major-task distributions.
+The result is displayed as a $3 \times 3$ grid: one row per sample, one column
+per task component~$k$.
+Each cell overlays $\lambda_k(t)$ (solid) and $\P(Z{=}k \mid x_{1:t})$
+(dashed) versus position~$t$.
+
+\Figref{fig:lambda_vs_posterior} shows two settings.
+When the generating task is a major task (task~1, panel~a), all three samples
+converge rapidly: the projected coefficients closely track the true posterior,
+with $\lambda_1(t)$ rising to~1 and $\lambda_2(t), \lambda_3(t)$ falling to~0
+within the first ${\sim}20$ positions.
+The solid and dashed curves are nearly indistinguishable after position~30,
+confirming that the layer-5 hidden state faithfully encodes the Bayesian
+posterior via the linear map~$\mW$.
+
+When the generating task is an OOD task (task~5, panel~b), the picture changes
+qualitatively.
+Here the data are generated from a fresh Dirichlet draw $\vp_{\mathrm{ood}}$
+that does not belong to the major-task pool.
+The posterior~\eqref{eq:coin_posterior} is computed as if the true task were one
+of the $K_{\mathrm{maj}} = 3$ major tasks, with a uniform prior over this pool:
+\[
+  \P(Z = k \mid x_{1:t})
+  = \frac{\prod_{v} p_k(v)^{\,n_v^{(t)}}}
+         {\sum_{j=1}^{3} \prod_{v} p_j(v)^{\,n_v^{(t)}}},
+  \qquad k \in \{1, 2, 3\}.
+\]
+This is a \emph{misspecified} Bayesian inference: the likelihood model assumes
+the data come from one of the major tasks, but the true generating distribution
+$\vp_{\mathrm{ood}}$ lies outside this family.
+Consequently the posterior need not concentrate on a single task;
+it can oscillate as the observed token counts happen to favour different
+major tasks at different positions.
+
+The projected coefficients track this uncertainty:
+$\bm{\lambda}(t)$ oscillates between major-task corners, closely following
+the misspecified posterior dynamics.
+The agreement between solid and dashed curves persists even in this
+out-of-distribution regime, demonstrating that the model's hidden
+representation maintains a faithful encoding of the (misspecified) Bayesian
+posterior---not only for in-distribution tasks but also for novel tasks not
+seen during training.
+
+\begin{figure}[ht]
+  \centering
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/lambda_vs_posterior_task0.png}
+    \caption{Major task (task~1): $\bm{\lambda}(t)$ converges quickly to the
+    true posterior.}
+  \end{subfigure}
+
+  \vspace{0.5em}
+  \begin{subfigure}[t]{\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/lambda_vs_posterior_task4.png}
+    \caption{OOD task (task~5): $\bm{\lambda}(t)$ tracks the fluctuating
+    posterior throughout the sequence.}
+  \end{subfigure}
+  \caption{Projected coefficients $\lambda_k(t)$ (solid) versus true Bayesian
+  posterior $\P(Z{=}k \mid x_{1:t})$ (dashed) at layer~5, for the $k = -1$
+  model (no minor tasks).
+  Each row shows a different random sequence sample; each column shows one of
+  the 3~major-task components.
+  Close agreement confirms that the hidden representation faithfully encodes
+  the posterior via the linear map~$\mW$.}
+  \label{fig:lambda_vs_posterior}
+\end{figure}
+
+\paragraph{Quantifying the agreement between $\bm{\lambda}$ and the posterior.}
+To summarise the agreement between the projected coefficients and the Bayesian
+posterior across all tasks and samples, we compute three complementary metrics
+at each position~$t$, each averaged over the $B$ batch samples and then over
+tasks within each group (major or OOD).
+
+\emph{(i) Total-variation distance.}
+\begin{equation}
+\label{eq:tv}
+  \mathrm{TV}(t)
+  = \frac{1}{2} \sum_{j=1}^{K_{\mathrm{maj}}}
+    \bigl|\lambda_j(t) - p^*_j(t)\bigr|,
+\end{equation}
+where $p^*_j(t) = \P(Z{=}j \mid x_{1:t})$.
+This measures the point-wise absolute discrepancy between the two
+distributions; $\mathrm{TV} = 0$ when they coincide.
+
+\emph{(ii) Cosine similarity.}
+\begin{equation}
+\label{eq:cos_sim}
+  \cos\bigl(\bm{\lambda}(t),\, \vp^*(t)\bigr)
+  = \frac{\bm{\lambda}(t) \cdot \vp^*(t)}
+         {\|\bm{\lambda}(t)\| \;\|\vp^*(t)\|}.
+\end{equation}
+This captures directional agreement: two distributions that point toward the
+same vertex of the simplex have cosine similarity near~1, regardless of small
+absolute differences.
+
+\emph{(iii) Rolling Pearson correlation.}
+For each posterior component $j \in \{1, \ldots, K_{\mathrm{maj}}\}$, we
+treat $\lambda_j(s)$ and $p^*_j(s)$ as paired time series and compute the
+Pearson correlation within a sliding window of $w$~positions centred at~$t$:
+\begin{equation}
+\label{eq:rolling_corr}
+  r_j(t) = \frac{
+    \sum_{s \in W_t} \bigl(\lambda_j(s) - \bar{\lambda}_j\bigr)
+                     \bigl(p^*_j(s)     - \bar{p}^*_j\bigr)
+  }{
+    \sqrt{\sum_{s \in W_t} \bigl(\lambda_j(s) - \bar{\lambda}_j\bigr)^2
+    \;\cdot\;
+    \sum_{s \in W_t} \bigl(p^*_j(s) - \bar{p}^*_j\bigr)^2}
+  },
+\end{equation}
+where $W_t = \{t - w + 1, \ldots, t\}$, and $\bar{\lambda}_j$, $\bar{p}^*_j$
+are the windowed means.
+The final metric is $\bar{r}(t) = \frac{1}{K_{\mathrm{maj}}}
+\sum_j r_j(t)$, averaged over components.
+When both signals are effectively constant within the window
+(standard deviation below a numerical threshold), that component is excluded
+from the average, avoiding spurious noise.
+We use $w = 20$ throughout.
+High $\bar{r}(t)$ indicates that the two time series co-move within the
+window---$\bm{\lambda}$ tracks the temporal dynamics of the posterior.
+
+\paragraph{OOD and minor task metrics across training.}
+To track how the model's internal task representations develop during training,
+we evaluate two complementary projection bases at each training checkpoint and
+each layer.
+
+\emph{Two projection bases.}
+The \emph{major basis} consists of the centred rows of $\mW$ from the reverse
+linear probe (re-fitted at each checkpoint, since the model's representations
+evolve during training), defining the $K_{\mathrm{maj}}$-dimensional posterior
+subspace.
+The \emph{minor basis} consists of the top-$K_{\mathrm{maj}}$ right singular
+vectors of the minor tasks' batch-averaged hidden deviations at the final
+time step.
+For each basis, we compute the mean $R^2$ at the final time step for OOD~tasks
+($R^2_{\mathrm{OOD}}$: how well OOD hidden states lie in the projection plane)
+and for minor tasks ($R^2_{\mathrm{minor}}$).
+
+\emph{Experiment details.}
+We evaluate at layer~3 on 6~experiments with
+$k \in \{0, 4, 6, 8, 10, 12\}$ (i.e.\ $K_{\mathrm{min}} \in \{1, 16, 64,
+256, 1024, 4096\}$), sweeping training steps from~0 to~30\,000 at intervals
+of~100 ($B = 64$, $N_{\mathrm{ood}} = 30$, $N_{\mathrm{minor}} = 64$).
+An OOD-loss curve from each experiment's training log is shown alongside.
+
+\Figref{fig:ood_minor_training} shows the four $R^2$ metrics and the OOD loss.
+
+\emph{Major basis, OOD tasks} (panel~a, \texttt{maj\_r2\_ood}).
+When $k = 0$ (essentially no minor tasks), the major-basis $R^2$ for OOD tasks
+remains high (${\sim}0.6$--$0.7$) throughout training: the 3-dimensional
+posterior plane captures most of the OOD hidden-state variance.
+As the minor-task pool grows, the $R^2$ drops steadily (${\sim}0.1$ for
+$k = 12$), indicating that the model allocates representational capacity to
+encode the richer task structure, and the low-dimensional major-task plane
+becomes insufficient.
+
+\emph{Major basis, minor tasks} (panel~b, \texttt{maj\_r2\_min}).
+A similar pattern holds: the major-basis $R^2$ for minor tasks starts high and
+declines during training for all~$k$.
+For $k = 4$ it drops to nearly~0, indicating that with 16~minor tasks the
+model learns representations that are poorly explained by the 3-task posterior
+plane.
+
+\emph{Minor basis, minor tasks} (panel~c, \texttt{min\_r2\_min}).
+Here the top-3 SVD basis of the minor tasks' own hidden deviations is used.
+A striking pattern emerges: experiments with \emph{more} minor tasks achieve
+\emph{higher} $R^2$ (${\sim}0.78$ for $k = 12$ vs.\ ${\sim}0.63$ for
+$k = 4$).
+This suggests that as the number of minor tasks grows, the model's hidden
+representations for minor tasks increasingly collapse into a low-dimensional
+subspace---a top-3 SVD basis suffices to capture a larger share of the
+variance.
+Intuitively, when $K_{\mathrm{min}}$ is large, the model cannot allocate a
+separate direction for each minor task;
+instead it compresses the minor-task variation into a compact subspace whose
+dimensionality grows much more slowly than the number of tasks.
+
+\emph{Minor basis, OOD tasks} (panel~d, \texttt{min\_r2\_ood}).
+The same trend appears for OOD tasks projected onto the minor basis:
+larger $K_{\mathrm{min}}$ yields higher $R^2$, confirming that the
+minor-task subspace also captures OOD variation.
+For $k = 12$, the $R^2$ stabilises around~$0.80$, whereas for $k = 4$ it
+settles near~$0.55$.
+
+\emph{OOD loss} (panel~e).
+The OOD next-token prediction loss decreases monotonically with~$k$: models
+trained with more minor tasks achieve better OOD generalisation
+(${\sim}1.81$ for $k = 12$ vs.\ ${\sim}1.97$ for $k = 4$), confirming that
+exposure to a richer task pool during training improves out-of-distribution
+performance.
+
+\emph{Remark on the minor basis.}
+The increasing $R^2$ of the top-3 SVD basis with~$K_{\mathrm{min}}$ suggests
+that a fixed low-rank subspace is a reasonable summary of minor-task
+representations when the task pool is large.
+However, a rank-3 basis is chosen here only for comparability with the
+$K_{\mathrm{maj}} = 3$ major basis, and there is no reason to expect it to be
+optimal.
+A natural next step is to study how the effective dimensionality of the
+minor-task subspace scales with~$K_{\mathrm{min}}$---for instance by examining
+the singular-value spectrum or the stable rank of the minor tasks' hidden
+deviation matrix---and to determine whether the compression into a
+low-dimensional subspace is a consequence of the model's architecture, the
+task structure, or both.
+
+\begin{figure}[ht]
+  \centering
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/training_maj_r2_ood.png}
+    \caption{\texttt{maj\_r2\_ood}: major basis, OOD tasks}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/training_maj_r2_min.png}
+    \caption{\texttt{maj\_r2\_min}: major basis, minor tasks}
+  \end{subfigure}
+
+  \vspace{0.5em}
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/training_min_r2_min.png}
+    \caption{\texttt{min\_r2\_min}: minor basis, minor tasks}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/training_min_r2_ood.png}
+    \caption{\texttt{min\_r2\_ood}: minor basis, OOD tasks}
+  \end{subfigure}
+
+  \vspace{0.5em}
+  \begin{subfigure}[t]{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{Figs/training_ood_loss.png}
+    \caption{OOD next-token prediction loss}
+  \end{subfigure}
+  \caption{OOD and minor task metrics across training at layer~3, for
+  $k \in \{0, 4, 6, 8, 10, 12\}$ (one curve per experiment).
+  Panels~(a)--(d) show the $R^2$ of projecting OOD or minor task
+  representations onto either the major (W-based) or minor (SVD-based) basis.
+  Panel~(e) shows the OOD loss.
+  As $K_{\text{min}}$ grows, the major-basis $R^2$ decreases (the posterior
+  plane becomes insufficient) while the minor-basis $R^2$ \emph{increases}
+  (minor-task representations collapse into a low-dimensional subspace).}
+  \label{fig:ood_minor_training}
+\end{figure}

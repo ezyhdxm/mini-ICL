@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import dataclasses
 from typing import Optional, Tuple, Any, List, Callable
 
@@ -41,10 +40,12 @@ class NoisyLinearRegression:
         return f"NoisyLinReg({self.n_tasks})"
     
     @classmethod
-    def from_task_pool(cls, task_pool: torch.Tensor, **kwargs) -> "NoisyLinearRegression":
+    def from_task_pool(cls, task_pool: torch.Tensor, minor_pool: Optional[torch.Tensor] = None, **kwargs) -> "NoisyLinearRegression":
         assert kwargs["n_tasks"] == task_pool.shape[0]
         task = cls(**kwargs)
         task.task_pool = task_pool
+        if minor_pool is not None:
+            task.minor_pool = minor_pool
         return task
     
     def generate_task_pool(self) -> torch.Tensor:
@@ -88,9 +89,15 @@ class NoisyLinearRegression:
         shape = (self.batch_size, self.n_points, self.n_dims)
         return torch.randn(shape, generator=self.data_gen, dtype=self.dtype, device=self.device) * self.data_scale
     
-    def sample_tasks(self, step: int, is_eval: bool=False) -> torch.Tensor:
+    def sample_tasks(self, step: int, is_eval: bool=False, minor_only: bool=False) -> torch.Tensor:
         # sample a batch of tasks w1, w2, ..., wB from the task pool, where B = batch_size
         self.task_gen.manual_seed(self.task_seed + step)
+        if minor_only:
+            assert self.minor_pool is not None, "minor_only requires a minor pool"
+            idxs = torch.randint(low=0, high=self.n_minor_tasks, size=(self.batch_size,),
+                                 generator=self.task_gen, device=self.device)
+            return self.minor_pool[idxs]
+
         if self.n_tasks > 0:
             assert self.task_pool is not None, "Task pool must be initialized"
             idxs = torch.randint(low=0, high=self.n_tasks, size=(self.batch_size,), 
@@ -129,9 +136,9 @@ class NoisyLinearRegression:
         noise = torch.randn(targets.shape, dtype=targets.dtype, device=targets.device, generator=self.noise_gen) * self.noise_scale
         return targets + noise
 
-    def sample_batch(self, step: int, is_eval: bool=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def sample_batch(self, step: int, is_eval: bool=False, minor_only: bool=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         data = self.sample_data(step)
-        tasks = self.sample_tasks(step, is_eval=is_eval) # (batch_size, n_dims, 1)
+        tasks = self.sample_tasks(step, is_eval=is_eval, minor_only=minor_only) # (batch_size, n_dims, 1)
         targets = self.evaluate(data, tasks, step)
         return data, tasks, targets
     
@@ -179,7 +186,10 @@ class NoisyLinearRegression:
         eval_tasks = [NoisyLinearRegression(**config)]
         if self.n_tasks > 0:
             config["n_tasks"] = self.n_tasks
-            eval_tasks.append(NoisyLinearRegression.from_task_pool(task_pool=self.task_pool.clone(), **config))
+            minor_clone = self.minor_pool.clone() if self.minor_pool is not None else None
+            eval_tasks.append(NoisyLinearRegression.from_task_pool(
+                task_pool=self.task_pool.clone(), minor_pool=minor_clone, **config
+            ))
         return eval_tasks
 
 
@@ -252,79 +262,38 @@ def get_task_name(task: "Task") -> str:
 
 
 
-@torch.no_grad()
-def task_posterior_linear_regression(
-    task,  # NoisyLinearRegression instance
-    data: torch.Tensor,      # (B, T, D)
-    targets: torch.Tensor,   # (B, T)  (or (B,T,1))
-    *,
-    include_minor: bool = True,
-    return_log: bool = False,
-    eps: float = 1e-30,
-) -> torch.Tensor:
+_POSTERIOR_RE_EXPORTS = {
+    "task_posterior_linear_regression",
+    "task_posterior_over_time_linear_regression",
+    "task_posterior_with_gaussian_linear_regression",
+    "plot_kl_model_vs_two_bayes_linear",
+    "plot_kl_model_vs_two_bayes_linear_across_k",
+}
+
+def __getattr__(name):
+    """Lazy re-exports for backward compatibility.
+
+    These functions were moved to ``icl.linear.analysis.posterior`` but are
+    re-exported here so old ``from icl.linear.lr_task import ...`` still works.
+    The import is deferred to avoid a circular dependency through
+    ``analysis.__init__ -> trajectory -> unified_interface -> train_linear
+    -> lr_task``.
     """
-    Compute posterior P(Z=k | X,Y) over discrete task pools (major + optional minor).
-
-    Returns:
-        post: (B, K) where K = n_tasks + (n_minor_tasks if included and available)
-    """
-    device = data.device
-    dtype = torch.float32
-
-    if targets.dim() == 3 and targets.size(-1) == 1:
-        targets = targets.squeeze(-1)
-    assert data.dim() == 3 and targets.dim() == 2
-    B, T, D = data.shape
-    assert targets.shape == (B, T)
-
-    # ----- candidate task weights: W_all (K, D, 1)
-    if task.n_tasks <= 0 or task.task_pool is None:
-        raise ValueError("Posterior needs a finite task_pool (n_tasks > 0).")
-
-    W_major = task.task_pool.to(device)  # (Kmaj, D, 1)
-    if include_minor and (task.n_minor_tasks > 0) and (task.minor_pool is not None):
-        W_minor = task.minor_pool.to(device)  # (Kmin, D, 1)
-        W_all = torch.cat([W_major, W_minor], dim=0)
-        Kmaj, Kmin = W_major.shape[0], W_minor.shape[0]
-    else:
-        W_all = W_major
-        Kmaj, Kmin = W_major.shape[0], 0
-
-    K = W_all.shape[0]
-    assert W_all.shape == (K, D, 1)
-
-    # ----- prior over tasks
-    if Kmin == 0:
-        prior = torch.full((K,), 1.0 / Kmaj, device=device, dtype=dtype)
-    else:
-        p0 = float(task.p_minor)
-        prior_major = (1.0 - p0) / Kmaj
-        prior_minor = p0 / Kmin
-        prior = torch.cat([
-            torch.full((Kmaj,), prior_major, device=device, dtype=dtype),
-            torch.full((Kmin,), prior_minor, device=device, dtype=dtype),
-        ], dim=0)
-
-    prior = torch.clamp(prior, min=eps)
-    log_prior = prior.log()  # (K,)
-
-    # ----- log-likelihood under each task
-    # preds[b,t,k] = x[b,t,:] @ w[k]
-    # W_all: (K,D,1) -> (K,D)
-    W2 = W_all.squeeze(-1)               # (K, D)
-    preds = torch.einsum("btd,kd->btk", data, W2)  # (B, T, K)
-
-    resid = targets.unsqueeze(-1) - preds         # (B, T, K)
-    sse = (resid ** 2).sum(dim=1)                 # (B, K)
-
-    sigma2 = float(task.noise_scale) ** 2
-    sigma2 = max(sigma2, eps)
-
-    # log p(y|x,w) = const - (1/(2σ^2)) * SSE
-    loglik = -0.5 * sse / sigma2                  # (B, K)
-
-    # ----- posterior
-    unnorm = loglik + log_prior.view(1, K)        # (B, K)
-    log_post = unnorm - torch.logsumexp(unnorm, dim=-1, keepdim=True)
-
-    return log_post if return_log else torch.exp(log_post)
+    if name in _POSTERIOR_RE_EXPORTS:
+        from icl.linear.analysis.posterior import (
+            task_posterior_linear_regression,
+            task_posterior_over_time_linear_regression,
+            task_posterior_with_gaussian_linear_regression,
+            plot_kl_model_vs_two_bayes_linear,
+            plot_kl_model_vs_two_bayes_linear_across_k,
+        )
+        _ns = {
+            "task_posterior_linear_regression": task_posterior_linear_regression,
+            "task_posterior_over_time_linear_regression": task_posterior_over_time_linear_regression,
+            "task_posterior_with_gaussian_linear_regression": task_posterior_with_gaussian_linear_regression,
+            "plot_kl_model_vs_two_bayes_linear": plot_kl_model_vs_two_bayes_linear,
+            "plot_kl_model_vs_two_bayes_linear_across_k": plot_kl_model_vs_two_bayes_linear_across_k,
+        }
+        globals().update(_ns)
+        return _ns[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

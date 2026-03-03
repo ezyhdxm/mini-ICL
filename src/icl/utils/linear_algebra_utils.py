@@ -122,3 +122,101 @@ def project_points_to_plane(points, anchors):
     y = Q_shift @ e2              # (N,)
     coords = np.stack([x, y], axis=1)  # (N, 2)
     return coords
+
+
+def estimate_lambda_with_r2(
+    task_vecs: torch.Tensor,
+    task_vecs_over_all_time: torch.Tensor,
+    is_zero_mean: bool = True,
+    chunk_size: int = 32,
+):
+    """Express each target vector as a mixture of reference task vectors via OLS.
+
+    Setup
+    -----
+    Reference vectors  w_1, ..., w_K in R^d  (rows of *task_vecs*) form the
+    columns of the design matrix  X = [w_1 | ... | w_K] in R^{d x K}.
+
+    For each evaluation index j and position t, the target vector is
+    v_{j,t} in R^d  (``task_vecs_over_all_time[j, t, :]``).
+
+    Unconstrained mode  (is_zero_mean=False)
+    -----------------------------------------
+    Solve the d-dimensional OLS problem treating the d coordinates as
+    "observations" and the K reference vectors as "regressors"::
+
+        lambda_hat = argmin_lam  ||v - X lam||^2  =  (X^T X)^+ X^T v
+
+    Sum-to-one mode  (is_zero_mean=True)
+    -------------------------------------
+    When the reference vectors are centred, the last column is redundant.
+    We drop it, solve OLS for lam_1 ... lam_{K-1}, then redistribute
+    the residual mass so that sum(lam) = 1.
+
+    Parameters
+    ----------
+    task_vecs : (K, d) tensor -- reference task vectors.
+    task_vecs_over_all_time : (k, seq_len, d) tensor -- target vectors.
+    is_zero_mean : bool -- if True, enforce sum(lam) = 1.
+    chunk_size : int -- number of target vectors solved per batch.
+
+    Returns
+    -------
+    lambdas     : (k, seq_len, K)  numpy
+    r2_scores   : (k, seq_len)     numpy
+    task_norms  : (k, seq_len)     numpy
+    ortho_norms : (k, seq_len)     numpy
+    """
+    eps = 1e-12
+    device = task_vecs.device
+    dtype = task_vecs.dtype
+
+    task_vecs_over_all_time = task_vecs_over_all_time.to(device=device, dtype=dtype)
+
+    k, seq_len, d = task_vecs_over_all_time.shape
+    num_tasks = task_vecs.shape[0]
+
+    lambdas = torch.zeros((k, seq_len, num_tasks), dtype=dtype)
+    r2_scores = torch.zeros((k, seq_len), dtype=dtype)
+
+    X = task_vecs.T.contiguous()  # (d, K)
+    if is_zero_mean:
+        X = X[:, :-1]
+
+    task_norms = torch.zeros((k, seq_len), dtype=dtype)
+    ortho_norms = torch.zeros((k, seq_len), dtype=dtype)
+
+    with torch.no_grad():
+        for t in range(seq_len):
+            Y_full = task_vecs_over_all_time[:, t, :].T  # (d, k)
+
+            for start in range(0, k, chunk_size):
+                end = min(start + chunk_size, k)
+                Y = Y_full[:, start:end]  # (d, k_chunk)
+
+                W = torch.linalg.lstsq(X, Y).solution
+
+                if is_zero_mean:
+                    lambda_full = torch.zeros((num_tasks, W.shape[1]), device=device, dtype=dtype)
+                    lambda_full[:-1, :] = W
+                    shift = (1.0 - W.sum(dim=0, keepdim=True)) / num_tasks
+                    lambda_full += shift
+                else:
+                    lambda_full = W
+
+                lambdas[start:end, t, :] = lambda_full.T.cpu()
+
+                y_pred = X @ W
+                resid = Y - y_pred
+                ss_res = (resid * resid).sum(dim=0)
+
+                task_norms[start:end, t] = torch.norm(y_pred, dim=0).cpu()
+                ortho_norms[start:end, t] = torch.norm(resid, dim=0).cpu()
+
+                y_mean = Y.mean(dim=0, keepdim=True)
+                ss_tot = ((Y - y_mean) ** 2).sum(dim=0)
+                r2 = 1.0 - ss_res / (ss_tot + eps)
+                r2.clamp_(min=0.0, max=1.0)
+                r2_scores[start:end, t] = r2.cpu()
+
+    return lambdas.numpy(), r2_scores.numpy(), task_norms.numpy(), ortho_norms.numpy()

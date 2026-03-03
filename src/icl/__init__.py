@@ -13,12 +13,11 @@ from icl.utils import (
 )
 from icl.linear import (
     extract_hidden,
-    #predict_with_task_vector,
+    extract_hidden_multi,
     get_config,
     get_attn,
-    compute_hiddens,
     DiscreteMMSE,
-    Ridge
+    Ridge,
 )
 
 from icl.latent_markov import (
@@ -40,9 +39,8 @@ __all__ = [
     "load_everything",
     "view_mask",
     "extract_hidden",
-    "predict_with_task_vector",
+    "extract_hidden_multi",
     "get_attn",
-    "compute_hiddens",
     "DiscreteMMSE",
     "Ridge",
     "get_config",

@@ -82,8 +82,10 @@ class TransformerLin(nn.Module):
             input_seq[:, 1::3, :] = bos  
             input_seq[:, 0::3, :] = seq[:, 0::2, :] 
             input_seq[:, 2::3, :] = seq[:, 1::2, :]
+        elif self.pad == "none":
+            input_seq = seq  # raw interleaved sequence: [data_0, target_0, data_1, target_1, ...] (B, 2*n_points, D+1)
         else:
-            raise ValueError(f"pad={self.pad} not supported. Use 'bos' or 'mapsto'.")
+            raise ValueError(f"pad={self.pad} not supported. Use 'bos', 'mapsto', or 'none'.")
 
         # Project to embedding space
         embds = self.input_proj(input_seq)  
@@ -94,12 +96,14 @@ class TransformerLin(nn.Module):
         # Project to output
         preds = self.output_proj(outputs)  
 
-        # Remove BOS before passing to seq_to_targets
+        # Extract target predictions based on padding strategy
         if self.pad == "bos":
-            preds = preds[:, 1:, :] 
+            preds = preds[:, 1:, :]  # remove BOS
             preds = seq_to_targets(preds)  # shape: (batch, n_points)
         elif self.pad == "mapsto":
             preds = preds[:, 1::3, 0]  
+        elif self.pad == "none":
+            preds = seq_to_targets(preds)  # predictions at data positions (even indices): (batch, n_points)
         
         return preds
 
@@ -317,7 +321,7 @@ class MixedRidge(nn.Module):
         log_det_A = log_det_A.unsqueeze(-1) # (batch_size, 1)
         quad_form = torch.einsum('bik,bij,bjk->bk', z, A, z)  # bs[b,:,t]^T A[b] bs[b,:,t], aligns on batch, A: (batch_size, n_dims, n_dims), bs: (batch_size, n_dims, 1)
 
-        log_gauss_weights = 0.5 * quad_form / self.noise_var - torch.sum(Y*Y, dim=1)  # (batch_size, 1)
+        log_gauss_weights = 0.5 * (quad_form - torch.sum(Y*Y, dim=1)) / self.noise_var  # (batch_size, 1)
         log_gauss_weights += log(self.p0) + d * log(self.tau) - 0.5 * log_det_A # (batch_size, 1)
         return log_gauss_weights
     

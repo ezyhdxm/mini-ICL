@@ -1,0 +1,104 @@
+\subsection{Coin Task}
+
+For the coin task, we consider sequences of the form
+\[
+x^{(k,b)}_{1:t}
+= x^{(k,b)}_1,
+x^{(k,b)}_2,
+\ldots,
+x^{(k,b)}_t,
+\]
+where $k$ indexes the task and $b$ indexes the batch.
+From layer $l$ we extract the hidden state at the $t$-th token and denote
+it by $\vh^{(l,b)}_{k,t}$.
+Suppressing the layer index, we adopt the representation model
+\[
+\vh^{(b)}_{k,t}
+= \vmu_t
++ \vtheta_{k,t}\!\left(x^{(k,b)}_t\right)
++ \vepsilon^{(b)}_{k,t}\!\left(x^{(k,b)}_{1:t}\right).
+\]
+The current token $x^{(k,b)}_t$ may now depend on the
+task identity $k$.
+Consequently, task information and token information are generally entangled at the level
+of the hidden representation, and the task index cannot be removed from
+$\vtheta_{k,t}(\cdot)$.
+
+Our analysis focuses on the two properties of this decomposition. 
+\paragraph{(P1) Vanishing residual variance.}
+For the hidden representation to be well approximated by the task--token component
+$\vtheta_{k,t}(x^{(k,b)}_t)$, the residual term must behave as noise across batches.
+Specifically, we require
+\[
+\operatorname{Var}_b\!\left[\vepsilon^{(b)}_{k,t}(x_{1:t}^{(k,b)})\right] \to 0,
+\]
+as $t \to \infty$.
+This reflects the fact that, in the coin flipping task, all task-relevant information needed for
+next-token prediction is contained in the current covariate $x_t$, so dependence on earlier
+context becomes asymptotically negligible.
+
+To empirically assess (P1), we group samples across batches that share the same current token
+value $x_t$ and form the conditional average
+\[
+\bar{\vh}_{k,t}(x_t)
+:= \frac{1}{|\mathcal{B}(x_t)|}
+\sum_{b \in \mathcal{B}(x_t)} \vh^{(b)}_{k,t},
+\]
+where $\mathcal{B}(x_t) = \{ b : x^{(b)}_t = x_t \}$.
+We then consider the residual
+\[
+\vh^{(b)}_{k,t} - \bar{\vh}_{k,t}(x_t),
+\]
+whose empirical variance estimates the conditional variance of
+$\vepsilon^{(b)}_{k,t}$ given $(k, x_t)$.
+
+
+
+\paragraph{(P2) Linear task--token decomposition.}
+Based on the belief state hypothesis that $\vh_{k,t}^{(b)}$ should encode the current token information and the posterior
+$$
+\alpha^{(b)}_{t,k} = \P\left(Z = k \mid x^{(b)}_{1:t}\right),
+$$
+we would expect that there exists a map $g$ such that 
+\begin{equation*}
+    g(\vtheta_{k,t}(x)) = \left(\alpha^{(b)}_{t,1:K}, x\right). 
+\end{equation*}
+When $g$ is a linear map and nonlinear interactions between task identity and the current token are weak,
+we would further posit the approximation
+\[
+\vtheta_{k,t}(x) \approx \vnu_{k,t} + \vphi_t(x),
+\]
+where $\vnu_{k,t}$ is a task-specific vector that encodes the belief states $\alpha^{(b)}_{t}$ and $\vphi_t(x)$ depends only on the token.
+We refer to this as a \emph{linear task--token decomposition}.
+Failure of this approximation indicates the presence of genuine token-dependent task representations.
+
+
+
+
+To empirically assess property (P2), let
+\[
+\bar{\vh}_{k,t} := \frac{1}{B}\sum_{b=1}^B \vh^{(b)}_{k,t}
+\]
+denote the task-averaged hidden state.
+%Then
+%\[
+%\vh^{(b)}_{k,t} - \bar{\vh}_{k,t}
+%\;\approx\;
+%\vtheta_{k,t}\!\left(x^{(b)}_t\right)
+%- \frac{1}{B}\sum_{b=1}^B \vtheta_{k,t}\!\left(x^{(b)}_t\right) \approx \vphi_t(x_t^{(b)}) - \frac{1}{B} \sum_{b=1}^B \vphi_t(x_t^{(b)}),
+%\]
+%whose variance generally does not vanish, since the covariates $x^{(b)}_t$ may differ
+%across batches.
+To isolate task-level structure, we instead consider the task-centered quantity
+\[
+\begin{aligned}
+\vh^{(b)}_{k,t} - \frac{1}{K}\sum_{k=1}^K \vh^{(b)}_{k,t}
+&\approx
+\vtheta_{k,t}\!\left(x^{(b)}_t\right)
+- \frac{1}{K}\sum_{k=1}^K \vtheta_{k,t}\!\left(x^{(b)}_t\right)\\
+&\approx \vnu_{k,t} - \frac{1}{K} \sum_{k=1}^K \vnu_{k,t}. 
+\end{aligned}
+\]
+Under a linear task--token decomposition, the token-dependent terms cancel after averaging,
+and the variance of this quantity vanishes asymptotically as $t \to \infty$.
+Persistent variance therefore provides direct evidence of nonlinear task--token interactions.
