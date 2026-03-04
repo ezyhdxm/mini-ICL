@@ -449,7 +449,7 @@ def plot_p1_variance_dyck(
     ax.grid(True, alpha=0.3)
 
     if title:
-        ax.set_title(title, fontsize=16)
+        ax.set_title("", fontsize=18)
 
     plt.tight_layout()
     if show:

@@ -351,20 +351,16 @@ def plot_intervention_remove_task_across_layers_coin(
     ax.axhline(ood_info_gain, color="#E65100", ls=":", lw=1.8, alpha=0.7,
                label=f"OOD $l_0 - \\bar{{l}}_t$ = {ood_info_gain:.3f}")
 
-    ax.set_xlabel("Layer", fontsize=16)
-    ax.set_ylabel("\u0394 Loss (intervened \u2212 baseline)", fontsize=15)
-    ax.set_title("Loss Increase from Removing Task Subspace", fontsize=15)
+    ax.set_xlabel("Layer", fontsize=18)
+    ax.set_ylabel("\u0394 Loss (intervened \u2212 baseline)", fontsize=18)
+    ax.set_title("", fontsize=18)
     ax.set_xticks(x)
     ax.set_xticklabels([str(l) for l in layers])
-    ax.tick_params(labelsize=14)
-    ax.legend(fontsize=13)
+    ax.tick_params(labelsize=16)
+    ax.legend(fontsize=14)
     ax.grid(axis="y", alpha=0.3)
 
-    sup = title or (
-        f"Causal Intervention: Remove Task Subspace "
-        f"(scale={scale})"
-    )
-    fig.suptitle(sup, fontsize=17, y=1.02)
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

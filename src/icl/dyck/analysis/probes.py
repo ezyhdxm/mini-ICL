@@ -641,7 +641,7 @@ def plot_posterior_predictor_loss_vs_k_dyck_padded(
         ax.plot(k_values, val_losses, 's-', label='Validation Loss', linewidth=2, markersize=8)
         ax.set_xlabel('k (log2 of number of minor tasks)', fontsize=12)
         ax.set_ylabel('KL Divergence Loss', fontsize=12)
-        ax.set_title(f'Posterior Predictor Loss vs k (Dyck Task, Layer {layer})', fontsize=14)
+        ax.set_title('', fontsize=18)
         ax.legend(fontsize=11)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()

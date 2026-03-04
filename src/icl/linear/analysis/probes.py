@@ -1836,10 +1836,11 @@ def plot_posterior_predictor_loss_vs_k_linear(
         fig, ax = plt.subplots(figsize=figsize)
         ax.plot(k_values, train_losses, 'o-', label='Training Loss', linewidth=2, markersize=8)
         ax.plot(k_values, val_losses, 's-', label='Validation Loss', linewidth=2, markersize=8)
-        ax.set_xlabel('k (log2 of number of minor tasks)', fontsize=12)
-        ax.set_ylabel('KL Divergence Loss', fontsize=12)
-        ax.set_title(f'Posterior Predictor Loss vs k (Linear Task, Layer {layer})', fontsize=14)
-        ax.legend(fontsize=11)
+        ax.set_xlabel('k (log2 of number of minor tasks)', fontsize=16)
+        ax.set_ylabel('KL Divergence Loss', fontsize=16)
+        ax.set_title('', fontsize=18)
+        ax.legend(fontsize=14)
+        ax.tick_params(labelsize=14)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         
@@ -1868,7 +1869,7 @@ def plot_posterior_predictor_loss_vs_k_linear(
             marker=dict(size=8)
         ))
         fig.update_layout(
-            title=f'Posterior Predictor Loss vs k (Linear Task, Layer {layer})',
+            title='',
             xaxis_title='k (log2 of number of minor tasks)',
             yaxis_title='KL Divergence Loss',
             width=figsize[0]*100,

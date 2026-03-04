@@ -34,7 +34,7 @@ def get_config_coin() -> ConfigDict:
     config.task.n_minor_tasks = 0  # Number of minor tasks, if needed
     config.task.init_task_pool = None
     config.task.pad = "none"  # Padding: True (interleave pad tokens), False or "none" (no padding)
-    config.task.major_pool_type = "dirichlet"  # "dirichlet" (random Dirichlet, same as minor tasks) or "disjoint" (near-uniform disjoint supports)
+    config.task.major_pool_type = "dirichlet"  # "dirichlet" | "disjoint" | "tilted" | "maxent" | "partition"
 
     ######################
     #     Model          #

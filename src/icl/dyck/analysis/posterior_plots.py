@@ -110,14 +110,14 @@ def plot_dyck_task_posterior_padded(
         ax.set_ylabel("P(Z=k | obs)")
         ax.set_xlim(0, max(n_dyck - 1, 1))
         ax.set_ylim(-0.02, 1.02)
-        ax.set_title(f"Sample {idx + 1}", fontsize=10)
+        ax.set_title("", fontsize=14)
         if idx == 0:
             ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small', ncol=max(1, T // 20))
 
     axes[-1].set_xlabel("Dyck token index")
     if title is None:
         title = f"Dyck task posterior over time — {exp_name}"
-    fig.suptitle(title, fontsize=13, y=1.01)
+    fig.suptitle("", fontsize=18, y=1.01)
     fig.tight_layout()
     plt.show()
 
@@ -236,14 +236,14 @@ def plot_dyck_task_posterior(
         ax.set_ylabel("P(Z=k | obs)")
         ax.set_xlim(0, max(n_dyck - 1, 1))
         ax.set_ylim(-0.02, 1.02)
-        ax.set_title(f"Sample {idx + 1}", fontsize=10)
+        ax.set_title("", fontsize=14)
         if idx == 0:
             ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small', ncol=max(1, T // 20))
 
     axes[-1].set_xlabel("Dyck token index")
     if title is None:
         title = f"Dyck task posterior over time (nonpadded) — {exp_name}"
-    fig.suptitle(title, fontsize=13, y=1.01)
+    fig.suptitle("", fontsize=18, y=1.01)
     fig.tight_layout()
     plt.show()
 

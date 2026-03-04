@@ -1,3 +1,4 @@
+from icl.utils import plot_config  # noqa: F401
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import os
@@ -45,13 +46,14 @@ def get_loss_plots(config, train_results, folder="loss_plots", show=False, verbo
         for i, base in enumerate(baseline):
             color = cm.get_cmap('tab10')(i)
             ax.axhline(y=base, linestyle='-', label=f'{i+1}-gram Baseline', color=color)
-        ax.set_xlabel('Steps')
-        ax.set_ylabel('Loss')
+        ax.set_xlabel('Steps', fontsize=14)
+        ax.set_ylabel('Loss', fontsize=14)
         ax.grid()
-        ax.legend()
+        ax.legend(fontsize=12)
+        ax.tick_params(labelsize=12)
 
-    ax_loss[0].set_title('Loss (Linear Scale)')
-    ax_loss[1].set_title('Loss (Log Scale)')
+    ax_loss[0].set_title('')
+    ax_loss[1].set_title('')
     ax_loss[1].set_xscale('log')
 
     loss_path = os.path.join(folder, "loss.png")
@@ -76,11 +78,12 @@ def get_loss_plots(config, train_results, folder="loss_plots", show=False, verbo
         ax_acc.plot(eval_steps, ood_accs, linestyle='--', color='orange', label='OOD Accuracy')
 
     if len(eval_accs) > 0 or len(ood_accs) > 0:
-        ax_acc.set_xlabel('Steps')
-        ax_acc.set_ylabel('Accuracy')
-        ax_acc.set_title(f'{task_name}: Accuracy Curve')
+        ax_acc.set_xlabel('Steps', fontsize=14)
+        ax_acc.set_ylabel('Accuracy', fontsize=14)
+        ax_acc.set_title('')
         ax_acc.grid()
-        ax_acc.legend()
+        ax_acc.legend(fontsize=12)
+        ax_acc.tick_params(labelsize=12)
 
         acc_path = os.path.join(folder, f"accuracy_{datetime.now().strftime('%Y%m%d_%H%M')}.png")
         plt.tight_layout()
@@ -111,12 +114,12 @@ def plot_attn_scores(train_results, config, folder="loss_plots", show=False, log
         if log:
             ax.set_xscale('log')
         
-    ax.set_xlabel('Steps')
-    
-
-    ax.set_title('Attention Scores')
+    ax.set_xlabel('Steps', fontsize=14)
+    ax.set_ylabel('Score', fontsize=14)
+    ax.set_title('')
     ax.grid()
-    ax.legend()
+    ax.legend(fontsize=12)
+    ax.tick_params(labelsize=12)
     
     curr_time = datetime.now().strftime("%Y%m%d_%H%M")
     image_path = os.path.join(folder, f"attn_scores_{curr_time}.png")

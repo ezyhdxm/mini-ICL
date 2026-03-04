@@ -155,7 +155,7 @@ def plot_kl_model_vs_two_bayes_coin(
         hybrid_hi = mean_hybrid + std_hybrid
         ax.fill_between(pos, hybrid_lo, hybrid_hi, color="#d62728", alpha=0.2)
 
-        ax.set_title(f"Mode: {mode}", fontsize=12)
+        ax.set_title("", fontsize=18)
         ax.set_xlabel("Position", fontsize=11)
         ax.set_ylabel("KL(model || baseline)", fontsize=11)
         ax.grid(True, alpha=0.3)
@@ -292,7 +292,7 @@ def plot_kl_model_vs_two_bayes_coin_across_k(
     ax1.set_ylabel("KL(model || exact)", fontsize=11)
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_title(f"3-known + Dirichlet-new | mode={mode}", fontsize=12)
+    ax2.set_title("", fontsize=18)
     ax2.set_xlabel("Position", fontsize=11)
     ax2.set_ylabel("KL(model || hybrid)", fontsize=11)
     ax2.grid(True, alpha=0.3)

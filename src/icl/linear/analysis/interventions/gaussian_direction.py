@@ -90,7 +90,7 @@ def plot_gaussian_posterior_probe(
     ax1.bar(x + bar_w / 2, kl_ood, bar_w, label="OOD (val)", color="#FF9800", alpha=0.85)
     ax1.set_xlabel("Layer", fontsize=13)
     ax1.set_ylabel("KL Divergence", fontsize=13)
-    ax1.set_title("Probe KL Loss", fontsize=14)
+    ax1.set_title("", fontsize=18)
     ax1.set_xticks(x)
     ax1.set_xticklabels([str(l) for l in layers])
     ax1.legend(fontsize=10)
@@ -110,7 +110,7 @@ def plot_gaussian_posterior_probe(
     ax2.axhline(true_ood[0], ls="--", color="#FF9800", alpha=0.5, label=f"Oracle OOD ({true_ood[0]:.3f})")
     ax2.set_xlabel("Layer", fontsize=13)
     ax2.set_ylabel("Mean P(Z=K+1)", fontsize=13)
-    ax2.set_title("Predicted P(Gaussian)", fontsize=14)
+    ax2.set_title("", fontsize=18)
     ax2.set_xticks(x)
     ax2.set_xticklabels([str(l) for l in layers])
     ax2.legend(fontsize=9)
@@ -131,15 +131,12 @@ def plot_gaussian_posterior_probe(
         ax3.hist(pg_ood, bins=bins, alpha=0.6, label="OOD", color="#FF9800", density=True)
     ax3.set_xlabel("Predicted P(Z=K+1)", fontsize=13)
     ax3.set_ylabel("Density", fontsize=13)
-    ax3.set_title(f"Histogram (layer {best_layer})", fontsize=14)
+    ax3.set_title("", fontsize=18)
     ax3.legend(fontsize=11)
     ax3.grid(alpha=0.3)
     ax3.tick_params(labelsize=11)
 
-    fig.suptitle(
-        f"Gaussian Posterior Probe  (K={all_results[layers[0]]['n_tasks']} major tasks)",
-        fontsize=15, y=1.02,
-    )
+    fig.suptitle("", fontsize=18, y=1.02)
 
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -579,7 +576,7 @@ def plot_remove_gaussian_direction_across_layers(
     ax1.axhline(0, color="gray", linewidth=0.5)
     ax1.set_xlabel("Layer", fontsize=13)
     ax1.set_ylabel("% MSE Increase", fontsize=13)
-    ax1.set_title("Remove Gaussian Direction: MSE Degradation", fontsize=13)
+    ax1.set_title("", fontsize=18)
     ax1.set_xticks(x)
     ax1.set_xticklabels([str(l) for l in layers])
     ax1.legend(fontsize=11)
@@ -596,7 +593,7 @@ def plot_remove_gaussian_direction_across_layers(
 
     ax2.set_xlabel("Layer", fontsize=13)
     ax2.set_ylabel("KL Divergence", fontsize=13)
-    ax2.set_title("Gaussian Posterior Probe Quality", fontsize=13)
+    ax2.set_title("", fontsize=18)
     ax2.set_xticks(x)
     ax2.set_xticklabels([str(l) for l in layers])
     ax2.legend(fontsize=11)
@@ -604,10 +601,7 @@ def plot_remove_gaussian_direction_across_layers(
     ax2.tick_params(labelsize=11)
 
     orth_str = "orth-to-task" if orth_to_task else "raw"
-    fig.suptitle(
-        f"Remove Gaussian Posterior Direction ({orth_str}, scale={scale})",
-        fontsize=15, y=1.02,
-    )
+    fig.suptitle("", fontsize=18, y=1.02)
 
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")

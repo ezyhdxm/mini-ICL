@@ -1193,9 +1193,9 @@ def plot_optimal_orth_direction_across_layers(
     #  Plots
     # =====================================================================
     def _style_ax(ax, xlabel, ylabel, title_str, xticks=None):
-        ax.set_xlabel(xlabel, fontsize=14)
-        ax.set_ylabel(ylabel, fontsize=14)
-        ax.set_title(title_str, fontsize=14)
+        ax.set_xlabel(xlabel, fontsize=16)
+        ax.set_ylabel(ylabel, fontsize=16)
+        ax.set_title("", fontsize=18)
         if xticks is not None:
             ax.set_xticks(xticks)
             ax.set_xticklabels([str(t) for t in xticks])
@@ -1225,15 +1225,11 @@ def plot_optimal_orth_direction_across_layers(
         ax.text(x[i] - bw3, vm, f"{vm:.3f}", ha="center", va="bottom", fontsize=9)
         ax.text(x[i], vo, f"{vo:.3f}", ha="center", va="bottom", fontsize=9)
         ax.text(x[i] + bw3, vn, f"{vn:.3f}", ha="center", va="bottom", fontsize=9)
-    _style_ax(ax, "Layer", "CE Loss Increase",
-              "Loss Increase from Removing Optimal Orth Direction")
+    _style_ax(ax, "Layer", "CE Loss Increase", "")
     ax.set_xticks(x)
     ax.set_xticklabels([str(l) for l in layers])
     ax.legend(fontsize=10, loc="best")
-    fig_delta.suptitle(
-        title or f"Optimal Orth Direction (rank-{n_directions}, scale={scale})",
-        fontsize=16, y=1.02,
-    )
+    fig_delta.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if save_path:
         fig_delta.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -1253,8 +1249,7 @@ def plot_optimal_orth_direction_across_layers(
             steps_v, losses_v,
             label=f"Layer {l}", color=cmap(i % 10), alpha=0.85,
         )
-    _style_ax(ax_loss, "Step", f"{tgt_label} Val Loss (intervened)",
-              f"Validation Loss History (rank-{n_directions})")
+    _style_ax(ax_loss, "Step", f"{tgt_label} Val Loss (intervened)", "")
     ax_loss.legend(fontsize=12)
     plt.tight_layout()
     if show:
@@ -1279,13 +1274,10 @@ def plot_optimal_orth_direction_across_layers(
         ax_r.plot(layers, [all_results[l][key_rand] for l in layers],
                   "v:", label="Rand orth Linear", color="gray", lw=1.5,
                   alpha=0.6, ms=6)
-        _style_ax(ax_r, "Layer", "$R^2$", title_str, xticks=layers)
+        _style_ax(ax_r, "Layer", "$R^2$", "", xticks=layers)
         ax_r.legend(fontsize=11)
         ax_r.set_ylim(-0.05, 1.05)
-    fig_r2.suptitle(
-        f"Bigram $R^2$ for Rank-{n_directions} Orth Subspace ({tgt_label})",
-        fontsize=15, y=1.02,
-    )
+    fig_r2.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()
@@ -1302,8 +1294,7 @@ def plot_optimal_orth_direction_across_layers(
             all_results[l]["mean_logit_delta_tgt"],
             bw_tok, label=f"L{l}", alpha=0.75,
         )
-    _style_ax(ax_ld, "Token", "Mean d logit",
-              f"{tgt_label} Per-Token Logit Change (rank-{n_directions})", xticks=x_tok)
+    _style_ax(ax_ld, "Token", "Mean d logit", "", xticks=x_tok)
     ax_ld.legend(fontsize=10)
     plt.tight_layout()
     if show:
@@ -1369,15 +1360,11 @@ def plot_optimal_orth_direction_across_layers(
     if gain_ood is not None:
         ax_bi.axhline(gain_ood, color="#E65100", ls="--", lw=1.8, alpha=0.7,
                       label=f"OOD $l_0 - l_t$ ({gain_ood:.3f})")
-    _style_ax(ax_bi, "Layer", "\u0394 Loss",
-              f"{tgt_label} + OOD")
+    _style_ax(ax_bi, "Layer", "\u0394 Loss", "")
     ax_bi.set_xticks(x)
     ax_bi.set_xticklabels([str(l) for l in layers])
     ax_bi.legend(fontsize=9, loc="best")
-    fig_bigram.suptitle(
-        f"V_opt vs. Feature-Explained (rank-{n_directions}, scale={scale})",
-        fontsize=15, y=1.02,
-    )
+    fig_bigram.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()

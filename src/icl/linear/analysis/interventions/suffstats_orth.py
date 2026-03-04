@@ -913,10 +913,7 @@ def plot_remove_suffstats_orth_across_layers(
              f"Probe R\u00b2 ({probe_type}, {feat_label} \u2192 H_orth):  {r2_str}",
              ha="center", fontsize=11, style="italic")
 
-    fig.suptitle(
-        title or f"Remove {feat_label} from Orth Complement (linear, {probe_type}, scale={scale})",
-        fontsize=17, y=1.02,
-    )
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

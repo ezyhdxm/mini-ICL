@@ -251,7 +251,7 @@ def plot_lambda_posterior_agreement(
     ax3.grid(True, alpha=0.3)
 
     if title:
-        fig.suptitle(title, fontsize=18)
+        fig.suptitle("", fontsize=18)
     plt.tight_layout()
 
     if show:
@@ -551,7 +551,7 @@ def plot_latent_task_posterior(
     if title is None:
         suffix = " (major only)" if major_only else ""
         title = f"Latent task posterior over time — {exp_name}{suffix}"
-    fig.suptitle(title, fontsize=13, y=1.01)
+    fig.suptitle("", fontsize=18, y=1.01)
     fig.tight_layout()
 
     if show:

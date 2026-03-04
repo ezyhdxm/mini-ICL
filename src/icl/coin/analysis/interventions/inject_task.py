@@ -360,13 +360,13 @@ def plot_inject_task_vector_across_layers_coin(
                             color="white" if val > 0.65 else "black")
         ax.set_xticks(range(K))
         ax.set_yticks(range(K))
-        ax.set_xlabel("Target task", fontsize=11)
+        ax.set_xlabel("Target task", fontsize=14)
         if idx == 0:
-            ax.set_ylabel("Source (injected) task", fontsize=11)
-        ax.set_title(f"Layer {l}", fontsize=13)
+            ax.set_ylabel("Source (injected) task", fontsize=14)
+        ax.set_title("", fontsize=18)
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-    fig_hm.suptitle("Task-ID Accuracy after Injection", fontsize=15, y=1.02)
+    fig_hm.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()
@@ -404,12 +404,13 @@ def plot_inject_task_vector_across_layers_coin(
     for i, (v3, v4) in enumerate(zip(avg_kl_inj_inj, avg_kl_inj_orig)):
         ax_kl1.text(x[i] - 0.5 * bw, v3, f"{v3:.2f}", ha="center", va="bottom", fontsize=7)
         ax_kl1.text(x[i] + 0.5 * bw, v4, f"{v4:.2f}", ha="center", va="bottom", fontsize=7)
-    ax_kl1.set_xlabel("Layer", fontsize=14)
-    ax_kl1.set_ylabel("KL divergence", fontsize=14)
-    ax_kl1.set_title("KL to Task: Baseline vs After Injection", fontsize=13)
+    ax_kl1.set_xlabel("Layer", fontsize=16)
+    ax_kl1.set_ylabel("KL divergence", fontsize=16)
+    ax_kl1.set_title("", fontsize=18)
     ax_kl1.set_xticks(x)
     ax_kl1.set_xticklabels([str(l) for l in layers])
-    ax_kl1.legend(fontsize=9)
+    ax_kl1.legend(fontsize=12)
+    ax_kl1.tick_params(labelsize=14)
     ax_kl1.grid(axis="y", alpha=0.3)
 
     avg_acc = []
@@ -427,19 +428,18 @@ def plot_inject_task_vector_across_layers_coin(
     for i, a in enumerate(avg_acc):
         ax_kl2.text(x[i], a, f"{a:.0%}", ha="center", va="bottom",
                     fontsize=11)
-    ax_kl2.set_xlabel("Layer", fontsize=14)
-    ax_kl2.set_ylabel("Task-ID accuracy", fontsize=14)
-    ax_kl2.set_title("Avg Task-ID Accuracy (matches injected?)", fontsize=13)
+    ax_kl2.set_xlabel("Layer", fontsize=16)
+    ax_kl2.set_ylabel("Task-ID accuracy", fontsize=16)
+    ax_kl2.set_title("", fontsize=18)
     ax_kl2.set_xticks(x)
     ax_kl2.set_xticklabels([str(l) for l in layers])
     ax_kl2.set_ylim(0, 1.15)
     ax_kl2.axhline(1 / K, color="gray", linestyle="--", alpha=0.5,
                     label=f"Chance (1/{K})")
-    ax_kl2.legend(fontsize=11)
+    ax_kl2.legend(fontsize=12)
     ax_kl2.grid(axis="y", alpha=0.3)
 
-    fig_kl.suptitle("Task-Vector Injection: KL & Accuracy (Major→Major)",
-                    fontsize=15, y=1.02)
+    fig_kl.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()
@@ -456,12 +456,12 @@ def plot_inject_task_vector_across_layers_coin(
                    linewidth=2, markersize=7)
     ax_o1.axhline(1 / K, color="gray", linestyle="--", alpha=0.5,
                   label=f"Chance (1/{K})")
-    ax_o1.set_xlabel("Layer", fontsize=14)
-    ax_o1.set_ylabel("Task-ID accuracy", fontsize=14)
-    ax_o1.set_title("OOD: Task-ID Accuracy per Injected Task", fontsize=13)
+    ax_o1.set_xlabel("Layer", fontsize=16)
+    ax_o1.set_ylabel("Task-ID accuracy", fontsize=16)
+    ax_o1.set_title("", fontsize=18)
     ax_o1.set_xticks(layers)
     ax_o1.set_ylim(0, 1.1)
-    ax_o1.legend(fontsize=11)
+    ax_o1.legend(fontsize=12)
     ax_o1.grid(alpha=0.3)
 
     for sk in range(K):
@@ -469,15 +469,14 @@ def plot_inject_task_vector_across_layers_coin(
                   for l in layers]
         ax_o2.plot(layers, kl_inj, "o-", label=f"Inject task {sk}",
                    linewidth=2, markersize=7)
-    ax_o2.set_xlabel("Layer", fontsize=14)
-    ax_o2.set_ylabel("KL(output || injected task)", fontsize=14)
-    ax_o2.set_title("OOD: KL to Injected Task Distribution", fontsize=13)
+    ax_o2.set_xlabel("Layer", fontsize=16)
+    ax_o2.set_ylabel("KL(output || injected task)", fontsize=16)
+    ax_o2.set_title("", fontsize=18)
     ax_o2.set_xticks(layers)
-    ax_o2.legend(fontsize=11)
+    ax_o2.legend(fontsize=12)
     ax_o2.grid(alpha=0.3)
 
-    fig_ood.suptitle("Task-Vector Injection into OOD Sequences",
-                     fontsize=15, y=1.02)
+    fig_ood.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()

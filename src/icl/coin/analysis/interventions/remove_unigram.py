@@ -520,7 +520,7 @@ def plot_intervention_across_layers_coin(
 
     ax.set_xlabel("Layer", fontsize=16)
     ax.set_ylabel("\u0394 Loss (intervened \u2212 baseline)", fontsize=15)
-    ax.set_title("Loss Increase from Removing Unigram", fontsize=15)
+    ax.set_title("", fontsize=18)
     ax.set_xticks(x)
     ax.set_xticklabels([str(l) for l in layers])
     ax.tick_params(labelsize=14)
@@ -531,7 +531,7 @@ def plot_intervention_across_layers_coin(
         f"Causal Intervention: Remove Unigram from Orth Complement "
         f"(scale={scale})"
     )
-    fig.suptitle(sup, fontsize=17, y=1.02)
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

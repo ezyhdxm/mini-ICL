@@ -148,7 +148,7 @@ def plot_kl_model_vs_two_bayes_latent(
         ax.fill_between(pos, np.maximum(mean_exact - std_exact, 0.0), mean_exact + std_exact, color="#1f77b4", alpha=0.2)
         ax.plot(pos, mean_hybrid, color="#d62728", lw=2.0, label="3-known + Dirichlet-new")
         ax.fill_between(pos, np.maximum(mean_hybrid - std_hybrid, 0.0), mean_hybrid + std_hybrid, color="#d62728", alpha=0.2)
-        ax.set_title(f"Mode: {mode}", fontsize=12)
+        ax.set_title("", fontsize=18)
         ax.set_xlabel("Position", fontsize=11)
         ax.set_ylabel("KL(model || baseline)", fontsize=11)
         ax.grid(True, alpha=0.3)
@@ -245,12 +245,12 @@ def plot_kl_model_vs_two_bayes_latent_across_k(
             ax2.fill_between(x, np.maximum(d["hybrid_mean"] - d["hybrid_std"], 0.0),
                              d["hybrid_mean"] + d["hybrid_std"], color=c, alpha=0.15)
 
-    ax1.set_title(f"Exact known-pool Bayes | mode={mode}", fontsize=12)
+    ax1.set_title("", fontsize=18)
     ax1.set_xlabel("Position", fontsize=11)
     ax1.set_ylabel("KL(model || exact)", fontsize=11)
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_title(f"3-known + Dirichlet-new | mode={mode}", fontsize=12)
+    ax2.set_title("", fontsize=18)
     ax2.set_xlabel("Position", fontsize=11)
     ax2.set_ylabel("KL(model || hybrid)", fontsize=11)
     ax2.grid(True, alpha=0.3)

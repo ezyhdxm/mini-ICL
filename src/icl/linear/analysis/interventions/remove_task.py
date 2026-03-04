@@ -244,18 +244,14 @@ def plot_intervention_remove_task_across_layers(
                label=f"OOD baseline MSE = {ood_baseline:.3f}")
 
     scale = kwargs.get("scale", 1.0)
-    ax.set(xlabel="Layer", ylabel="Δ MSE",
-           title="MSE Increase from Removing Task Subspace")
+    ax.set(xlabel="Layer", ylabel="Δ MSE", title="")
     ax.set_xticks(x, [str(l) for l in layers])
-    ax.xaxis.label.set_size(16); ax.yaxis.label.set_size(15); ax.title.set_size(15)
-    ax.tick_params(labelsize=14)
-    ax.legend(fontsize=13)
+    ax.xaxis.label.set_size(18); ax.yaxis.label.set_size(18)
+    ax.tick_params(labelsize=16)
+    ax.legend(fontsize=14)
     ax.grid(axis="y", alpha=0.3)
 
-    fig.suptitle(
-        title or f"Remove Task Subspace (linear, scale={scale})",
-        fontsize=17, y=1.02,
-    )
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

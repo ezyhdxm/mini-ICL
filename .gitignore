@@ -68,4 +68,5 @@ wandb/
 *.log
 legacy/
 beta/
+representation_geometry_two_modes/
 

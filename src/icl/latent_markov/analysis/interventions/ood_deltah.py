@@ -262,19 +262,13 @@ def intervene_remove_ood_deltah_subspace(
             ax.text(x[i] + w / 2, vo, f"{vo:.3f}", ha="center", va="bottom", fontsize=9)
         ax.set_xlabel(xlabel, fontsize=13)
         ax.set_ylabel("CE Loss Increase", fontsize=13)
-        ax.set_title(title, fontsize=13)
+        ax.set_title("", fontsize=18)
         ax.set_xticks(x)
         ax.legend(fontsize=8)
         ax.grid(axis="y", alpha=0.3)
 
     sv_str = ", ".join(f"{s:.3f}" for s in S_all[:max_k].numpy())
-    fig.suptitle(
-        f"SVD ablation on OOD $\\Delta h$ "
-        f"(layer {layer}, pos $\\geq$ {min_position})\n"
-        f"Protected: task={task_rank} + token={tok_rank} = {prot_rank}  |  "
-        f"Token var threshold={token_var_threshold}  |  SV: [{sv_str}]",
-        fontsize=11, y=1.05,
-    )
+    fig.suptitle("", fontsize=18, y=1.05)
     plt.tight_layout()
     if show:
         plt.show()

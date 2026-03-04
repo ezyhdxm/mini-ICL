@@ -1433,17 +1433,14 @@ def plot_optimal_orth_direction_across_layers_coin(
 
     ax.set_xlabel("Layer", fontsize=16)
     ax.set_ylabel("\u0394 Loss (intervened \u2212 baseline)", fontsize=15)
-    ax.set_title("Loss Increase from Removing Optimal Orth Direction", fontsize=15)
+    ax.set_title("", fontsize=18)
     ax.set_xticks(x)
     ax.set_xticklabels([str(l) for l in layers])
     ax.tick_params(labelsize=14)
     ax.legend(fontsize=11)
     ax.grid(axis="y", alpha=0.3)
 
-    sup = title or (
-        f"Optimal Orth Direction (rank-{n_directions}, scale={scale})"
-    )
-    fig_delta.suptitle(sup, fontsize=17, y=1.02)
+    fig_delta.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if save_path:
         fig_delta.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -1465,9 +1462,7 @@ def plot_optimal_orth_direction_across_layers_coin(
         )
     ax_loss.set_xlabel("Optimisation Step", fontsize=14)
     ax_loss.set_ylabel(f"{tgt_label} Val Loss (intervened)", fontsize=14)
-    ax_loss.set_title(
-        f"Validation Loss During Optimisation (rank-{n_directions})", fontsize=15,
-    )
+    ax_loss.set_title("", fontsize=18)
     ax_loss.legend(fontsize=12)
     ax_loss.grid(alpha=0.3)
     ax_loss.tick_params(labelsize=12)
@@ -1495,7 +1490,7 @@ def plot_optimal_orth_direction_across_layers_coin(
     ax_r2a.plot(layers, mlp_rorth_u2p_tgt_l, "v--", label="Rand orth MLP", color="#9E9E9E", linewidth=1.5, alpha=0.7, markersize=6)
     ax_r2a.set_xlabel("Layer", fontsize=14)
     ax_r2a.set_ylabel(r"R$^2$", fontsize=14)
-    ax_r2a.set_title(rf"Unigram $\rightarrow$ Projection  R$^2$  ({tgt_label})", fontsize=14)
+    ax_r2a.set_title("", fontsize=18)
     ax_r2a.set_xticks(layers)
     ax_r2a.tick_params(labelsize=12)
     ax_r2a.legend(fontsize=11)
@@ -1508,17 +1503,14 @@ def plot_optimal_orth_direction_across_layers_coin(
     ax_r2b.plot(layers, mlp_rorth_p2u_tgt_l, "v--", label="Rand orth MLP", color="#9E9E9E", linewidth=1.5, alpha=0.7, markersize=6)
     ax_r2b.set_xlabel("Layer", fontsize=14)
     ax_r2b.set_ylabel(r"R$^2$", fontsize=14)
-    ax_r2b.set_title(rf"Projection $\rightarrow$ Unigram  R$^2$  ({tgt_label})", fontsize=14)
+    ax_r2b.set_title("", fontsize=18)
     ax_r2b.set_xticks(layers)
     ax_r2b.tick_params(labelsize=12)
     ax_r2b.legend(fontsize=11)
     ax_r2b.grid(alpha=0.3)
     ax_r2b.set_ylim(-0.05, 1.05)
 
-    fig_r2.suptitle(
-        f"Unigram R\u00b2 for Optimal Rank-{n_directions} Orth Subspace ({tgt_label})",
-        fontsize=15, y=1.02,
-    )
+    fig_r2.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()
@@ -1578,17 +1570,14 @@ def plot_optimal_orth_direction_across_layers_coin(
                  label=f"OOD $l_0 - \\bar{{l}}_t$ = {ood_ig:.3f}")
     ax_e.set_xlabel("Layer", fontsize=16)
     ax_e.set_ylabel("\u0394 Loss", fontsize=15)
-    ax_e.set_title(f"V_opt vs Unigram-Explained ({tgt_label} + OOD)", fontsize=15)
+    ax_e.set_title("", fontsize=18)
     ax_e.set_xticks(x)
     ax_e.set_xticklabels([str(l) for l in layers])
     ax_e.tick_params(labelsize=14)
     ax_e.legend(fontsize=9, loc="best")
     ax_e.grid(axis="y", alpha=0.3)
 
-    fig_explained.suptitle(
-        f"V_opt vs Feature-Explained (rank-{n_directions}, scale={scale})",
-        fontsize=15, y=1.02,
-    )
+    fig_explained.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()

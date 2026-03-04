@@ -571,10 +571,7 @@ def plot_accuracy_bar(active_lengths, val_accs_history, n_classes_per_length,
     ax.set_ylabel("Accuracy (%)")
     ax.set_xlabel("Dyck prefix length")
     epoch_str = f", best epoch {best_epoch}" if best_epoch is not None else ""
-    ax.set_title(
-        f"Prefix Classification Accuracy "
-        f"(layer {layer_index}, {proj_dim}D projection{epoch_str})"
-    )
+    ax.set_title("")
     ax.legend()
     ax.set_ylim(0, 105)
     for bar, a in zip(bars, accs):
@@ -594,7 +591,7 @@ def plot_training_loss(train_losses, save_path=None):
     ax.plot(train_losses, color="steelblue", linewidth=0.8)
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Training Loss")
-    ax.set_title("Joint Probe Training Loss")
+    ax.set_title("")
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -749,12 +746,7 @@ def plot_2d_scatter(
                     bbox=bbox,
                 )
 
-        proj_label = "PCA of learned projection" if pca is not None else "shared projection"
-        ax.set_title(
-            f"Prefix length l={l}  ({n_cls} classes)\n"
-            f"layer {layer_index}, {proj_label}, k={k_value}",
-            fontsize=11,
-        )
+        ax.set_title("", fontsize=14)
         if pca is not None:
             ev = pca.explained_variance_ratio_
             ax.set_xlabel(f"PC1 ({ev[0]:.0%} var)")
@@ -891,11 +883,7 @@ def plot_3d_scatter(
             ax.set_ylabel("Dim 2")
             ax.set_zlabel("Dim 3")
 
-        ax.set_title(
-            f"Prefix length l={l}  ({n_cls} classes)\n"
-            f"layer {layer_index}, {proj_label}, k={k_value}",
-            fontsize=11,
-        )
+        ax.set_title("", fontsize=14)
         ax.view_init(elev=elev, azim=azim)
 
         if n_cls <= legend_max_classes:

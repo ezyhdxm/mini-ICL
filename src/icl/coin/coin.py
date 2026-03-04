@@ -1,5 +1,197 @@
 import torch
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
+
+
+def _solve_tilting_parameter(K: int, target_mean: float, tol: float = 1e-12) -> float:
+    """
+    Find eta such that the max-entropy distribution p_i = exp(eta*i)/Z
+    over faces {1, ..., K} has mean equal to target_mean.
+    """
+    faces = torch.arange(1, K + 1, dtype=torch.float64)
+    lo, hi = -50.0, 50.0
+    for _ in range(300):
+        mid = (lo + hi) / 2.0
+        logp = mid * faces
+        logp = logp - logp.max()
+        p = torch.exp(logp)
+        p = p / p.sum()
+        current_mean = (faces * p).sum().item()
+        if abs(current_mean - target_mean) < tol:
+            break
+        if current_mean < target_mean:
+            lo = mid
+        else:
+            hi = mid
+    return mid
+
+
+def make_tilted_pool(K: int, target_means: List[float], device="cpu") -> torch.Tensor:
+    """
+    Build a (len(target_means), K+1) tensor of probability vectors.
+    Each row is the max-entropy distribution over K-sided die faces {1,...,K}.
+    Index 0 has probability 0; index i (1 <= i <= K) holds P(face = i).
+    This way torch.multinomial produces tokens in {1,...,K} directly.
+    """
+    faces = torch.arange(1, K + 1, dtype=torch.float64)
+    rows = []
+    for mu in target_means:
+        if not (1.0 <= mu <= float(K)):
+            raise ValueError(
+                f"target mean {mu} is out of range [1, {K}] for a {K}-sided die"
+            )
+        eta = _solve_tilting_parameter(K, mu)
+        logp = eta * faces
+        logp = logp - logp.max()
+        p = torch.exp(logp)
+        p = p / p.sum()
+        p_full = torch.zeros(K + 1, dtype=torch.float32)
+        p_full[1:] = p.float()
+        rows.append(p_full)
+    return torch.stack(rows).to(device)
+
+
+def make_maxent_pool(
+    K: int,
+    target_means: List[float],
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Build a (len(target_means), K) tensor of probability vectors.
+
+    Each row is the maximum-entropy distribution over 0-indexed tokens
+    {0, ..., K-1} whose expected value equals ``target_means[i]``.
+    The max-entropy solution is the exponential-family form
+    ``p(x) ∝ exp(η · x)`` with ``η`` chosen to satisfy the mean
+    constraint.  This is the distribution closest to uniform (in KL
+    sense) that achieves the desired mean.
+
+    Use with ``vocab_size = K``.
+    """
+    tokens = torch.arange(K, dtype=torch.float64)
+    rows = []
+    for mu in target_means:
+        if not (0.0 <= mu <= float(K - 1)):
+            raise ValueError(
+                f"target mean {mu} is out of range [0, {K - 1}] "
+                f"for tokens {{0, ..., {K - 1}}}"
+            )
+        lo, hi = -50.0, 50.0
+        for _ in range(300):
+            mid = (lo + hi) / 2.0
+            logp = mid * tokens
+            logp = logp - logp.logsumexp(0)
+            current_mean = (logp.exp() * tokens).sum().item()
+            if abs(current_mean - mu) < 1e-12:
+                break
+            if current_mean < mu:
+                lo = mid
+            else:
+                hi = mid
+        logp = mid * tokens
+        logp = logp - logp.logsumexp(0)
+        rows.append(logp.exp().float())
+    return torch.stack(rows).to(device)
+
+
+def make_partition_pool(
+    K: int,
+    target_means: List[float],
+    eps_outside: Optional[float] = None,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Build a (len(target_means), K) tensor of probability vectors via
+    soft contiguous partitioning of tokens {0, ..., K-1}.
+
+    Tokens are split into ``n = len(target_means)`` contiguous groups as
+    evenly as possible.  Each token gets a floor probability of
+    ``eps_outside``; the remaining mass is concentrated on the partition
+    tokens with weights chosen so that the overall expected token value
+    matches ``target_means[i]`` as closely as possible.
+
+    If ``eps_outside`` is None (default), it is set automatically to the
+    largest feasible value (scaled by 0.9) that still allows all target
+    means to be achieved.  This maximises the floor while respecting the
+    mean constraints.
+
+    Because the supports are near-disjoint, OOD samples (e.g. from a
+    Dirichlet prior) project roughly equidistantly from all tasks.
+
+    Use with ``vocab_size = K``.
+    """
+    n_tasks = len(target_means)
+    if n_tasks == 0:
+        raise ValueError("target_means must be non-empty")
+    if K < n_tasks:
+        raise ValueError(
+            f"Cannot partition {K} tokens into {n_tasks} tasks"
+        )
+
+    sizes = [(K // n_tasks) + (1 if i < (K % n_tasks) else 0)
+             for i in range(n_tasks)]
+    partitions: List[List[int]] = []
+    start = 0
+    for sz in sizes:
+        partitions.append(list(range(start, start + sz)))
+        start += sz
+
+    if eps_outside is None:
+        S = K * (K - 1) / 2.0
+        max_eps = 1.0 / K - 1e-9
+        for i, mu in enumerate(target_means):
+            lo = float(min(partitions[i]))
+            hi = float(max(partitions[i]))
+            d_lo = S - lo * K
+            if d_lo > 1e-12 and mu - lo < d_lo * max_eps:
+                max_eps = min(max_eps, (mu - lo) / d_lo)
+            d_hi = S - hi * K
+            if d_hi < -1e-12 and hi - mu < (-d_hi) * max_eps:
+                max_eps = min(max_eps, (hi - mu) / (-d_hi))
+        eps_outside = 0.9 * max(max_eps, 1e-6)
+
+    tokens = torch.arange(K, dtype=torch.float64)
+    bg_mean = eps_outside * tokens.sum().item()
+    extra_mass = 1.0 - K * eps_outside
+    if extra_mass <= 0:
+        raise ValueError(
+            f"eps_outside={eps_outside} too large for K={K} "
+            f"(need K * eps_outside < 1)"
+        )
+
+    rows = []
+    for i, mu in enumerate(target_means):
+        part_indices = partitions[i]
+        part_tokens = tokens[part_indices]
+        lo_part = part_tokens.min().item()
+        hi_part = part_tokens.max().item()
+
+        needed = (mu - bg_mean) / extra_mass
+        needed = max(lo_part, min(hi_part, needed))
+
+        if len(part_indices) == 1:
+            w = torch.ones(1, dtype=torch.float64)
+        elif len(part_indices) == 2:
+            a, b = part_tokens[0].item(), part_tokens[1].item()
+            t = (b - needed) / (b - a)
+            w = torch.tensor([t, 1.0 - t], dtype=torch.float64)
+        else:
+            eta = _solve_tilting_parameter(
+                len(part_indices), needed - lo_part + 1.0
+            )
+            shifted = torch.arange(
+                1, len(part_indices) + 1, dtype=torch.float64
+            )
+            logw = eta * shifted
+            logw -= logw.max()
+            w = logw.exp()
+            w /= w.sum()
+
+        p = torch.full((K,), eps_outside, dtype=torch.float64)
+        for j, gi in enumerate(part_indices):
+            p[gi] += w[j] * extra_mass
+        rows.append(p.float())
+
+    return torch.stack(rows).to(device)
 
 
 class Coins:
@@ -24,6 +216,7 @@ class Coins:
         self.n_minor_tasks = int(getattr(config.task, "n_minor_tasks", 0))
         self.p_minor = float(getattr(config.task, "p_minor", 1e-12))
         self.major_pool_type = str(getattr(config.task, "major_pool_type", "disjoint"))
+        self.major_means = getattr(config.task, "major_means", None)
 
         # Pre-sample major/minor pools (optional)
         self.major_p = self._maybe_sample_task_pool(self.n_major_tasks, pool_name="major")
@@ -89,6 +282,28 @@ class Coins:
 
         # Major tasks: behaviour controlled by self.major_pool_type
         if pool_name == "major":
+            if self.major_pool_type in ("tilted", "maxent", "partition"):
+                if self.major_means is None:
+                    raise ValueError(
+                        f"major_pool_type='{self.major_pool_type}' requires "
+                        "config.task.major_means to be set "
+                        "(list of target means, one per major task)"
+                    )
+                means = list(self.major_means)
+                if len(means) != n_tasks:
+                    raise ValueError(
+                        f"len(major_means)={len(means)} != n_tasks={n_tasks}"
+                    )
+                if self.major_pool_type == "tilted":
+                    n_faces = self.num_states - 1
+                    return make_tilted_pool(n_faces, means, device=self.device)
+                if self.major_pool_type == "maxent":
+                    return make_maxent_pool(
+                        self.num_states, means, device=self.device
+                    )
+                return make_partition_pool(
+                    self.num_states, means, device=self.device
+                )
             if self.major_pool_type == "disjoint" and n_tasks == 3:
                 return self._sample_disjoint_uniform_pool(n_tasks, eps_outside=0.005)
             # "dirichlet" or any other value, or disjoint with n_tasks != 3

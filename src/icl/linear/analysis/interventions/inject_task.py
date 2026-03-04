@@ -391,12 +391,12 @@ def plot_inject_task_vector_across_layers(
                     ax.text(oj, ik, f"{v:.0%}", ha="center", va="center",
                             fontsize=11, color="white" if v > 0.65 else "black")
         ax.set_xticks(range(K)); ax.set_yticks(range(K))
-        ax.set_xlabel("Original task (data)", fontsize=11)
+        ax.set_xlabel("Original task (data)", fontsize=14)
         if idx == 0:
-            ax.set_ylabel("Injected task (vector)", fontsize=11)
-        ax.set_title(f"Layer {l}", fontsize=13)
+            ax.set_ylabel("Injected task (vector)", fontsize=14)
+        ax.set_title("", fontsize=18)
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig_hm.suptitle("Task-ID Accuracy after Injection (linear)", fontsize=15, y=1.02)
+    fig_hm.suptitle("", fontsize=18, y=1.02)
     _show_or_close(fig_hm, show)
 
     # ---- 2. MSE to injected vs original task  +  Task-ID accuracy ----
@@ -427,7 +427,7 @@ def plot_inject_task_vector_across_layers(
         for i, v in enumerate(vals):
             ax_m1.text(x[i] + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=7)
 
-    ax_m1.set(xlabel="Layer", ylabel="MSE", title="MSE to Oracle: Baseline vs After Injection")
+    ax_m1.set(xlabel="Layer", ylabel="MSE", title="")
     ax_m1.set_xticks(x, [str(l) for l in layers])
     ax_m1.legend(fontsize=9); ax_m1.grid(axis="y", alpha=0.3)
 
@@ -435,13 +435,12 @@ def plot_inject_task_vector_across_layers(
     ax_m2.bar(x, avg_acc, 0.5, color="#2196F3", alpha=0.85)
     for i, a in enumerate(avg_acc):
         ax_m2.text(x[i], a, f"{a:.0%}", ha="center", va="bottom", fontsize=11)
-    ax_m2.set(xlabel="Layer", ylabel="Task-ID accuracy",
-              title="Avg Task-ID Accuracy (matches injected?)", ylim=(0, 1.15))
+    ax_m2.set(xlabel="Layer", ylabel="Task-ID accuracy", title="", ylim=(0, 1.15))
     ax_m2.set_xticks(x, [str(l) for l in layers])
     ax_m2.axhline(1 / K, color="gray", ls="--", alpha=0.5, label=f"Chance (1/{K})")
     ax_m2.legend(fontsize=11); ax_m2.grid(axis="y", alpha=0.3)
 
-    fig_mse.suptitle("Task-Vector Injection: MSE & Accuracy (linear)", fontsize=15, y=1.02)
+    fig_mse.suptitle("", fontsize=18, y=1.02)
     _show_or_close(fig_mse, show)
 
     # ---- 3. OOD plots ----
@@ -453,15 +452,13 @@ def plot_inject_task_vector_across_layers(
         ax_o2.plot(layers, mses, "o-", label=f"Inject task {sk}", lw=2, ms=7)
 
     ax_o1.axhline(1 / K, color="gray", ls="--", alpha=0.5, label=f"Chance (1/{K})")
-    ax_o1.set(xlabel="Layer", ylabel="Task-ID accuracy",
-              title="OOD: Task-ID Accuracy per Injected Task", ylim=(0, 1.1))
+    ax_o1.set(xlabel="Layer", ylabel="Task-ID accuracy", title="", ylim=(0, 1.1))
     ax_o1.set_xticks(layers); ax_o1.legend(fontsize=11); ax_o1.grid(alpha=0.3)
 
-    ax_o2.set(xlabel="Layer", ylabel=r"MSE(output, $x^\top w_{\mathrm{inj}}$)",
-              title="OOD: MSE to Injected Task")
+    ax_o2.set(xlabel="Layer", ylabel=r"MSE(output, $x^\top w_{\mathrm{inj}}$)", title="")
     ax_o2.set_xticks(layers); ax_o2.legend(fontsize=11); ax_o2.grid(alpha=0.3)
 
-    fig_ood.suptitle("Task-Vector Injection into OOD Sequences (linear)", fontsize=15, y=1.02)
+    fig_ood.suptitle("", fontsize=18, y=1.02)
     _show_or_close(fig_ood, show)
 
     return fig_hm, fig_mse, fig_ood, all_results

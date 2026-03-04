@@ -444,7 +444,7 @@ def plot_decomposition_across_layers_coin(
         ax.set_xticks(x)
         ax.set_xticklabels([str(l) for l in layers])
         ax.tick_params(labelsize=14)
-        ax.set_title(ax_title, fontsize=16)
+        ax.set_title("", fontsize=18)
         ax.legend(fontsize=12)
         ax.grid(axis="y", alpha=0.3)
 
@@ -479,7 +479,7 @@ def plot_decomposition_across_layers_coin(
     ax3.grid(alpha=0.3)
 
     sup = title or "Hidden Decomposition: Posterior vs Unigram"
-    fig.suptitle(sup, fontsize=18, y=1.02)
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

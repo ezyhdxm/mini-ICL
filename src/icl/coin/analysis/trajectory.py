@@ -653,17 +653,11 @@ def traj_post_posterior_projection_plot_coin(
             if col == 0:
                 ax.set_ylabel(task_label, fontsize=16)
             if row == 0:
-                ax.set_title(
-                    rf"$\lambda_{col+1}$ / $\mathbb{{P}}(Z\!={col+1}|\mathrm{{data}})$",
-                    fontsize=15,
-                )
+                ax.set_title("", fontsize=18)
             if row == 0 and col == 0:
                 ax.legend(fontsize=10, loc="best", framealpha=0.7)
 
-    fig.suptitle(
-        f"Layer {layer_index}  (B={B_actual}, {n_indiv} traces shown)",
-        fontsize=15, y=1.01,
-    )
+    fig.suptitle("", fontsize=18, y=1.01)
     plt.tight_layout()
 
     if show:

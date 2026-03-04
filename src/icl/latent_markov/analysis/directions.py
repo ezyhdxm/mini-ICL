@@ -203,13 +203,10 @@ def calculation_direction_analysis(
                 label=f"{label} $||\\Delta h_{{\\mathrm{{task}}}}||^2$")
         ax.plot(t_axis, orth_nm[grp].mean(0), ":", color=color, lw=2,
                 label=f"{label} $||\\Delta h_{{\\perp}}||^2$")
-    ax.set_xlabel("Position $t$", fontsize=13)
-    ax.set_ylabel("Squared norm (batch avg)", fontsize=13)
-    ax.set_title(
-        r"Norm decomposition of $\Delta h = h_t(x_t) - h_0(x_t)$",
-        fontsize=13,
-    )
-    ax.legend(fontsize=9, loc="best")
+    ax.set_xlabel("Position $t$", fontsize=16)
+    ax.set_ylabel("Squared norm (batch avg)", fontsize=16)
+    ax.set_title("", fontsize=18)
+    ax.legend(fontsize=12, loc="best")
     ax.grid(alpha=0.3)
 
     # (c) R^2 of delta_h explained by task vectors
@@ -224,19 +221,15 @@ def calculation_direction_analysis(
         ax.plot(t_axis, r2_mu, color=ood_color, lw=2, label="OOD (mean)")
         ax.fill_between(t_axis, r2_mu - r2_sd, r2_mu + r2_sd,
                         color=ood_color, alpha=0.15)
-    ax.set_xlabel("Position $t$", fontsize=13)
-    ax.set_ylabel("$R^2$", fontsize=13)
-    ax.set_title(r"$R^2$: how well task vectors explain $\Delta h$",
-                 fontsize=13)
+    ax.set_xlabel("Position $t$", fontsize=16)
+    ax.set_ylabel("$R^2$", fontsize=16)
+    ax.set_title("", fontsize=18)
     ax.set_ylim(-0.05, 1.05)
-    ax.legend(fontsize=10, loc="best")
+    ax.legend(fontsize=12, loc="best")
     ax.grid(alpha=0.3)
+    ax.tick_params(labelsize=14)
 
-    sup = title or (
-        f"Calculation-direction analysis (layer {layer_index}):  "
-        r"$\Delta h = h_t(x_t) - h_0(x_t)$"
-    )
-    fig.suptitle(sup, fontsize=15, y=1.02)
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
     if show:
         plt.show()
@@ -422,18 +415,15 @@ def plot_task_subspace_r2_over_positions(
                     color="tab:red", alpha=0.15)
     ax.axhline(chance, color="gray", ls="--", alpha=0.6,
                label=f"Chance ({rank}/{D} = {chance:.4f})")
-    ax.set_xlabel("Position $t$")
+    ax.set_xlabel("Position $t$", fontsize=16)
     ax.set_ylabel(r"$\| P_{\mathrm{task}}\, h \|^2 \;/\; \| h \|^2$"
-                  "  (per sequence, mean over batch)")
-    centered_tag = ", centered" if center_task_vecs else ""
-    ax.set_title(
-        f"Fraction of hidden state in major task subspace\n"
-        f"(layer {layer}, rank {rank}{centered_tag})"
-    )
+                  "  (per sequence, mean over batch)", fontsize=16)
+    ax.set_title("", fontsize=18)
     y_max = max(r2_per_task[:K_major].max(),
                 (r2_ood_mean + r2_ood_std).max())
     ax.set_ylim(0, min(1.0, y_max * 1.15))
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=12)
+    ax.tick_params(labelsize=14)
     fig.tight_layout()
     if show:
         plt.show()

@@ -580,6 +580,8 @@ def unified_train(
     vocab_size: int = 8,
     log2: bool = True,
     pad = None,
+    major_pool_type: str = None,
+    major_means = None,
 ):
     config = unified_get_config(task_name)
     if k >= 0:
@@ -593,6 +595,10 @@ def unified_train(
     if pad is not None:
         if task_name == "linear":
             config.model.pad = pad  # "bos", "mapsto", or "none"
+    if major_pool_type is not None:
+        config.task.major_pool_type = major_pool_type
+    if major_means is not None:
+        config.task.major_means = list(major_means)
     if task_name == "linear":
         return train(config)
     else:

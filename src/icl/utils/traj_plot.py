@@ -230,7 +230,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     final_edge_width=1.5,
 
     # --- cosmetics ---
-    title="Projected trajectories",
+    title="",
     hide_ticks=True,
     despine=True,
 
@@ -249,7 +249,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     # If you want the 20th annotated, include 19 in must_include_times.
     annotate_times=(0, -1),           # Start + End only by default (can still add others)
 
-    annotation_fontsize=12,
+    annotation_fontsize=14,
     annotation_box_alpha=0.45,
     annotation_box_pad=0.20,
     annotation_box_lw=0.90,
@@ -1085,7 +1085,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     
     if show_legend:
         # --- Legend 1 (groups) ---
-        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left", fontsize=14)
+        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left", fontsize=16)
 
         # --- Legend 2 (size ~ R²) ---
         r2_min = float(np.min(R2))
@@ -1132,8 +1132,8 @@ def project_with_r2_trajectories_group_colors_mpl(
             borderpad=0.3,
             labelspacing=0.6,
             handletextpad=0.8,
-            fontsize=14,
-            title_fontsize=14,
+            fontsize=16,
+            title_fontsize=16,
         )
 
         # Keep both legends
@@ -1142,7 +1142,7 @@ def project_with_r2_trajectories_group_colors_mpl(
         if getattr(ax, "legend_", None) is not None:
             ax.legend_.remove()
         
-    ax.set_title(title, fontsize=16)
+    ax.set_title(title, fontsize=18)
     ax.set_aspect("equal", adjustable="datalim")
     ax.grid(False)
 
@@ -1152,9 +1152,9 @@ def project_with_r2_trajectories_group_colors_mpl(
         ax.set_xlabel("")
         ax.set_ylabel("")
     else:
-        ax.set_xlabel("axis 1", fontsize=16)
-        ax.set_ylabel("axis 2", fontsize=16)
-        ax.tick_params(labelsize=14)
+        ax.set_xlabel("axis 1", fontsize=18)
+        ax.set_ylabel("axis 2", fontsize=18)
+        ax.tick_params(labelsize=16)
 
     if despine:
         for sp in ("top", "right"):

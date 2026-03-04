@@ -348,19 +348,18 @@ def traj_post_posterior_projection_plot(
 
             ax.set_ylim(-0.05, 1.05)
             ax.grid(axis="y", alpha=0.3)
-            ax.tick_params(labelsize=14)
+            ax.tick_params(labelsize=16)
             if row == n_plot_rows - 1:
                 ax.set_xlabel("Position $t$", fontsize=16)
             task_label = f"Task {tid}" if tid < 3 else f"OOD {tid}"
             if col == 0:
                 ax.set_ylabel(task_label, fontsize=16)
             if row == 0:
-                ax.set_title(rf"$\lambda_{col+1}$ / $\mathbb{{P}}(Z\!={col+1}|\mathrm{{data}})$", fontsize=15)
+                ax.set_title("", fontsize=18)
             if row == 0 and col == 0:
-                ax.legend(fontsize=10, loc="best", framealpha=0.7)
+                ax.legend(fontsize=12, loc="best", framealpha=0.7)
 
-    fig.suptitle(f"Layer {layer_index}  (B={B_actual}, {n_indiv} traces shown)",
-                 fontsize=15, y=1.01)
+    fig.suptitle("", fontsize=18, y=1.01)
     _show_or_close(fig, show)
 
     model.cpu(); del model, eval_task
@@ -557,8 +556,7 @@ def plot_lambda_posterior_agreement(
         ax.xaxis.label.set_fontsize(18); ax.yaxis.label.set_fontsize(18)
         ax.tick_params(labelsize=16); ax.legend(fontsize=14); ax.grid(True, alpha=0.3)
 
-    if title:
-        fig.suptitle(title, fontsize=18)
+    fig.suptitle("", fontsize=18)
     _show_or_close(fig, show)
 
     model.cpu(); del model, eval_task

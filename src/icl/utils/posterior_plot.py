@@ -2,6 +2,7 @@
 Requires:
     pip install adjustText
 """
+from . import plot_config  # noqa: F401 - paper-friendly defaults
 
 import re
 import numpy as np
@@ -438,7 +439,7 @@ def project_with_r2_ood_posterior_colors_mpl(
     final_edge_width=1.5,
 
     # cosmetics
-    title="OOD trajectory (points as posterior pies)",
+    title="",
     hide_ticks=True,
     despine=True,
 
@@ -956,7 +957,7 @@ def project_with_r2_ood_posterior_colors_mpl(
     # ----------------------------
     # Cosmetics
     # ----------------------------
-    ax.set_title(title)
+    ax.set_title(title, fontsize=18)
     ax.set_aspect("equal", adjustable="datalim")
     ax.margins(0.06)
     ax.grid(False)
@@ -967,8 +968,8 @@ def project_with_r2_ood_posterior_colors_mpl(
         ax.set_xlabel("")
         ax.set_ylabel("")
     else:
-        ax.set_xlabel("axis 1")
-        ax.set_ylabel("axis 2")
+        ax.set_xlabel("axis 1", fontsize=18)
+        ax.set_ylabel("axis 2", fontsize=18)
 
     if despine:
         for sp in ("top", "right"):

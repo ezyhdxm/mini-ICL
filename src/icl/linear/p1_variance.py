@@ -611,12 +611,11 @@ def plot_p1_variance(
     ax.set_ylabel("Normalized P1 Variance", fontsize=16)
     if log_x:
         ax.set_xscale("log")
-    ax.tick_params(labelsize=14)
-    ax.legend(fontsize=14)
+    ax.tick_params(labelsize=16)
+    ax.legend(fontsize=16)
     ax.grid(True, alpha=0.3)
 
-    if title:
-        ax.set_title(title, fontsize=16)
+    ax.set_title("", fontsize=18)
 
     plt.tight_layout()
     if show:

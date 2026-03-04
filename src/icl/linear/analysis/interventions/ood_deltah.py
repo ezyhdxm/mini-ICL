@@ -284,10 +284,7 @@ def intervene_remove_ood_deltah_subspace(
         ax.yaxis.label.set_fontsize(13)
         ax.tick_params(labelsize=11)
 
-    fig.suptitle(
-        f"SVD ablation sweep  (layer {layer})",
-        fontsize=14, y=1.01,
-    )
+    fig.suptitle("", fontsize=18, y=1.01)
     plt.tight_layout()
     if show:
         plt.show()
@@ -485,11 +482,7 @@ def _analyze_direction(
 
     # ── 4-panel figure ────────────────────────────────────────────────────
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle(
-        f"SVD direction {component_idx}  (layer {layer},  "
-        f"SV={sv:.2f},  task overlap={frac_task:.2%})",
-        fontsize=15, fontweight="bold",
-    )
+    fig.suptitle("", fontsize=18)
     y_label = (r"$v_{" + str(component_idx) + r"}^\top \Delta h$")
 
     # (a) hexbin scatter
@@ -499,8 +492,7 @@ def _analyze_direction(
     fig.colorbar(hb, ax=ax, shrink=0.7, pad=0.02).set_label("count", fontsize=11)
     xl = np.array([orac_flat.min(), orac_flat.max()])
     ax.plot(xl, np.polyval(coef, xl), "k-", lw=1.5, label=f"slope={coef[0]:.3f}")
-    ax.set(xlabel=r"$w^\top x_t$", ylabel=y_label,
-           title=f"(a) projection vs oracle ($r^2={r2_oracle:.4f}$)")
+    ax.set(xlabel=r"$w^\top x_t$", ylabel=y_label, title="")
     ax.legend(fontsize=11, loc="upper left")
 
     # (b) feature R² bar chart
@@ -532,7 +524,7 @@ def _analyze_direction(
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels, fontsize=13)
     ax.set_xlim(0, 1.08)
-    ax.set(xlabel=r"$R^2$", title="(b) Feature regression")
+    ax.set(xlabel=r"$R^2$", title="")
     for i, v in enumerate(vals):
         ax.text(v + 0.01, i, f"{v:.3f}", va="center", fontsize=12)
 
@@ -555,7 +547,7 @@ def _analyze_direction(
     ax.axvline(min_position, color="gray", ls="--", alpha=0.5)
     ax.set(xlabel="Position $t$",
            ylabel=r"$r^2$(proj, $w^\top x_t$)",
-           title=r"(c) When does this direction encode $w^\top x$?",
+           title="",
            ylim=(-0.02, 1.05))
     ax.legend(fontsize=11)
 
@@ -589,8 +581,7 @@ def _analyze_direction(
     ax.set_yticks(range(len(labels_d)))
     ax.set_yticklabels(labels_d, fontsize=14)
     ax.set_xlim(0, 1.08)
-    ax.set(xlabel=r"Partial $R^2$",
-           title=f"(d) Joint regression  (full $R^2={r2_full:.4f}$)")
+    ax.set(xlabel=r"Partial $R^2$", title="")
     for i, v in enumerate(vals_d):
         ax.text(v + 0.01, i, f"{v:.3f}", va="center", fontsize=13)
 

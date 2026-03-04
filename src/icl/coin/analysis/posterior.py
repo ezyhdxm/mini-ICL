@@ -159,7 +159,7 @@ def plot_coin_task_posterior(
         ax.set_ylabel("P(Z=k | obs)")
         ax.set_xlim(0, max(L_real - 1, 1))
         ax.set_ylim(-0.02, 1.02)
-        ax.set_title(f"Sample {idx + 1}", fontsize=10)
+        ax.set_title("", fontsize=14)
         if idx == 0:
             ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small',
                       ncol=max(1, T_plot // 20))
@@ -454,7 +454,7 @@ def plot_kl_lambda_vs_posterior_coin(
     ax.legend(fontsize=16)
     ax.grid(True, alpha=0.3)
     if title:
-        ax.set_title(title, fontsize=18)
+        ax.set_title("", fontsize=18)
     plt.tight_layout()
 
     if show:
@@ -718,7 +718,7 @@ def plot_lambda_posterior_agreement_coin(
     ax3.grid(True, alpha=0.3)
 
     if title:
-        fig.suptitle(title, fontsize=18)
+        fig.suptitle("", fontsize=18)
     plt.tight_layout()
 
     if show:

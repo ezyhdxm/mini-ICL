@@ -74,7 +74,7 @@ def plot_task_vector_variance_with_fit(task_vectors: torch.Tensor, normalize: bo
         ))
 
     fig.update_layout(
-        title="Hidden Vector Variance vs Position",
+        title="",
         xaxis_title="Position",
         yaxis_title="Variance",
         width=800,
@@ -158,7 +158,7 @@ def plot_lambdas(lambdas, convex_combs=None):
             xanchor="left",
             yanchor="top"
         )],
-        title_text=init_title,  # initial title
+        title_text="",  # no title for paper
         xaxis_title="Position $t$",
         yaxis_title="Belief weight $\\lambda$",
         legend_title="$j'$ (latent task index)",
@@ -313,7 +313,7 @@ def plot_task_vector_modes(
             active=0, buttons=dropdown_buttons,
             x=0.01, y=1.1, xanchor="left", yanchor="top"
         )],
-        title="Hidden Vector Variance vs Position",
+        title="",
         xaxis_title="Position",
         yaxis_title="Variance",
         width=900,
@@ -650,7 +650,7 @@ def plot_task_vector_exp(
                 showactive=True,
             )
         ],
-        title=f"{layer_names[init_layer]} · Task-vector diagnostics (3 modes)",
+        title="",
         template="plotly_white",
         width=1000,
         height=900,

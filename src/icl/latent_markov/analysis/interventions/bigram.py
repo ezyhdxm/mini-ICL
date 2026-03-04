@@ -588,7 +588,7 @@ def intervene_remove_bigram_subspace(
                     ha="center", va="bottom", fontsize=9)
         ax.set_xlabel(xlabel, fontsize=13)
         ax.set_ylabel("CE Loss Increase", fontsize=13)
-        ax.set_title(panel_title, fontsize=13)
+        ax.set_title("", fontsize=18)
         ax.set_xticks(x)
         ax.legend(fontsize=8)
         ax.grid(axis="y", alpha=0.3)
@@ -596,14 +596,7 @@ def intervene_remove_bigram_subspace(
     sv_str = ", ".join(f"{s:.3f}" for s in S_bi[:max_k].numpy())
     prot_tag = (f", token_prot={token_protection_mode}"
                 if token_protection_mode != "none" else "")
-    fig.suptitle(
-        f"{feat_label} direction ablation in orth(task+token) "
-        f"(layer {layer}{prot_tag})\n"
-        f"Protected rank: task={rank} + token={token_basis_rank} = "
-        f"{protected_rank} | {feat_label} R²={fit_r2:.3f} | "
-        f"SVs: [{sv_str}]",
-        fontsize=11, y=1.05,
-    )
+    fig.suptitle("", fontsize=18, y=1.05)
     plt.tight_layout()
     if show:
         plt.show()
@@ -771,20 +764,14 @@ def plot_remove_bigram_subspace_across_layers(
                 ha="center", va="bottom", fontsize=10)
     ax.set_xlabel("Layer", fontsize=15)
     ax.set_ylabel("CE Loss Increase", fontsize=15)
-    ax.set_title(
-        f"Loss Increase from Removing {feature_type} Subspace", fontsize=14,
-    )
+    ax.set_title("", fontsize=18)
     ax.set_xticks(x)
     ax.set_xticklabels([str(l) for l in layers])
     ax.tick_params(labelsize=13)
     ax.legend(fontsize=10, loc="best")
     ax.grid(axis="y", alpha=0.3)
 
-    sup = title or (
-        f"Causal Intervention: Remove {feature_type} from "
-        f"orth(task+token) (latent, scale={scale})"
-    )
-    fig.suptitle(sup, fontsize=17, y=1.02)
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

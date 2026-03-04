@@ -465,10 +465,7 @@ def plot_intervention_remove_task_across_layers(
     ax.legend(fontsize=12)
     ax.grid(axis="y", alpha=0.3)
 
-    fig.suptitle(
-        title or f"Remove Task Subspace (latent, scale={scale})",
-        fontsize=16, y=1.02,
-    )
+    fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path:

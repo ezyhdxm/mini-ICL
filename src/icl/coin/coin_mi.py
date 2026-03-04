@@ -273,13 +273,11 @@ def plot_mi_vs_k_coin(
             alpha=0.7, label='H(next | Dirichlet belief state)')
     ax.plot(k_values, h_bayes, '^--', linewidth=1.5, markersize=6, color='orange',
             alpha=0.7, label='H(next | Bayesian predictor)')
-    ax.set_xlabel('k (log2 of number of minor tasks)', fontsize=12)
-    ax.set_ylabel('Bits', fontsize=12)
-    pos_label = ""
-    if min_position > 0 or max_position is not None:
-        pos_label = f", positions [{min_position}:{max_position}]"
-    ax.set_title(f'Benefit of Task Pool: Dirichlet vs Bayesian (Coin Task{pos_label})', fontsize=14)
-    ax.legend(fontsize=11)
+    ax.set_xlabel('k (log2 of number of minor tasks)', fontsize=16)
+    ax.set_ylabel('Bits', fontsize=16)
+    ax.set_title('')
+    ax.legend(fontsize=14)
+    ax.tick_params(labelsize=14)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
 

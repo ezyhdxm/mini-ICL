@@ -1,3 +1,4 @@
+from . import plot_config  # noqa: F401 - applies paper-friendly matplotlib defaults
 from .basic import get_hash
 from .linear_algebra_utils import effective_rank, stable_rank, get_stationary
 # from .attn_plots_beta import visualize_attention

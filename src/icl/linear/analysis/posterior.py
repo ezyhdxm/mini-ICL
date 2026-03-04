@@ -417,7 +417,7 @@ def plot_kl_model_vs_two_bayes_linear(
         hybrid_hi = mean_hybrid + std_hybrid
         ax.fill_between(pos, hybrid_lo, hybrid_hi, color="#d62728", alpha=0.2)
 
-        ax.set_title(f"Mode: {mode}", fontsize=12)
+        ax.set_title("", fontsize=18)
         ax.set_xlabel("Position", fontsize=11)
         ax.set_ylabel("KL(model || baseline)", fontsize=11)
         ax.grid(True, alpha=0.3)
@@ -529,12 +529,12 @@ def plot_kl_model_vs_two_bayes_linear_across_k(
             hybrid_hi = d["hybrid_mean"] + d["hybrid_std"]
             ax2.fill_between(x, hybrid_lo, hybrid_hi, color=c, alpha=0.15)
 
-    ax1.set_title(f"Exact known-pool Bayes | mode={mode}", fontsize=12)
+    ax1.set_title("", fontsize=18)
     ax1.set_xlabel("Position", fontsize=11)
     ax1.set_ylabel("KL(model || exact)", fontsize=11)
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_title(f"3-known + Gaussian-new | mode={mode}", fontsize=12)
+    ax2.set_title("", fontsize=18)
     ax2.set_xlabel("Position", fontsize=11)
     ax2.set_ylabel("KL(model || hybrid)", fontsize=11)
     ax2.grid(True, alpha=0.3)
@@ -646,7 +646,7 @@ def plot_task_posterior(
             ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize="small")
 
     axes.flat[-1].set_xlabel("Position t")
-    fig.suptitle(title or f"Linear task posterior — {exp_name}", fontsize=13, y=1.01)
+    fig.suptitle("", fontsize=18, y=1.01)
     fig.tight_layout()
 
     if show:
@@ -772,7 +772,7 @@ def plot_val_r2_across_layers(
         ax.grid(axis="y", alpha=0.3)
 
     if title:
-        fig.suptitle(title, fontsize=16, y=1.02)
+        fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path is not None:
@@ -1098,7 +1098,7 @@ def plot_task_variance(
     ax.grid(True, alpha=0.3)
 
     if title:
-        ax.set_title(title, fontsize=16)
+        ax.set_title("", fontsize=18)
 
     _show_or_close(fig, show)
 

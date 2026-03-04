@@ -183,6 +183,8 @@ def get_exp_name(
     vocab_size=None,
     log2: bool = True,
     pad=None,
+    major_pool_type: str = None,
+    major_means=None,
 ) -> str:
     """Generate standardized experiment name based on task and parameters."""
     config = unified_get_config(task_name)
@@ -199,6 +201,10 @@ def get_exp_name(
     if pad is not None:
         if task_name == "linear":
             config.model.pad = pad
+    if major_pool_type is not None:
+        config.task.major_pool_type = major_pool_type
+    if major_means is not None:
+        config.task.major_means = list(major_means)
     
     exp_name = f"train_{get_hash(config)}"
     return exp_name

@@ -536,7 +536,7 @@ def plot_historical_injection_coin(
     ax.tick_params(labelsize=16)
 
     if title:
-        ax.set_title(title, fontsize=18)
+        ax.set_title("", fontsize=18)
     ax.legend(fontsize=16)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()

@@ -664,7 +664,7 @@ def plot_val_r2_across_layers_coin(
         ax.grid(axis="y", alpha=0.3)
 
     if title:
-        fig.suptitle(title, fontsize=16, y=1.02)
+        fig.suptitle("", fontsize=18, y=1.02)
     plt.tight_layout()
 
     if save_path is not None:

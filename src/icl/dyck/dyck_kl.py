@@ -257,7 +257,7 @@ def plot_kl_model_vs_two_bayes_dyck(
         agn_hi = mean_agnostic + std_agnostic
         ax.fill_between(pos, agn_lo, agn_hi, color="#d62728", alpha=0.2)
 
-        ax.set_title(f"Mode: {mode}", fontsize=12)
+        ax.set_title("", fontsize=18)
         ax.set_xlabel("Dyck Position" if use_dyck_positions else "Position", fontsize=11)
         ax.set_ylabel("KL(model || baseline)", fontsize=11)
         ax.grid(True, alpha=0.3)
@@ -401,12 +401,12 @@ def plot_kl_model_vs_two_bayes_dyck_across_k(
         ax1.set_xticklabels(labels)
         ax2.set_xticklabels(labels)
 
-    ax1.set_title(f"Pool-aware Dyck Bayes | mode={mode}", fontsize=12)
+    ax1.set_title("", fontsize=18)
     ax1.set_xlabel("Dyck Position" if use_dyck_positions else "Position", fontsize=11)
     ax1.set_ylabel("KL(model || pool-aware)", fontsize=11)
     ax1.grid(True, alpha=0.3)
 
-    ax2.set_title(f"Major-aware, minor-agnostic | mode={mode}", fontsize=12)
+    ax2.set_title("", fontsize=18)
     ax2.set_xlabel("Dyck Position" if use_dyck_positions else "Position", fontsize=11)
     ax2.set_ylabel("KL(model || hybrid)", fontsize=11)
     ax2.grid(True, alpha=0.3)
