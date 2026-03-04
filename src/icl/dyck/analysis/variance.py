@@ -353,6 +353,7 @@ def compute_p1_variance_dyck(
     var_per_task_dict = {}
     var_pos_norm_dict = {}
     mean_norm_sq_dict = {}
+    mean_h_dict = {}
 
     for li in layers:
         mean_h = sum_h[li] / n.unsqueeze(2)
@@ -369,6 +370,7 @@ def compute_p1_variance_dyck(
         var_per_task_dict[li] = var_per_task
         var_pos_norm_dict[li] = var_pos_norm.tolist()
         mean_norm_sq_dict[li] = mean_norm_sq
+        mean_h_dict[li] = mean_h  # (n_tasks, n_pos, D)
 
     return {
         'layers': layers,
@@ -377,6 +379,7 @@ def compute_p1_variance_dyck(
         'var_pos_per_task': var_per_task_dict,
         'var_pos_norm': var_pos_norm_dict,
         'mean_norm_sq_per_task': mean_norm_sq_dict,
+        'mean_h_per_task': mean_h_dict,
         'n_tasks': n_tasks,
         'n_dyck_positions': min_n_pos,
         'n_masks': len(masks_info),
@@ -461,4 +464,219 @@ def plot_p1_variance_dyck(
         'results': results,
         'fig': fig,
         'ax': ax,
+    }
+
+
+def _compute_dyck_r2(results, prefix_k, sampler):
+    """Compute R² from pre-collected variance results.
+
+    Parameters
+    ----------
+    results : dict
+        Output of ``compute_p1_variance_dyck``.
+    prefix_k : int or None
+        Number of most-recent planted Dyck characters to condition on.
+        ``None`` means full prefix (equivalent to conditioning on task id).
+    sampler : DyckSampler
+        Needed to retrieve Dyck strings for prefix grouping.
+
+    Returns
+    -------
+    dict : ``{layer_idx: list of R² per Dyck position}``
+    """
+    eps = 1e-10
+    n_tasks = results['n_tasks']
+    n_pos = len(results['positions'])
+    n_per_cell = results['samples_per_task']
+
+    if prefix_k is None:
+        # Full prefix: each task is its own cell (same as before)
+        r2_dict = {}
+        for li in results['layers']:
+            var_per_task = results['var_pos_per_task'][li]
+            mean_h = results['mean_h_per_task'][li]
+            grand_mean = mean_h.mean(dim=0)
+            ss_between = (n_per_cell * ((mean_h - grand_mean.unsqueeze(0)) ** 2).sum(dim=-1)).sum(dim=0)
+            ss_within = (n_per_cell * var_per_task).sum(dim=0)
+            ss_total = ss_between + ss_within
+            r2_dict[li] = (1.0 - ss_within / (ss_total + eps)).tolist()
+        return r2_dict
+
+    # Truncated prefix: group tasks by last-k Dyck characters at each position
+    all_dyck_strings = []
+    for task_idx in range(n_tasks):
+        path = sampler.get_task_dyck_path(task_idx).cpu().tolist()
+        all_dyck_strings.append(path)
+
+    r2_dict = {}
+    for li in results['layers']:
+        var_per_task = results['var_pos_per_task'][li]   # (n_tasks, n_pos)
+        mean_h = results['mean_h_per_task'][li]          # (n_tasks, n_pos, D)
+        D = mean_h.shape[-1]
+
+        r2_per_pos = []
+        for j in range(n_pos):
+            # Build cell grouping by last-k prefix at Dyck position j
+            prefix_to_tasks = {}
+            for task_idx in range(n_tasks):
+                dyck_str = all_dyck_strings[task_idx]
+                start = max(0, j + 1 - prefix_k)
+                key = tuple(dyck_str[start:j + 1])
+                if key not in prefix_to_tasks:
+                    prefix_to_tasks[key] = []
+                prefix_to_tasks[key].append(task_idx)
+
+            # Compute grand mean at this position
+            grand_mean_j = mean_h[:, j, :].mean(dim=0)  # (D,)
+
+            ss_between_j = 0.0
+            ss_within_j = 0.0
+            for _prefix_key, task_ids in prefix_to_tasks.items():
+                n_group = len(task_ids)
+                # Group cell mean = weighted average of task cell means
+                group_mean = mean_h[task_ids, j, :].mean(dim=0)  # (D,)
+
+                # Between: this group vs grand mean
+                ss_between_j += n_group * n_per_cell * float(
+                    ((group_mean - grand_mean_j) ** 2).sum()
+                )
+
+                # Within: variance within each task (unchanged) +
+                #          variance of task means around group mean
+                for t_idx in task_ids:
+                    ss_within_j += n_per_cell * float(var_per_task[t_idx, j])
+                    ss_within_j += n_per_cell * float(
+                        ((mean_h[t_idx, j, :] - group_mean) ** 2).sum()
+                    )
+
+            ss_total_j = ss_between_j + ss_within_j
+            r2_j = 1.0 - ss_within_j / (ss_total_j + eps)
+            r2_per_pos.append(r2_j)
+
+        r2_dict[li] = r2_per_pos
+
+    return r2_dict
+
+
+def plot_task_vector_r2_dyck(
+    exp_name: str,
+    layers: Optional[Sequence[int]] = None,
+    prefix_k: Optional[int] = None,
+    batch_size: int = 64,
+    n_masks: int = 30,
+    step: Optional[int] = None,
+    n_minor: int = 0,
+    n_ood: int = 0,
+    verbose: bool = False,
+    figsize: tuple = (6, 4),
+    log_x: bool = False,
+    show: bool = True,
+    show_ylabel: bool = True,
+    print_summary: bool = True,
+) -> dict:
+    """Task-token vector R² for the Dyck task.
+
+    Measures what fraction of hidden-state variance at each Dyck position
+    is explained by conditioning on the last ``prefix_k`` planted Dyck
+    characters (and task identity when prefixes coincide).
+
+    Parameters
+    ----------
+    exp_name : str
+    layers : list of int, optional
+    prefix_k : int or None
+        Number of most-recent planted Dyck characters to condition on.
+        ``None`` (default) uses the full prefix, which is equivalent to
+        conditioning on task identity since the Dyck string is deterministic
+        per task.  Use ``prefix_k=1`` for current-token conditioning
+        (analogous to coin/latent), ``prefix_k=3`` for last-3, etc.
+    batch_size : int
+    n_masks : int
+    step : int, optional
+    n_minor : int
+    n_ood : int
+    verbose : bool
+    figsize, log_x, show, show_ylabel, print_summary : plot options
+
+    Returns
+    -------
+    dict
+        ``{'results', 'r2', 'prefix_k', 'fig'}``.
+    """
+    if not MATPLOTLIB_AVAILABLE:
+        raise ImportError("Matplotlib is not installed.")
+
+    results = compute_p1_variance_dyck(
+        exp_name=exp_name,
+        layers=layers,
+        B=batch_size,
+        n_masks=n_masks,
+        step=step,
+        n_minor=n_minor,
+        n_ood=n_ood,
+        verbose=verbose,
+    )
+
+    # Load sampler to get Dyck strings for prefix grouping
+    n_minor_val = n_minor if n_minor is not None else 1000000
+    if n_minor_val == -1:
+        n_minor_val = 0
+    sampler, _ = get_dyck_sampler(exp_name, n_minor_val, n_ood)
+
+    positions = results['positions']
+    r2_dict = _compute_dyck_r2(results, prefix_k, sampler)
+
+    prefix_label = f"k={prefix_k}" if prefix_k is not None else "full prefix"
+
+    if print_summary:
+        header = f"{'Layer':>6} {'Pos':>5} {'R²':>8}"
+        print("=" * len(header))
+        print(f"  Dyck task-token vector R² ({prefix_label})")
+        print("=" * len(header))
+        print(header)
+        print("-" * len(header))
+        for li in results['layers']:
+            for j, pos in enumerate(positions):
+                print(f"{li:>6} {pos:>5} {r2_dict[li][j]:>8.4f}")
+        print("=" * len(header))
+
+    _COLORS = [
+        "#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7",
+        "#56B4E9", "#F0E442", "#000000",
+    ]
+    _LINESTYLES = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    for i, li in enumerate(results['layers']):
+        ax.plot(
+            positions, r2_dict[li],
+            label=f"Layer {li}",
+            color=_COLORS[i % len(_COLORS)],
+            linestyle=_LINESTYLES[i % len(_LINESTYLES)],
+            linewidth=2.2,
+        )
+
+    ax.set_xlabel("Dyck position", fontsize=14)
+    if show_ylabel:
+        ax.set_ylabel("Task-token vector $R^2$", fontsize=14)
+    if log_x and len(positions) > 1:
+        ax.set_xscale("symlog", linthresh=1)
+    from matplotlib.ticker import MaxNLocator
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_ylim(None, 1.02)
+    ax.tick_params(labelsize=12)
+    ax.legend(fontsize=10, framealpha=0.9, loc="best",
+              borderaxespad=0.3, handlelength=1.8)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return {
+        'results': results,
+        'r2': r2_dict,
+        'prefix_k': prefix_k,
+        'fig': fig,
     }

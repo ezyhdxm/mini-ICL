@@ -33,6 +33,9 @@ from icl.coin.analysis.variance import (
     get_task_variance_coin,
     plot_task_variance_coin,
     plot_p1_variance_coin,
+    plot_task_vector_r2_coin,
+    plot_probe_fit_r2_coin,
+    plot_anova_separability_coin,
 )
 
 from icl.coin.analysis.trajectory import (
@@ -87,6 +90,9 @@ __all__ = [
     "get_task_variance_coin",
     "plot_task_variance_coin",
     "plot_p1_variance_coin",
+    "plot_task_vector_r2_coin",
+    "plot_probe_fit_r2_coin",
+    "plot_anova_separability_coin",
     # trajectory
     "traj_projection_plot_coin",
     "traj_posterior_projection_plot_coin",

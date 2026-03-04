@@ -115,6 +115,7 @@ def compute_hiddens_token_conditioned_coin(
     batch_size: int = 64,
     positions_of_interest: Sequence[int] = None,
     max_unique_tokens: int = None,
+    task_batch_size: int = 8,
 ) -> Tuple[torch.Tensor, dict]:
     """
     Token-conditioned hidden extraction on non-padded sequences.
@@ -149,6 +150,9 @@ def compute_hiddens_token_conditioned_coin(
         Position indices ``[0, seq_len-2]``.  ``None`` → all.
     max_unique_tokens : int, optional
         Cap on unique tokens per position.
+    task_batch_size : int
+        Number of tasks to batch into a single forward pass.
+        Higher = faster (better GPU utilisation) but uses more VRAM.
 
     Returns
     -------
@@ -177,7 +181,7 @@ def compute_hiddens_token_conditioned_coin(
     n_positions = len(positions_of_interest)
 
     # ------------------------------------------------------------------
-    # Step 1: collect tokens at each position across all tasks
+    # Step 1: collect tokens at each position across all tasks (CPU only)
     # ------------------------------------------------------------------
     all_tokens_by_position = {p: [] for p in positions_of_interest}
 
@@ -185,12 +189,8 @@ def compute_hiddens_token_conditioned_coin(
         demo_data, _ = sampler.generate(
             mode="testing", task=task_idx, num_samples=batch_size
         )
-        demo_data = demo_data.to(device)
-
         for pos_idx in positions_of_interest:
-            # Non-padded: real token is directly at pos_idx
-            tokens = demo_data[:, pos_idx]  # (batch_size,)
-            all_tokens_by_position[pos_idx].append(tokens)
+            all_tokens_by_position[pos_idx].append(demo_data[:, pos_idx])
 
     # ------------------------------------------------------------------
     # Step 2: find unique tokens per position
@@ -201,82 +201,67 @@ def compute_hiddens_token_conditioned_coin(
         unique_tokens = torch.unique(all_tokens, sorted=True)
 
         if max_unique_tokens is not None and len(unique_tokens) > max_unique_tokens:
-            indices = torch.randperm(len(unique_tokens), device=unique_tokens.device)[:max_unique_tokens]
+            indices = torch.randperm(len(unique_tokens))[:max_unique_tokens]
             unique_tokens = unique_tokens[indices]
 
         unique_tokens_by_position[pos_idx] = unique_tokens
 
+    del all_tokens_by_position
+
     max_unique_tokens_actual = max(len(ut) for ut in unique_tokens_by_position.values())
 
     # ------------------------------------------------------------------
-    # Storage
-    # ------------------------------------------------------------------
-    results_by_layer = {}
-    for l in layers:
-        results_by_layer[l] = {}
-        for pos_idx in positions_of_interest:
-            results_by_layer[l][pos_idx] = {}
-
-    # ------------------------------------------------------------------
-    # Step 3-4: fix token, extract hidden at the same real-token position
-    # ------------------------------------------------------------------
-    for pos_idx in positions_of_interest:
-        unique_tokens = unique_tokens_by_position[pos_idx]
-
-        fix_seq_pos = pos_idx        # non-padded: same as position index
-        extract_seq_pos = pos_idx    # extract at the real token itself
-
-        if extract_seq_pos >= seq_len:
-            continue
-
-        for token_idx, fixed_token_value in enumerate(unique_tokens):
-            for task_idx in range(n_tasks):
-                demo_data, _ = sampler.generate(
-                    mode="testing", task=task_idx, num_samples=batch_size
-                )
-                demo_data = demo_data.to(device)
-
-                modified_demo_data = demo_data.clone()
-                modified_demo_data[:, fix_seq_pos] = fixed_token_value
-
-                extract_pos_tensor = torch.tensor(
-                    [extract_seq_pos], device=device, dtype=torch.long
-                )
-                chunk_hiddens = extract_hidden_multi_coin_latent(
-                    model=model,
-                    batch_data=modified_demo_data,
-                    layers=layers,
-                    task_pos=extract_pos_tensor,
-                )  # (L, batch_size, 1, n_embd)
-
-                for l_idx, l in enumerate(layers):
-                    if token_idx not in results_by_layer[l][pos_idx]:
-                        results_by_layer[l][pos_idx][token_idx] = []
-                    hiddens_reshaped = chunk_hiddens[l_idx, :, 0, :]  # (batch_size, n_embd)
-                    results_by_layer[l][pos_idx][token_idx].append(hiddens_reshaped)
-
-    # ------------------------------------------------------------------
-    # Assemble output tensor
+    # Pre-allocate output on CPU to avoid GPU OOM
     # ------------------------------------------------------------------
     output_shape = (L, n_positions, max_unique_tokens_actual, n_tasks, batch_size, n_embd)
-    all_hiddens = torch.zeros(output_shape, dtype=torch.float32, device=device)
+    all_hiddens = torch.zeros(output_shape, dtype=torch.float32, device="cpu")
 
-    for l_idx, l in enumerate(layers):
-        for pos_idx_idx, pos_idx in enumerate(positions_of_interest):
-            n_unique = len(unique_tokens_by_position[pos_idx])
-            for token_idx in range(min(n_unique, max_unique_tokens_actual)):
-                task_results = results_by_layer[l][pos_idx][token_idx]
-                if task_results:
-                    combined = torch.stack(task_results, dim=0)  # (n_tasks, B, D)
-                    if combined.shape[0] < n_tasks:
-                        pad_tensor = torch.zeros(
-                            (n_tasks - combined.shape[0], batch_size, n_embd),
-                            dtype=combined.dtype, device=combined.device,
-                        )
-                        combined = torch.cat([combined, pad_tensor], dim=0)
-                    else:
-                        combined = combined[:n_tasks]
-                    all_hiddens[l_idx, pos_idx_idx, token_idx] = combined
+    # ------------------------------------------------------------------
+    # Step 3-4: fix token, batch tasks, extract hidden → CPU
+    # ------------------------------------------------------------------
+    for pos_idx_idx, pos_idx in enumerate(positions_of_interest):
+        unique_tokens = unique_tokens_by_position[pos_idx]
+
+        if pos_idx >= seq_len:
+            continue
+
+        extract_pos_tensor = torch.tensor(
+            [pos_idx], device=device, dtype=torch.long
+        )
+
+        for token_idx, fixed_token_value in enumerate(unique_tokens):
+            for t0 in range(0, n_tasks, task_batch_size):
+                t1 = min(t0 + task_batch_size, n_tasks)
+
+                batch_parts = []
+                for task_idx in range(t0, t1):
+                    demo_data, _ = sampler.generate(
+                        mode="testing", task=task_idx, num_samples=batch_size
+                    )
+                    demo_data[:, pos_idx] = fixed_token_value
+                    batch_parts.append(demo_data)
+
+                big_batch = torch.cat(batch_parts, dim=0).to(device)
+                del batch_parts
+
+                chunk_hiddens = extract_hidden_multi_coin_latent(
+                    model=model,
+                    batch_data=big_batch,
+                    layers=layers,
+                    task_pos=extract_pos_tensor,
+                )  # (L, (t1-t0)*batch_size, 1, n_embd)
+
+                h_cpu = chunk_hiddens[:, :, 0, :].cpu()  # (L, (t1-t0)*B, D)
+                del big_batch, chunk_hiddens
+
+                n_in_batch = t1 - t0
+                h_cpu = h_cpu.view(L, n_in_batch, batch_size, n_embd)
+                all_hiddens[:, pos_idx_idx, token_idx, t0:t1] = h_cpu
+
+                del h_cpu
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     token_info = {
         'positions': positions_of_interest,
@@ -291,7 +276,7 @@ def compute_hiddens_token_conditioned_coin(
         },
     }
 
-    return all_hiddens.detach().cpu(), token_info
+    return all_hiddens.detach(), token_info
 
 
 def _stable_rank_from_gram(gram: torch.Tensor) -> float:
@@ -586,6 +571,7 @@ def get_token_conditioned_hiddens_coin(
     n_minor: int = 0,
     step: Optional[int] = None,
     verbose: bool = False,
+    task_batch_size: int = 8,
 ) -> tuple:
     """
     Get token-conditioned hidden representations for Coin task (non-padded).
@@ -609,6 +595,8 @@ def get_token_conditioned_hiddens_coin(
         Capped at ``sampler.n_minor_tasks``.
     step : int, optional
     verbose : bool
+    task_batch_size : int
+        Number of tasks to batch into a single forward pass.
 
     Returns
     -------
@@ -648,6 +636,7 @@ def get_token_conditioned_hiddens_coin(
         batch_size=batch_size,
         positions_of_interest=positions_of_interest,
         max_unique_tokens=max_unique_tokens,
+        task_batch_size=task_batch_size,
     )
 
     if verbose:

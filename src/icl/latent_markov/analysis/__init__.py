@@ -17,6 +17,9 @@ from icl.latent_markov.analysis.variance import (
     plot_task_variance,
     get_token_conditioned_hiddens,
     plot_p1_variance,
+    plot_task_vector_r2_latent,
+    plot_probe_fit_r2_latent,
+    plot_anova_separability_latent,
     plot_w_variance_vs_position,
 )
 

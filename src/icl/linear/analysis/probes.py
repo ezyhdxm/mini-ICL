@@ -1136,6 +1136,327 @@ def get_task_variance(
     return all_hiddens, demo_data, results_dict, plotting_data
 
 
+# ---------------------------------------------------------------------------
+# Shared cached data collection for linear separability analyses
+# ---------------------------------------------------------------------------
+_linear_hiddens_cache: dict = {}
+
+
+def _get_linear_hiddens_cached(
+    exp_name: str,
+    layers: Optional[list],
+    batch_size: int,
+    chunk_size: int,
+    step: Optional[int],
+    n_minor: int,
+    n_ood: int,
+    verbose: bool,
+) -> tuple:
+    """Return (all_hiddens, demo_data, layers), reusing cache when params match."""
+    from icl.linear.analysis._helpers import _task_positions
+
+    if layers is not None:
+        layers = list(layers)
+
+    key = (
+        exp_name,
+        tuple(layers) if layers is not None else None,
+        batch_size,
+        n_minor,
+        n_ood,
+        step,
+    )
+    if key in _linear_hiddens_cache:
+        if verbose:
+            logger.info("[linear cache] reusing cached hiddens")
+        return _linear_hiddens_cache[key]
+
+    _, train_task, config = load_model_task_config(exp_name)
+
+    if step is None:
+        step = config.training.total_steps
+
+    model, _ = nu.load_checkpoint(
+        config, step=step, exp_name=exp_name, return_actual_step=True,
+    )
+
+    device = setup_device(None)
+    eval_task_pool, k_minor = _create_eval_task_pool(
+        train_task, K=n_ood, include_minor=True,
+        device=device, n_minor=n_minor,
+    )
+    eval_task = _setup_eval_task(config, eval_task_pool, batch_size, device)
+    eval_task.batch_size = batch_size
+
+    if layers is None:
+        layers = list(range(config.model.n_layer))
+
+    n_points = config.task.n_points
+    n_embd = config.model.n_embd
+    n_tasks = eval_task.task_pool.shape[0]
+    L = len(layers)
+    pad_mode = getattr(model, "pad", "mapsto")
+    task_pos = _task_positions(pad_mode, n_points, device=device)
+
+    if verbose:
+        logger.info(
+            f"linear hiddens: layers={layers}, B={batch_size}, "
+            f"n_tasks={n_tasks}, pad={pad_mode}"
+        )
+
+    all_hiddens = torch.empty(
+        (L, n_tasks, n_points, batch_size, n_embd),
+        dtype=torch.float32, device="cpu",
+    )
+    demo_data = eval_task.sample_data(step=step)
+
+    for i in range(0, n_tasks, chunk_size):
+        chunk_end = min(i + chunk_size, n_tasks)
+        chunk_n = chunk_end - i
+
+        demo_data_rep = (
+            demo_data.unsqueeze(0)
+            .expand(chunk_n, batch_size, n_points, -1)
+            .reshape(-1, n_points, demo_data.size(-1))
+        )
+
+        demo_target = eval_task.evaluate(
+            demo_data,
+            eval_task.task_pool[i:chunk_end].squeeze(-1).T,
+            step=step,
+        )
+        if demo_target.ndim == 3:
+            demo_target = demo_target.permute(2, 0, 1).reshape(-1, n_points)
+
+        h = extract_hidden_multi(
+            model=model, demo_data=demo_data_rep,
+            demo_target=demo_target, layers=layers, task_pos=task_pos,
+        )
+        h = h.reshape(L, chunk_n, batch_size, n_points, n_embd)
+        h = h.permute(0, 1, 3, 2, 4)
+        all_hiddens[:, i:chunk_end] = h.cpu()
+
+        del h
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    all_hiddens = all_hiddens.detach()
+
+    model.cpu(); del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    result = (all_hiddens, demo_data.cpu(), layers)
+    _linear_hiddens_cache.clear()
+    _linear_hiddens_cache[key] = result
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Task-vector R² for linear (uses full ANCOVA model R²)
+# ---------------------------------------------------------------------------
+
+def plot_task_vector_r2_linear(
+    exp_name: str,
+    layers: Optional[list] = None,
+    positions: Optional[list] = None,
+    batch_size: int = 64,
+    chunk_size: int = 16,
+    step: Optional[int] = None,
+    n_minor: int = 0,
+    n_ood: int = 0,
+    verbose: bool = False,
+    figsize: tuple = (6, 4),
+    log_x: bool = True,
+    show: bool = True,
+    show_ylabel: bool = True,
+    print_summary: bool = True,
+) -> dict:
+    """Task-token vector R² for the linear regression task.
+
+    For continuous covariates, the task-token vector R² is the R² of the
+    full ANCOVA model ``h = task_intercept + B_k x_t``, which allows
+    each task its own slope.  This measures what fraction of h's
+    variance is explained by knowing (task, x_t).
+
+    Results are cached: calling ``plot_ancova_separability_linear``
+    afterward with the same data parameters reuses the hidden states.
+
+    Parameters
+    ----------
+    exp_name : str
+    layers : list, optional
+    positions : list, optional
+    batch_size : int
+    chunk_size : int
+    step : int, optional
+    n_minor, n_ood : int
+    verbose : bool
+    figsize, log_x, show, show_ylabel, print_summary : plot options
+
+    Returns
+    -------
+    dict
+        ``{'all_hiddens', 'demo_data', 'ancova_results', 'fig'}``.
+    """
+    from icl.utils.separability import (
+        ancova_separability_from_hiddens,
+        print_ancova_summary,
+    )
+    import matplotlib.pyplot as plt
+
+    all_hiddens, demo_data, layers = _get_linear_hiddens_cached(
+        exp_name, layers, batch_size, chunk_size, step, n_minor, n_ood, verbose,
+    )
+
+    ancova_results = ancova_separability_from_hiddens(
+        all_hiddens=all_hiddens,
+        demo_data=demo_data,
+        layers=layers,
+        positions=positions,
+    )
+
+    if print_summary:
+        print_ancova_summary(ancova_results, positions=positions)
+
+    _COLORS = [
+        "#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7",
+        "#56B4E9", "#F0E442", "#000000",
+    ]
+    _LINESTYLES = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    sorted_layers = sorted(ancova_results.keys())
+    for i, l_num in enumerate(sorted_layers):
+        pos_results = ancova_results[l_num]
+        pos_list = sorted(pos_results.keys())
+        if not pos_list:
+            continue
+        r2_vals = [pos_results[p].r2_full for p in pos_list]
+        ax.plot(
+            pos_list, r2_vals, label=f"Layer {l_num}",
+            color=_COLORS[i % len(_COLORS)],
+            linestyle=_LINESTYLES[i % len(_LINESTYLES)],
+            linewidth=2.2,
+        )
+
+    ax.set_xlabel("Position", fontsize=14)
+    if show_ylabel:
+        ax.set_ylabel("Task-token vector $R^2$", fontsize=14)
+    if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
+        ax.set_xscale("symlog", linthresh=1)
+    ax.set_ylim(None, 1.02)
+    ax.tick_params(labelsize=12)
+    ax.legend(fontsize=10, framealpha=0.9, loc="best",
+              borderaxespad=0.3, handlelength=1.8)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return {
+        "all_hiddens": all_hiddens,
+        "demo_data": demo_data,
+        "ancova_results": ancova_results,
+        "fig": fig,
+    }
+
+
+# ---------------------------------------------------------------------------
+# ANCOVA separability for linear
+# ---------------------------------------------------------------------------
+
+def plot_ancova_separability_linear(
+    exp_name: str,
+    layers: Optional[list] = None,
+    positions: Optional[list] = None,
+    batch_size: int = 64,
+    chunk_size: int = 16,
+    step: Optional[int] = None,
+    n_minor: int = 0,
+    n_ood: int = 0,
+    verbose: bool = False,
+    figsize: tuple = (6, 4),
+    log_x: bool = True,
+    show: bool = True,
+    show_ylabel: bool = True,
+    print_summary: bool = True,
+) -> dict:
+    """ANCOVA slope-homogeneity test of additive separability for linear regression.
+
+    Compares an additive model ``h = task_intercept + B x_t`` (common slope)
+    against a full model ``h = task_intercept + B_k x_t`` (task-specific
+    slopes).  A small gap indicates that the effect of x_t on h is
+    task-independent, i.e. additive separability holds.
+
+    Results are cached: calling ``plot_task_vector_r2_linear`` beforehand
+    with the same data parameters reuses the hidden states.
+
+    Parameters
+    ----------
+    exp_name : str
+    layers : list, optional
+        ``None`` → all layers.
+    positions : list, optional
+        Point indices.  ``None`` → all data positions.
+    batch_size : int
+    chunk_size : int
+        Tasks per forward-pass chunk.
+    step : int, optional
+    n_minor : int
+    n_ood : int
+    verbose : bool
+    figsize : tuple
+    log_x : bool
+    show : bool
+    print_summary : bool
+
+    Returns
+    -------
+    dict
+        ``{'all_hiddens', 'demo_data', 'ancova_results',
+        'fig_gap', 'fig_r2'}``.
+    """
+    from icl.utils.separability import (
+        ancova_separability_from_hiddens,
+        plot_ancova_separability,
+        print_ancova_summary,
+    )
+
+    all_hiddens, demo_data, layers = _get_linear_hiddens_cached(
+        exp_name, layers, batch_size, chunk_size, step, n_minor, n_ood, verbose,
+    )
+
+    ancova_results = ancova_separability_from_hiddens(
+        all_hiddens=all_hiddens,
+        demo_data=demo_data,
+        layers=layers,
+        positions=positions,
+    )
+
+    if print_summary:
+        print_ancova_summary(ancova_results, positions=positions)
+
+    fig_gap, fig_r2 = plot_ancova_separability(
+        ancova_results,
+        figsize=figsize,
+        log_x=log_x,
+        show=show,
+        show_ylabel=show_ylabel,
+    )
+
+    return {
+        "all_hiddens": all_hiddens,
+        "demo_data": demo_data,
+        "ancova_results": ancova_results,
+        "fig_gap": fig_gap,
+        "fig_r2": fig_r2,
+    }
+
+
 def train_linear_softmax_posterior_predictor_linear(
     exp_name: str,
     layer: int,

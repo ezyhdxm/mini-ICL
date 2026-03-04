@@ -582,28 +582,39 @@ def unified_train(
     pad = None,
     major_pool_type: str = None,
     major_means = None,
+    quiet: bool = True,
 ):
-    config = unified_get_config(task_name)
-    if k >= 0:
-        if log2:
-            config.task.n_minor_tasks = 2 ** k
+    import os
+    _prev_wandb_silent = os.environ.get("WANDB_SILENT")
+    if quiet:
+        os.environ["WANDB_SILENT"] = "true"
+
+    try:
+        config = unified_get_config(task_name)
+        if k >= 0:
+            if log2:
+                config.task.n_minor_tasks = 2 ** k
+            else:
+                config.task.n_minor_tasks = k
         else:
-            config.task.n_minor_tasks = k
-    else:
-        config.task.n_minor_tasks = 1
-        config.task.p_minor = 1e-12  # Practically no minor tasks
-    if pad is not None:
+            config.task.n_minor_tasks = 1
+            config.task.p_minor = 1e-12  # Practically no minor tasks
+        if pad is not None:
+            if task_name == "linear":
+                config.model.pad = pad  # "bos", "mapsto", or "none"
+        if major_pool_type is not None:
+            config.task.major_pool_type = major_pool_type
+        if major_means is not None:
+            config.task.major_means = list(major_means)
         if task_name == "linear":
-            config.model.pad = pad  # "bos", "mapsto", or "none"
-    if major_pool_type is not None:
-        config.task.major_pool_type = major_pool_type
-    if major_means is not None:
-        config.task.major_means = list(major_means)
-    if task_name == "linear":
-        return train(config)
-    else:
-        config.vocab_size = vocab_size
-        model = Transformer(config)
-        model = model.to(config.device)
-        return train_model_with_plot(model, config, show=False, verbose=False)
-    
+            return train(config)
+        else:
+            config.vocab_size = vocab_size
+            model = Transformer(config)
+            model = model.to(config.device)
+            return train_model_with_plot(model, config, show=False, verbose=False)
+    finally:
+        if _prev_wandb_silent is None:
+            os.environ.pop("WANDB_SILENT", None)
+        else:
+            os.environ["WANDB_SILENT"] = _prev_wandb_silent

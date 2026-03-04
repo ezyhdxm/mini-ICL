@@ -13,6 +13,8 @@ from icl.linear.analysis.probes import (  # noqa: F401
     train_linear_hidden_predictor,
     get_task_variance,
     probe_gaussian_posterior,
+    plot_task_vector_r2_linear,
+    plot_ancova_separability_linear,
 )
 
 # -- token-conditioned hiddens (P1 variance utility) ------------------------
