@@ -519,4 +519,6 @@ from icl.coin.coin_mi import (  # noqa: F401,E402
 from icl.coin.coin_kl import (  # noqa: F401,E402
     plot_kl_model_vs_two_bayes_coin,
     plot_kl_model_vs_two_bayes_coin_across_k,
+    plot_kl_model_vs_two_bayes_coin_over_steps,
+    plot_kl_model_vs_two_bayes_coin_transition_across_k,
 )

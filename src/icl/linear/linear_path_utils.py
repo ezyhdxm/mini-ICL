@@ -76,8 +76,8 @@ def load_checkpoint(exp_name, checkpoint_file):
     checkpoint_path = os.path.join(exp_dir, checkpoint_file)
     _, train_task, config = load_model_task_config(exp_name)
 
-    checkpoint = torch.load(checkpoint_path, map_location="cuda", weights_only=True)
+    checkpoint = torch.load(checkpoint_path, map_location=config.device, weights_only=True)
     model = get_model(**config["model"], dtype=torch.float32)
     model.load_state_dict(checkpoint["model"])
-    model = model.to("cuda")
+    model = model.to(config.device)
     return model, config, train_task

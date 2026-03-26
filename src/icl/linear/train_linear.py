@@ -11,6 +11,7 @@ from icl.linear.lr_models import get_model
 from icl.linear.lr_optimize import get_optimizer_and_lr_schedule
 from icl.linear.lr_eval import get_bsln_preds, get_model_preds, mse
 from icl.linear.lr_utils import tabulate_model
+from icl.utils.basic import canonicalize_config_for_exp
 from icl.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -76,9 +77,11 @@ def _init_log(bsln_preds: Preds, n_dims: int) -> dict:
     """
     Initialize log dictionary for evaluation metrics.
 
-    Tracks clean scalar ID/OOD losses per eval step plus one-time baseline
-    comparisons.  Per-position MSE curves are stored under ``*_per_pos``
-    keys for downstream analysis.
+    Tracks per eval step:
+    - eval/IDLoss, eval/OODLoss, eval/MinorLoss: RMSE(model_pred, noisy_targets).
+      Floor = task noise_scale (irreducible error). Same eval batches each step.
+    - eval/ID_oracle, eval/OOD_oracle, eval/Minor_oracle: RMSE(model_pred, clean x@w).
+    Per-position MSE under ``*_per_pos``; baseline comparisons in ``eval/baseline``.
     """
     log = {
         "train/step": [], "train/lr": [], "train/loss": [],
@@ -160,8 +163,12 @@ def train(config: ConfigDict, verbose=False) -> None:
     Returns:
         Trained model and training logs dictionary
     """
+    # Use canonical device for exp_name and saved config so hashes match get_exp_name()
+    # (device is runtime-only; cuda:0 vs cuda:1 must not change experiment identity)
+    runtime_device = config.device
+    canonicalize_config_for_exp(config)
     exp_name = f"train_{get_hash(config)}"
-    exp_dir = os.path.join(config.work_dir, exp_name)   
+    exp_dir = os.path.join(config.work_dir, exp_name)
 
     cur_dir = os.getcwd()
     if cur_dir.endswith("notebooks"):
@@ -184,13 +191,14 @@ def train(config: ConfigDict, verbose=False) -> None:
         logger.debug(f"Loaded model from {checkpoint_path}")
         return model, (json.load(open(log_path, "r")), checkpoint_path)
     
-    # Save config
+    # Save config (with canonical device so downstream get_exp_name / load match)
     os.makedirs(exp_dir, exist_ok=True)
     with open(os.path.join(exp_dir, "config.json"), "w") as f:
         f.write(config.to_json())
+    config.device = runtime_device  # restore for training on the requested GPU
 
-    # Model, optimizer, schedule
-    model = get_model(**config["model"], dtype=data_type)
+    # Model, optimizer, schedule (pass device so model is built on correct GPU for parallel training)
+    model = get_model(**config["model"], dtype=data_type, device=config.device)
     model = model.to(config.device)
     if verbose:
         logger.info(tabulate_model(model, config["task"]["n_dims"], config["task"]["n_points"], config["task"]["batch_size"]))
@@ -218,10 +226,24 @@ def train(config: ConfigDict, verbose=False) -> None:
     if verbose:
         logger.info("Initialized data samplers")
 
-    # Evaluate baselines
+    # Evaluate baselines (same eval samplers + seeds used later for get_model_preds at each eval step)
     if verbose:
         logger.info("Evaluating baselines...")
     bsln_preds = get_bsln_preds(train_task, samplers_eval, config["eval"]["n_samples"], config["eval"]["batch_size"])
+
+    # Sanity: oracle vs noisy targets should have RMSE ≈ noise_scale (irreducible error)
+    noise_scale = config["task"]["noise_scale"]
+    for _name, _key in [("OOD", "Latent"), ("ID", "Pretrain")]:
+        if _key not in bsln_preds:
+            continue
+        true_ = bsln_preds[_key]["True"]
+        tgt_ = bsln_preds[_key]["targets"]
+        baseline_rmse = mse(true_, tgt_).mean().item() ** 0.5
+        if abs(baseline_rmse - noise_scale) > 0.15:
+            logger.warning(
+                f"eval/{_name}: RMSE(oracle, targets)={baseline_rmse:.4f} (expected ≈ noise_scale={noise_scale}); "
+                "check that 'True' and 'targets' are clean and noisy from the same batches."
+            )
 
     # Logging
     n_dims = config["task"]["n_dims"]
@@ -235,19 +257,50 @@ def train(config: ConfigDict, verbose=False) -> None:
     id_oracle_rmse = None
     if "Pretrain" in bsln_preds:
         id_oracle_rmse = mse(bsln_preds["Pretrain"]["True"], bsln_preds["Pretrain"]["targets"]).mean().item() ** 0.5
-    log["eval/ID_oracle"] = id_oracle_rmse
-    log["eval/OOD_oracle"] = ood_oracle_rmse
-    wandb.log({"eval/OOD_oracle": ood_oracle_rmse}, step=0)
+    log["eval/ID_oracle_baseline"] = id_oracle_rmse
+    log["eval/OOD_oracle_baseline"] = ood_oracle_rmse
+    wandb.log({"eval/OOD_oracle_baseline": ood_oracle_rmse}, step=0)
     if id_oracle_rmse is not None:
         logger.info(f"Oracle RMSE — ID: {id_oracle_rmse:.4f}, OOD: {ood_oracle_rmse:.4f}")
-        wandb.log({"eval/ID_oracle": id_oracle_rmse}, step=0)
+        wandb.log({"eval/ID_oracle_baseline": id_oracle_rmse}, step=0)
     else:
         logger.info(f"Oracle RMSE — OOD: {ood_oracle_rmse:.4f}")
+
+    # Batch size schedule: list of (step, batch_size) transitions
+    bs_schedule = config["training"].get("batch_size_schedule", None)
+    if bs_schedule:
+        bs_schedule = sorted(bs_schedule, key=lambda x: x[0])
+        logger.info(f"Batch size schedule: {[(s, b) for s, b in bs_schedule]}")
+
+    # p_minor schedule: list of (step, p_minor) transitions
+    pm_schedule = config["training"].get("p_minor_schedule", None)
+    if pm_schedule:
+        pm_schedule = sorted(pm_schedule, key=lambda x: x[0])
+        logger.info(f"p_minor schedule: {[(s, p) for s, p in pm_schedule]}")
+
+    def _get_scheduled_value(schedule, default, step):
+        if not schedule:
+            return None
+        current = default
+        for s, v in schedule:
+            if step >= s:
+                current = v
+            else:
+                break
+        return current
 
     # Training loop
     logger.info("Start training...")
     for i in range(1, config["training"]["total_steps"] + 1):
         step += 1
+        scheduled_bs = _get_scheduled_value(bs_schedule, config["task"]["batch_size"], i)
+        if scheduled_bs is not None and train_task.batch_size != scheduled_bs:
+            logger.info(f"Step {i}: batch_size changed {train_task.batch_size} -> {scheduled_bs}")
+            train_task.batch_size = scheduled_bs
+        scheduled_pm = _get_scheduled_value(pm_schedule, config["task"].get("p_minor", 0.0), i)
+        if scheduled_pm is not None and train_task.p_minor != scheduled_pm:
+            logger.info(f"Step {i}: p_minor changed {train_task.p_minor} -> {scheduled_pm}")
+            train_task.p_minor = scheduled_pm
         data, _, targets = sample_train_batch(i)
         data = data.to(config.device)
         targets = targets.to(config.device)
@@ -258,6 +311,9 @@ def train(config: ConfigDict, verbose=False) -> None:
         loss = torch.mean((preds - targets) ** 2)
 
         loss.backward()
+        max_grad_norm = config["training"].get("max_grad_norm", None)
+        if max_grad_norm is not None and max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
         scheduler.step()
 
@@ -273,13 +329,26 @@ def train(config: ConfigDict, verbose=False) -> None:
                 model, eval_step, samplers_eval, config["eval"]["n_samples"], config["eval"]["batch_size"]
             )
 
+            # IDLoss / OODLoss = RMSE(transformer predictions, noisy targets).
+            # Best achievable RMSE = config["task"]["noise_scale"] (irreducible error).
+            # Oracle metrics = RMSE(predictions, clean x@w) for the same batches (from bsln_preds).
+            # Eval and baseline use the same deterministic eval samplers, so sample counts align.
+
             # OOD RMSE(transformer, noisy_targets) + oracle RMSE(transformer, x@w)
             ood_preds = eval_preds["Latent"]["Transformer"]
             ood_targets = eval_preds["Latent"]["targets"].to(config.device)
             ood_oracle = bsln_preds["Latent"]["True"].to(config.device)
+            assert ood_preds.shape == ood_targets.shape == ood_oracle.shape, (
+                "OOD shape mismatch: preds/targets/oracle must align (same eval sample count)."
+            )
             ood_mse = mse(ood_preds, ood_targets)
             ood_rmse = ood_mse.mean().item() ** 0.5
-            ood_oracle_rmse = mse(ood_preds, ood_oracle).mean().item() ** 0.5
+            ood_oracle_mse_per_pos = mse(ood_preds, ood_oracle)
+            ood_oracle_rmse = ood_oracle_mse_per_pos.mean().item() ** 0.5
+            ood_oracle_rmse_skip0 = ood_oracle_mse_per_pos[1:].mean().item() ** 0.5
+            ood_oracle_rmse_skip5 = ood_oracle_mse_per_pos[5:].mean().item() ** 0.5
+            ood_oracle_rmse_skip20 = ood_oracle_mse_per_pos[20:].mean().item() ** 0.5
+            ood_oracle_rmse_last15 = ood_oracle_mse_per_pos[-15:].mean().item() ** 0.5
             log["eval/OODLoss"].append(ood_rmse)
             log["eval/OODLoss_per_pos"].append(ood_mse.sqrt().tolist())
             log["eval/OOD_oracle"].append(ood_oracle_rmse)
@@ -291,9 +360,17 @@ def train(config: ConfigDict, verbose=False) -> None:
                 id_preds = eval_preds["Pretrain"]["Transformer"]
                 id_targets = eval_preds["Pretrain"]["targets"].to(config.device)
                 id_oracle = bsln_preds["Pretrain"]["True"].to(config.device)
+                assert id_preds.shape == id_targets.shape == id_oracle.shape, (
+                    "ID shape mismatch: preds/targets/oracle must align (same eval sample count)."
+                )
                 id_mse = mse(id_preds, id_targets)
                 id_rmse = id_mse.mean().item() ** 0.5
-                id_oracle_rmse = mse(id_preds, id_oracle).mean().item() ** 0.5
+                id_oracle_mse_per_pos = mse(id_preds, id_oracle)
+                id_oracle_rmse = id_oracle_mse_per_pos.mean().item() ** 0.5
+                id_oracle_rmse_skip0 = id_oracle_mse_per_pos[1:].mean().item() ** 0.5
+                id_oracle_rmse_skip5 = id_oracle_mse_per_pos[5:].mean().item() ** 0.5
+                id_oracle_rmse_skip20 = id_oracle_mse_per_pos[20:].mean().item() ** 0.5
+                id_oracle_rmse_last15 = id_oracle_mse_per_pos[-15:].mean().item() ** 0.5
                 log["eval/IDLoss"].append(id_rmse)
                 log["eval/IDLoss_per_pos"].append(id_mse.sqrt().tolist())
                 log["eval/ID_oracle"].append(id_oracle_rmse)
@@ -305,9 +382,17 @@ def train(config: ConfigDict, verbose=False) -> None:
                 minor_preds = eval_preds["Minor"]["Transformer"]
                 minor_targets = eval_preds["Minor"]["targets"].to(config.device)
                 minor_oracle = bsln_preds["Minor"]["True"].to(config.device)
+                assert minor_preds.shape == minor_targets.shape == minor_oracle.shape, (
+                    "Minor shape mismatch: preds/targets/oracle must align."
+                )
                 minor_mse = mse(minor_preds, minor_targets)
                 minor_rmse = minor_mse.mean().item() ** 0.5
-                minor_oracle_rmse = mse(minor_preds, minor_oracle).mean().item() ** 0.5
+                minor_oracle_mse_per_pos = mse(minor_preds, minor_oracle)
+                minor_oracle_rmse = minor_oracle_mse_per_pos.mean().item() ** 0.5
+                minor_oracle_rmse_skip0 = minor_oracle_mse_per_pos[1:].mean().item() ** 0.5
+                minor_oracle_rmse_skip5 = minor_oracle_mse_per_pos[5:].mean().item() ** 0.5
+                minor_oracle_rmse_skip20 = minor_oracle_mse_per_pos[20:].mean().item() ** 0.5
+                minor_oracle_rmse_last15 = minor_oracle_mse_per_pos[-15:].mean().item() ** 0.5
                 log["eval/MinorLoss"].append(minor_rmse)
                 log["eval/MinorLoss_per_pos"].append(minor_mse.sqrt().tolist())
                 log["eval/Minor_oracle"].append(minor_oracle_rmse)
@@ -323,18 +408,22 @@ def train(config: ConfigDict, verbose=False) -> None:
                         errs = mse(eval_preds[task_name]["Transformer"], bsln_target) / n_dims
                         wandb.log({f"eval/{task_name}/vs_{bsln_name}": errs.mean().item()}, step=i)
 
-            # Console output (every 2000 steps to reduce noise)
-            log_every = config["eval"].get("log_every", 2000)
+            log_every = config["eval"].get("log_every", 800)
             if i % log_every == 0 or i == config["training"]["total_steps"]:
                 msg = f"Step {i}: train_loss={loss.item():.4f}"
                 if has_id:
-                    msg += f", ID={id_rmse:.4f}|{id_oracle_rmse:.4f}"
+                    msg += f", ID={id_rmse:.4f}|{id_oracle_rmse:.4f}|{id_oracle_rmse_skip0:.4f}|{id_oracle_rmse_skip5:.4f}|{id_oracle_rmse_skip20:.4f}|{id_oracle_rmse_last15:.4f}"
                 if has_minor_eval:
-                    msg += f", Minor={minor_rmse:.4f}|{minor_oracle_rmse:.4f}"
-                msg += f", OOD={ood_rmse:.4f}|{ood_oracle_rmse:.4f}"
+                    msg += f", Minor={minor_rmse:.4f}|{minor_oracle_rmse:.4f}|{minor_oracle_rmse_skip0:.4f}|{minor_oracle_rmse_skip5:.4f}|{minor_oracle_rmse_skip20:.4f}|{minor_oracle_rmse_last15:.4f}"
+                msg += f", OOD={ood_rmse:.4f}|{ood_oracle_rmse:.4f}|{ood_oracle_rmse_skip0:.4f}|{ood_oracle_rmse_skip5:.4f}|{ood_oracle_rmse_skip20:.4f}|{ood_oracle_rmse_last15:.4f}"
                 logger.info(msg)
         
-        if (i % config["eval"].get("save_every", 1000) == 0):
+        _save_every = config["eval"].get("save_every", 1000)
+        _sparse_after    = 10_000   # hardcoded — not in config (would break hashing)
+        _sparse_interval = 1_000
+        _do_save = (i % _save_every == 0 and i <= _sparse_after) or \
+                   (i > _sparse_after and i % _sparse_interval == 0)
+        if _do_save:
             torch.save({
                 "model": model.state_dict(), 
                 "step": step,
@@ -354,5 +443,8 @@ def train(config: ConfigDict, verbose=False) -> None:
         json.dump(log, f, indent=2)
 
     logger.info("Training complete.")
-
+    try:
+        wandb.finish()
+    except Exception:
+        pass
     return model, log

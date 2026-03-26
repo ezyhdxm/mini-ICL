@@ -7,10 +7,14 @@ import numpy as np
 import torch
 
 
-def _show_or_close(fig, show: bool):
-    """``tight_layout`` + show or close a figure."""
+def _show_or_close(fig, show: bool, tight: bool = True):
+    """Optionally call ``tight_layout``, then show or close a figure."""
     import matplotlib.pyplot as plt
-    fig.tight_layout()
+    if tight:
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
     if show:
         plt.show()
     else:
@@ -103,7 +107,7 @@ def _temporary_linear_minor_task_setup(
 
         include_minor = train_task.n_minor_tasks > 0 and train_task.minor_pool is not None
         n_tasks_total = train_task.n_tasks + (train_task.n_minor_tasks if include_minor else 0)
-        yield include_minor, n_tasks_total
+        yield include_minor, n_tasks_total, original_p_minor
     finally:
         train_task.minor_pool = original_minor_pool
         train_task.n_minor_tasks = original_n_minor_tasks

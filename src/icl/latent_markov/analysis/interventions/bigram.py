@@ -88,6 +88,8 @@ def intervene_remove_bigram_subspace(
     method: str = "direct",
     ablation_max_k: int = 10,
     scale: float = 1.0,
+    extraction_point: str = "post_attn",
+    probe_method: str = "ols",
     show: bool = True,
     figsize: tuple = (14, 6),
     print_summary: bool = True,
@@ -160,73 +162,133 @@ def intervene_remove_bigram_subspace(
     vocab_size = int(sampler_major.num_states)
 
     if fit_positions is None:
-        fit_positions = list(range(max(0, seq_len // 2), seq_len))
+        # Averaging requires p < seq_len-1 (get_token_conditioned_hiddens constraint)
+        upper = seq_len - 1 if probe_method == "averaging" else seq_len
+        fit_positions = list(range(max(0, seq_len // 2), upper))
     if eval_positions is None:
         eval_positions = list(range(seq_len))
     if 0 not in eval_positions:
         eval_positions = [0] + list(eval_positions)
 
-    # ---- 2. Fit task subspace --------------------------------------------------
-    fit_res = train_linear_hidden_predictor(
-        exp_name=exp_name,
-        layer=layer,
-        n_samples=fit_n_samples,
-        positions=fit_positions,
-        sample_mode="major",
-        n_minor=-1,
-        step=step,
-        print_summary=False,
-        skip_baselines=True,
-    )
-    W_fit = fit_res["model_weight"].float()  # (K_major, D)
-    if center_task_vecs:
-        task_vecs = W_fit - W_fit.mean(dim=0, keepdim=True)
-    else:
-        task_vecs = W_fit.clone()
-    _, S_tv, Vt_tv = torch.linalg.svd(task_vecs, full_matrices=False)
-    rank = int((S_tv > 1e-6 * S_tv[0]).sum().item())
-    basis = Vt_tv[:rank].T  # (D, rank)
+    # ---- Extraction-point helper -----------------------------------------------
+    def _layer_module():
+        return (model.layers[layer]
+                if extraction_point == "post_mlp"
+                else model.layers[layer].attn_block)
 
-    # ---- 3. Token protection ---------------------------------------------------
-    tok_pos_idx = torch.tensor(fit_positions, device=device, dtype=torch.long)
-    all_h_tok, all_oh_tok = [], []
-    n_tok_batches = (min(fit_n_samples, 2000) + B - 1) // B
-    for _ in range(n_tok_batches):
-        gen_out = sampler_major.generate(
-            mode="major", task=None, num_samples=B, epochs=1,
+    # ---- 2+3. Task & token subspaces -------------------------------------------
+    if probe_method == "averaging":
+        logger.info("[bigram-removal] Fitting subspaces via ANOVA averaging ...")
+        from icl.latent_markov.analysis.variance import get_token_conditioned_hiddens
+
+        all_hiddens_anova, anova_info = get_token_conditioned_hiddens(
+            exp_name, layers=[layer], batch_size=B,
+            positions_of_interest=fit_positions,
+            step=step, n_minor=0,
+            extraction_point=extraction_point,
         )
-        samp = gen_out[0] if isinstance(gen_out, (tuple, list)) else gen_out
-        if samp.dim() == 3:
-            samp = samp.squeeze(0)
-        samp = samp.to(device)
-        cache = {}
-        def _tok_hook(module, inp, out, _cache=cache):
-            h = out if torch.is_tensor(out) else out[0]
-            _cache["h"] = h.index_select(1, tok_pos_idx).detach()
-        handle = model.layers[layer].attn_block.register_forward_hook(_tok_hook)
-        try:
-            with torch.no_grad():
-                model(samp)
-        finally:
-            handle.remove()
-        tokens_at_pos = samp[:, tok_pos_idx].long()
-        oh = torch.nn.functional.one_hot(
-            tokens_at_pos, num_classes=vocab_size,
-        ).float()
-        all_h_tok.append(cache["h"].cpu())
-        all_oh_tok.append(oh.cpu())
-        del samp
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # all_hiddens_anova: (1, n_positions, V_max, n_major, B, D)
+        pos_to_anova = {p: i for i, p in enumerate(anova_info["positions"])}
+        n_uniq = anova_info["n_unique_tokens"]
+        V_max = all_hiddens_anova.shape[2]
+        n_major_anova = all_hiddens_anova.shape[3]
 
-    H_tok = torch.cat(all_h_tok, 0).reshape(-1, D).float()
-    OH_tok = torch.cat(all_oh_tok, 0).reshape(-1, vocab_size).float()
-    del all_h_tok, all_oh_tok
+        parts = []
+        for p in fit_positions:
+            if p not in pos_to_anova:
+                continue
+            pi = pos_to_anova[p]
+            V_p = n_uniq.get(p, V_max)
+            # cell_means: (V_p, K, D) — average over the batch dimension
+            parts.append(
+                all_hiddens_anova[0, pi, :V_p, :n_major_anova].float().mean(dim=-2)
+            )
+        if not parts:
+            raise ValueError(
+                "[bigram-removal] probe_method='averaging': no fit_positions "
+                "found in token-conditioned hiddens."
+            )
+        del all_hiddens_anova
 
-    OH_aug = torch.cat([OH_tok, torch.ones(OH_tok.shape[0], 1)], dim=1)
-    W_tok_aug = torch.linalg.pinv(OH_aug) @ H_tok
-    W_tok_dir = W_tok_aug[:-1].T  # (D, V)
+        min_V = min(p.shape[0] for p in parts)
+        parts = [p[:min_V] for p in parts]
+        demeaned = [cm - cm.mean(dim=(0, 1), keepdim=True) for cm in parts]
+        pooled = torch.stack(demeaned, dim=0).mean(dim=0)  # (V, K, D)
+        grand = pooled.mean(dim=(0, 1))
+        task_vecs  = pooled.mean(dim=0) - grand   # (K, D)
+        token_vecs = pooled.mean(dim=1) - grand   # (V, D)
 
+        if center_task_vecs:
+            task_vecs = task_vecs - task_vecs.mean(dim=0, keepdim=True)
+        _, S_tv, Vt_tv = torch.linalg.svd(task_vecs, full_matrices=False)
+        rank = int((S_tv > 1e-6 * S_tv[0]).sum().item())
+        basis = Vt_tv[:rank].T  # (D, rank)
+        W_tok_dir = token_vecs.T  # (D, V)
+
+    else:
+        # OLS joint probe
+        logger.info("[bigram-removal] Fitting task subspace via OLS ...")
+        fit_res = train_linear_hidden_predictor(
+            exp_name=exp_name,
+            layer=layer,
+            n_samples=fit_n_samples,
+            positions=fit_positions,
+            sample_mode="major",
+            n_minor=-1,
+            step=step,
+            print_summary=False,
+            skip_baselines=True,
+        )
+        W_fit = fit_res["model_weight"].float()  # (K_major, D)
+        if center_task_vecs:
+            task_vecs = W_fit - W_fit.mean(dim=0, keepdim=True)
+        else:
+            task_vecs = W_fit.clone()
+        _, S_tv, Vt_tv = torch.linalg.svd(task_vecs, full_matrices=False)
+        rank = int((S_tv > 1e-6 * S_tv[0]).sum().item())
+        basis = Vt_tv[:rank].T  # (D, rank)
+
+        # Token directions via hidden-state → one-hot regression
+        tok_pos_idx = torch.tensor(fit_positions, device=device, dtype=torch.long)
+        all_h_tok, all_oh_tok = [], []
+        n_tok_batches = (min(fit_n_samples, 2000) + B - 1) // B
+        for _ in range(n_tok_batches):
+            gen_out = sampler_major.generate(
+                mode="major", task=None, num_samples=B, epochs=1,
+            )
+            samp = gen_out[0] if isinstance(gen_out, (tuple, list)) else gen_out
+            if samp.dim() == 3:
+                samp = samp.squeeze(0)
+            samp = samp.to(device)
+            cache = {}
+            def _tok_hook(module, inp, out, _cache=cache):
+                h = out if torch.is_tensor(out) else out[0]
+                _cache["h"] = h.index_select(1, tok_pos_idx).detach()
+            handle = _layer_module().register_forward_hook(_tok_hook)
+            try:
+                with torch.no_grad():
+                    model(samp)
+            finally:
+                handle.remove()
+            tokens_at_pos = samp[:, tok_pos_idx].long()
+            oh = torch.nn.functional.one_hot(
+                tokens_at_pos, num_classes=vocab_size,
+            ).float()
+            all_h_tok.append(cache["h"].cpu())
+            all_oh_tok.append(oh.cpu())
+            del samp
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        H_tok = torch.cat(all_h_tok, 0).reshape(-1, D).float()
+        OH_tok = torch.cat(all_oh_tok, 0).reshape(-1, vocab_size).float()
+        del all_h_tok, all_oh_tok
+        OH_aug = torch.cat([OH_tok, torch.ones(OH_tok.shape[0], 1)], dim=1)
+        W_tok_aug = torch.linalg.pinv(OH_aug) @ H_tok
+        W_tok_dir = W_tok_aug[:-1].T  # (D, V)
+        del H_tok, OH_tok, OH_aug, W_tok_aug
+
+    # ---- Token protection (shared by both probe methods) -----------------------
     token_basis = torch.empty(D, 0, dtype=torch.float32)
     token_basis_rank = 0
 
@@ -261,7 +323,6 @@ def intervene_remove_bigram_subspace(
     )
     U_orth = eig_vecs[:, eig_vals > 0.5]  # (D, orth_dim)
     orth_dim = U_orth.shape[1]
-    del H_tok, OH_tok, OH_aug, W_tok_aug
 
     logger.info(
         f"[bigram-removal] Protected subspace: task={rank}, "
@@ -309,7 +370,7 @@ def intervene_remove_bigram_subspace(
             h = out if torch.is_tensor(out) else out[0]
             _cache["h"] = h.index_select(1, eval_pos_idx).detach()
 
-        handle = model.layers[layer].attn_block.register_forward_hook(_h_hook)
+        handle = _layer_module().register_forward_hook(_h_hook)
         try:
             with torch.no_grad():
                 model(samp)
@@ -385,7 +446,7 @@ def intervene_remove_bigram_subspace(
                     return h_mod
                 return (h_mod,) + out[1:]
 
-            handle = model.layers[layer].attn_block.register_forward_hook(hook_fn)
+            handle = _layer_module().register_forward_hook(hook_fn)
             try:
                 with torch.no_grad():
                     logits_int = model(samples)
@@ -676,6 +737,8 @@ def plot_remove_bigram_subspace_across_layers(
     bigram_alpha: float = 0.5,
     feature_type: str = "bigram_clr",
     scale: float = 1.0,
+    extraction_point: str = "post_attn",
+    probe_method: str = "ols",
     figsize: tuple = (10, 6),
     show: bool = True,
     title: Optional[str] = None,
@@ -715,6 +778,8 @@ def plot_remove_bigram_subspace_across_layers(
             feature_type=feature_type,
             method="direct",
             scale=scale,
+            extraction_point=extraction_point,
+            probe_method=probe_method,
             show=False,
             print_summary=True,
         )
@@ -740,39 +805,42 @@ def plot_remove_bigram_subspace_across_layers(
     else:
         gain_maj = gain_ood = None
 
-    # ---- Delta loss bars + l_0 - l_t reference --------------------------------
-    fig, ax = plt.subplots(figsize=figsize)
+    # ---- Delta loss bars — colours / style match plot_optimal_orth_direction ----
+    COLORS = {"maj": "#2166ac", "ood": "#d6604d"}
+    bw_bar = 0.22
+    g_step = 0.24
+    MC     = {"maj": -g_step, "ood": 0.0}
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=150)
     x = np.arange(len(layers))
-    bar_w = 0.35
 
     delta_maj = [all_results[l]["delta_loss_major"] for l in layers]
     delta_ood = [all_results[l]["delta_loss_ood"] for l in layers]
 
-    ax.bar(x - bar_w / 2, delta_maj, bar_w,
-           label="Major", color="#2196F3", alpha=0.85)
-    ax.bar(x + bar_w / 2, delta_ood, bar_w,
-           label="OOD", color="#FF9800", alpha=0.85)
-    if gain_maj is not None:
-        ax.axhline(gain_maj, color="#2196F3", ls="--", lw=2.0,
-                   label=f"Major $l_0 - l_t$ ({gain_maj:.3f})")
-        ax.axhline(gain_ood, color="#FF9800", ls="--", lw=2.0,
-                   label=f"OOD $l_0 - l_t$ ({gain_ood:.3f})")
-    for i, (vm, vo) in enumerate(zip(delta_maj, delta_ood)):
-        ax.text(x[i] - bar_w / 2, vm, f"{vm:.3f}",
-                ha="center", va="bottom", fontsize=10)
-        ax.text(x[i] + bar_w / 2, vo, f"{vo:.3f}",
-                ha="center", va="bottom", fontsize=10)
-    ax.set_xlabel("Layer", fontsize=15)
-    ax.set_ylabel("CE Loss Increase", fontsize=15)
-    ax.set_title("", fontsize=18)
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(l) for l in layers])
-    ax.tick_params(labelsize=13)
-    ax.legend(fontsize=10, loc="best")
-    ax.grid(axis="y", alpha=0.3)
+    ax.bar(x + MC["maj"], delta_maj, bw_bar,
+           label="Major", color=COLORS["maj"], linewidth=0, zorder=3)
+    ax.bar(x + MC["ood"], delta_ood, bw_bar,
+           label="OOD", color=COLORS["ood"], linewidth=0, zorder=3)
 
-    fig.suptitle("", fontsize=18, y=1.02)
-    plt.tight_layout()
+    if gain_maj is not None:
+        ax.axhline(gain_maj, color=COLORS["maj"], ls="--", lw=0.9, alpha=0.45,
+                   label=f"Maj. gain ({gain_maj:.3f})")
+        ax.axhline(gain_ood, color=COLORS["ood"], ls=":", lw=0.9, alpha=0.45,
+                   label=f"OOD gain ({gain_ood:.3f})")
+
+    ax.set_xlabel("Layer", fontsize=9)
+    ax.set_ylabel("Cross-entropy loss increase", fontsize=9)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(l) for l in layers], fontsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax.set_axisbelow(True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.legend(fontsize=8, loc="upper right", ncol=2, framealpha=0.9,
+              edgecolor="lightgrey", columnspacing=0.6,
+              handlelength=1.2, handletextpad=0.4, borderpad=0.5)
+    plt.tight_layout(pad=0.5)
 
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")

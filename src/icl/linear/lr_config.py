@@ -9,7 +9,8 @@ def get_config() -> ConfigDict:
     NPOINTS = 64
 
     config.dtype = "float32"
-    config.device = "cuda" if torch.cuda.is_available() else "cpu"
+    from icl.device_utils import get_default_device
+    config.device = get_default_device()
     config.work_dir = os.path.join("results", "linear")  # Specify working directory
 
     config.task = ConfigDict()
@@ -17,7 +18,7 @@ def get_config() -> ConfigDict:
     config.task.n_tasks = 3
     config.task.n_dims = NDIMS
     config.task.n_points = NPOINTS
-    config.task.batch_size = 256
+    config.task.batch_size = 64 # 256
     config.task.data_seed = 101
     config.task.task_seed = 102
     config.task.noise_seed = 103
@@ -28,6 +29,7 @@ def get_config() -> ConfigDict:
     config.task.p_minor = 0.1  # Probability of tasks from the minor task pool
     config.task.n_minor_tasks = 0  # Number of minor tasks, if needed
     config.task.is_mixture = False  # Whether to use mixture of tasks
+    # config.task.pool_type = "simplex"
 
     config.model = ConfigDict()
     config.model.name = "transformer"

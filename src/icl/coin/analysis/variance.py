@@ -29,6 +29,8 @@ def _get_hiddens_cached(
     n_minor: int,
     step: Optional[int],
     verbose: bool,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
 ) -> tuple:
     """Return (all_hiddens, token_info), reusing cache when parameters match."""
     key = (
@@ -38,6 +40,8 @@ def _get_hiddens_cached(
         tuple(positions_of_interest) if positions_of_interest is not None else None,
         n_minor,
         step,
+        post_layernorm,
+        extraction_point,
     )
     if key in _hiddens_cache:
         if verbose:
@@ -52,6 +56,8 @@ def _get_hiddens_cached(
         n_minor=n_minor,
         step=step,
         verbose=verbose,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
     _hiddens_cache.clear()
     _hiddens_cache[key] = result
@@ -69,11 +75,14 @@ def plot_task_vector_r2_coin(
     positions_of_interest: Optional[list] = None,
     n_minor: int = 0,
     step: Optional[int] = None,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
     verbose: bool = False,
     figsize: tuple = (6, 4),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
+    pool_positions: bool = False,
     print_summary: bool = True,
 ) -> dict:
     """Task-token vector R² for the Coin task.
@@ -81,6 +90,11 @@ def plot_task_vector_r2_coin(
     Measures what fraction of hidden-state variance at each position
     is explained by knowing (task, current token).  R² → 1 indicates
     long-context stability.
+
+    If ``pool_positions=True``, sums SS_total and SS_within across all
+    selected positions first, then computes a pooled R² per layer:
+        R²_pool = 1 - (Σ_pos SS_within) / (Σ_pos SS_total).
+    The pooled value is displayed as a flat line across positions.
 
     Results are cached: calling this followed by
     ``plot_anova_separability_coin`` with the same data parameters
@@ -94,6 +108,9 @@ def plot_task_vector_r2_coin(
     positions_of_interest : list, optional
     n_minor : int
     step : int, optional
+    post_layernorm : bool
+    extraction_point : str
+        ``"post_attn"`` (default) or ``"post_mlp"`` (residual stream).
     verbose : bool
     figsize, log_x, show, print_summary : plot options
 
@@ -103,6 +120,7 @@ def plot_task_vector_r2_coin(
         ``{'all_hiddens', 'token_info', 'r2_results', 'fig'}``.
     """
     from icl.utils.separability import (
+        TaskVectorR2Result,
         task_vector_r2_multi,
         plot_task_vector_r2,
         print_task_vector_r2_summary,
@@ -110,6 +128,8 @@ def plot_task_vector_r2_coin(
 
     all_hiddens, token_info = _get_hiddens_cached(
         exp_name, layers, batch_size, positions_of_interest, n_minor, step, verbose,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
 
     if layers is None:
@@ -123,8 +143,47 @@ def plot_task_vector_r2_coin(
         positions=positions_of_interest,
     )
 
+    if pool_positions:
+        pooled_results = {}
+        pos_used = (
+            list(positions_of_interest)
+            if positions_of_interest is not None
+            else list(token_info["positions"])
+        )
+        for l_num, pos_dict in r2_results.items():
+            valid_pos = [p for p in pos_used if p in pos_dict]
+            if not valid_pos:
+                pooled_results[l_num] = {}
+                continue
+            ss_total = sum(pos_dict[p].ss_total for p in valid_pos)
+            ss_within = sum(pos_dict[p].ss_within for p in valid_pos)
+            r2_pool = 1.0 - ss_within / (ss_total + 1e-10)
+            ref = pos_dict[valid_pos[0]]
+            pooled_results[l_num] = {}
+            for p in valid_pos:
+                pooled_results[l_num][p] = TaskVectorR2Result(
+                    r2=r2_pool,
+                    ss_total=ss_total,
+                    ss_between=ss_total - ss_within,
+                    ss_within=ss_within,
+                    n_tasks=ref.n_tasks,
+                    n_tokens=ref.n_tokens,
+                    n_batch=ref.n_batch,
+                    layer_num=l_num,
+                    position=p,
+                )
+        r2_results = pooled_results
+
     if print_summary:
-        print_task_vector_r2_summary(r2_results, positions=positions_of_interest)
+        if pool_positions:
+            print("\nPooled task-token vector R² across positions:")
+            for l_num in sorted(r2_results.keys()):
+                vals = list(r2_results[l_num].values())
+                if not vals:
+                    continue
+                print(f"  Layer {l_num}: R²_pool = {vals[0].r2:.4f}")
+        else:
+            print_task_vector_r2_summary(r2_results, positions=positions_of_interest)
 
     fig = plot_task_vector_r2(
         r2_results, figsize=figsize, log_x=log_x, show=show,
@@ -146,8 +205,9 @@ def _fit_probe_r2_per_position_coin(
     layers: Sequence[int],
     positions: Sequence[int],
     validation_split: float = 0.2,
+    include_position_bias: bool = True,
 ) -> Dict[int, Dict[int, float]]:
-    """Fit OLS h ~ [posterior, one_hot(token)] and return val R² per position."""
+    """Joint OLS across positions; return per-position val R²."""
     n_seq = posteriors_all.shape[0]
     n_seq_train = max(1, int(n_seq * (1.0 - validation_split)))
     n_seq_train = min(n_seq_train, n_seq - 1) if n_seq > 1 else n_seq_train
@@ -155,36 +215,54 @@ def _fit_probe_r2_per_position_coin(
     seq_tr = seq_perm[:n_seq_train]
     seq_va = seq_perm[n_seq_train:]
 
+    p = len(positions)
+    n_vocab = int(real_tokens_all.max().item()) + 1
+    use_pos_bias = include_position_bias and p > 1
     results: Dict[int, Dict[int, float]] = {}
+
     for layer in layers:
         h_layer = hiddens_by_layer[layer].float()  # (N, P, D)
+        ytr = h_layer[seq_tr].reshape(-1, h_layer.shape[-1])
+        yva = h_layer[seq_va].reshape(-1, h_layer.shape[-1])
+
+        x_main_tr = posteriors_all[seq_tr].reshape(-1, posteriors_all.shape[-1]).float()
+        x_main_va = posteriors_all[seq_va].reshape(-1, posteriors_all.shape[-1]).float()
+
+        rt_tr = real_tokens_all[seq_tr].reshape(-1).long()
+        rt_va = real_tokens_all[seq_va].reshape(-1).long()
+        x_tok_tr = torch.zeros(rt_tr.shape[0], n_vocab, dtype=torch.float32)
+        x_tok_tr.scatter_(1, rt_tr.unsqueeze(1), 1.0)
+        x_tok_va = torch.zeros(rt_va.shape[0], n_vocab, dtype=torch.float32)
+        x_tok_va.scatter_(1, rt_va.unsqueeze(1), 1.0)
+
+        xtr_parts = [x_main_tr, x_tok_tr]
+        xva_parts = [x_main_va, x_tok_va]
+        if use_pos_bias:
+            pos_tr = torch.arange(p).unsqueeze(0).expand(seq_tr.shape[0], p).reshape(-1)
+            pos_va = torch.arange(p).unsqueeze(0).expand(seq_va.shape[0], p).reshape(-1)
+            x_pos_tr = torch.zeros(pos_tr.shape[0], p, dtype=torch.float32)
+            x_pos_tr.scatter_(1, pos_tr.unsqueeze(1), 1.0)
+            x_pos_va = torch.zeros(pos_va.shape[0], p, dtype=torch.float32)
+            x_pos_va.scatter_(1, pos_va.unsqueeze(1), 1.0)
+            xtr_parts.append(x_pos_tr)
+            xva_parts.append(x_pos_va)
+
+        xtr = torch.cat(xtr_parts, dim=1)
+        xva = torch.cat(xva_parts, dim=1)
+        ones = torch.ones(xtr.shape[0], 1, dtype=xtr.dtype)
+        w_aug = torch.linalg.pinv(torch.cat([xtr, ones], dim=1)) @ ytr
+        w = w_aug[:-1, :]
+        b = w_aug[-1, :]
+        pred_va = (xva @ w + b).reshape(seq_va.shape[0], p, -1)
+        yva_tensor = h_layer[seq_va]
+
         layer_results: Dict[int, float] = {}
         for p_idx, pos in enumerate(positions):
-            ytr = h_layer[seq_tr, p_idx, :]
-            yva = h_layer[seq_va, p_idx, :]
-            x_main_tr = posteriors_all[seq_tr, p_idx, :].float()
-            x_main_va = posteriors_all[seq_va, p_idx, :].float()
-
-            rt_tr = real_tokens_all[seq_tr, p_idx].long()
-            rt_va = real_tokens_all[seq_va, p_idx].long()
-            n_vocab = int(real_tokens_all[:, p_idx].max().item()) + 1
-            x_tok_tr = torch.zeros(rt_tr.shape[0], n_vocab, dtype=torch.float32)
-            x_tok_tr.scatter_(1, rt_tr.unsqueeze(1), 1.0)
-            x_tok_va = torch.zeros(rt_va.shape[0], n_vocab, dtype=torch.float32)
-            x_tok_va.scatter_(1, rt_va.unsqueeze(1), 1.0)
-
-            xtr = torch.cat([x_main_tr, x_tok_tr], dim=1)
-            xva = torch.cat([x_main_va, x_tok_va], dim=1)
-            ones = torch.ones(xtr.shape[0], 1, dtype=xtr.dtype)
-            w_aug = torch.linalg.pinv(torch.cat([xtr, ones], dim=1)) @ ytr
-            w = w_aug[:-1, :]
-            b = w_aug[-1, :]
-            pred_va = xva @ w + b
-
-            ss_res = ((yva - pred_va) ** 2).sum().item()
-            ss_tot = ((yva - yva.mean(dim=0)) ** 2).sum().item()
+            yva_p = yva_tensor[:, p_idx, :]
+            pred_p = pred_va[:, p_idx, :]
+            ss_res = ((yva_p - pred_p) ** 2).sum().item()
+            ss_tot = ((yva_p - yva_p.mean(dim=0)) ** 2).sum().item()
             layer_results[pos] = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-
         results[layer] = layer_results
     return results
 
@@ -198,15 +276,22 @@ def plot_probe_fit_r2_coin(
     n_minor: int = 0,
     step: Optional[int] = None,
     validation_split: float = 0.2,
+    include_position_bias: bool = True,
     uniform_sampling: bool = True,
     sample_mode: str = "train",
+    extraction_point: str = "post_attn",
     verbose: bool = False,
     figsize: tuple = (6, 4),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
 ) -> dict:
-    """Probe-fit R² by position using OLS (posterior + token) for Coin."""
+    """Probe-fit R² by position using joint OLS for Coin.
+
+    Fits one shared model across selected positions and reports per-position
+    R². Optionally adds one-hot position nuisance features so the baseline
+    hidden mean can vary by position.
+    """
     import matplotlib.pyplot as plt
     from icl.coin.analysis.probes import _collect_coin_probe_data
 
@@ -232,6 +317,7 @@ def plot_probe_fit_r2_coin(
         positions=positions,
         uniform_sampling=uniform_sampling,
         sample_mode=sample_mode,
+        extraction_point=extraction_point,
         verbose=verbose,
     )
 
@@ -242,6 +328,7 @@ def plot_probe_fit_r2_coin(
         layers=layers,
         positions=positions,
         validation_split=validation_split,
+        include_position_bias=include_position_bias,
     )
 
     _COLORS = [
@@ -281,6 +368,7 @@ def plot_probe_fit_r2_coin(
         "r2_results": r2_results,
         "positions": positions,
         "layers": layers,
+        "include_position_bias": include_position_bias,
         "fig": fig,
     }
 
@@ -417,6 +505,8 @@ def plot_anova_separability_coin(
     positions_of_interest: Optional[list] = None,
     n_minor: int = 0,
     step: Optional[int] = None,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
     verbose: bool = False,
     figsize: tuple = (6, 4),
     log_x: bool = True,
@@ -443,6 +533,9 @@ def plot_anova_separability_coin(
     n_minor : int
         Capped at ``sampler.n_minor_tasks``.
     step : int, optional
+    post_layernorm : bool
+    extraction_point : str
+        ``"post_attn"`` (default) or ``"post_mlp"`` (residual stream).
     verbose : bool
     figsize : tuple
     log_x : bool
@@ -463,6 +556,8 @@ def plot_anova_separability_coin(
 
     all_hiddens, token_info = _get_hiddens_cached(
         exp_name, layers, batch_size, positions_of_interest, n_minor, step, verbose,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
 
     if layers is None:

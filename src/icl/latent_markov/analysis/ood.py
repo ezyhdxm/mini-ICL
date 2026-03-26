@@ -18,6 +18,7 @@ from tqdm.notebook import tqdm
 
 import icl.utils.notebook_utils as nu
 from icl.linear.linear_utils import estimate_lambda_with_r2
+from icl.utils.device_utils import get_default_device
 from icl.utils.linear_algebra_utils import stable_rank
 from icl.utils.logger import setup_logger
 from icl.latent_markov.legacy.simple_sampler import get_all_samples_base_only
@@ -71,7 +72,7 @@ def _save_results(cache_path: str, results_dict: Dict[str, Any]):
 def compute_latent_ood_metrics(
     hiddens_voc,
     k_minor: int,
-    device: str = "cuda"
+    device: Optional[str] = None,
 ):
     """
     Compute OOD R² and lambda dispersion metrics for latent model.
@@ -80,13 +81,14 @@ def compute_latent_ood_metrics(
     Args:
         hiddens_voc: Hidden representations (K, V, T, B, D)
         k_minor: Number of minor (in-distribution) tasks
-        device: Device for computation
+        device: Device for computation (default: from get_default_device())
         
     Returns:
         summary_r2: Mean OOD R² at final time
         lambda_dispersion: Lambda dispersion at final time (mean distance to centroid)
     """
-    
+    if device is None:
+        device = get_default_device()
     hiddens_voc = hiddens_voc.to(torch.float32)
     K, _, T, B, _ = hiddens_voc.shape
     
@@ -120,8 +122,17 @@ def compute_latent_ood_metrics(
     return summary_r2, lambda_dispersion
 
 
-def get_latent_sampler(exp_name, n_minor=256, n_ood=40):
-    _, sampler, _ = nu.load_everything("latent", exp_name)
+def get_latent_sampler(exp_name, n_minor=256, n_ood=40, sampler=None):
+    """Build an OOD+minor sampler clone for the latent task.
+
+    Parameters
+    ----------
+    sampler : optional
+        If provided, use this already-loaded sampler instead of calling
+        ``nu.load_everything`` (which would waste a GPU allocation).
+    """
+    if sampler is None:
+        _, sampler, _ = nu.load_everything("latent", exp_name)
     sampler_clone0 = copy.deepcopy(sampler)
 
     if n_minor == -1:
@@ -137,9 +148,12 @@ def get_latent_sampler(exp_name, n_minor=256, n_ood=40):
         new_shape = (0, *orig.shape[1:])
         new_minor = orig.new_empty(new_shape)
     else:
-        ood = sampler_clone0._sample_banded_trans_mats(n_ood) if n_ood > 0 else orig.new_empty((0, *orig.shape[1:]))
         if n_ood > 0:
-            ood = ood.to(device=orig.device, dtype=orig.dtype)
+            # Dirichlet(1,...,1) for each row of each transition matrix via the Exp(1) trick
+            ood = orig.new_empty((n_ood, *orig.shape[1:])).exponential_()
+            ood = ood / ood.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        else:
+            ood = orig.new_empty((0, *orig.shape[1:]))
 
         new_shape = (n_tasks, *orig.shape[1:])
         new_minor = orig.new_empty(new_shape)
@@ -154,8 +168,16 @@ def get_latent_sampler(exp_name, n_minor=256, n_ood=40):
     return sampler_clone0, k_minor, n_tasks
 
 
-def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96):
-    sampler_clone0, k_minor, n_tasks = get_latent_sampler(exp_name, n_minor, n_ood)
+def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96, sampler=None):
+    """Generate all samples for latent task evaluation.
+
+    Parameters
+    ----------
+    sampler : optional
+        If provided, pass directly to :func:`get_latent_sampler` to avoid a
+        redundant ``nu.load_everything`` call.
+    """
+    sampler_clone0, k_minor, n_tasks = get_latent_sampler(exp_name, n_minor, n_ood, sampler=sampler)
     all_samples = get_all_samples_base_only(n_tasks, sampler_clone0, B)
 
     return all_samples, k_minor

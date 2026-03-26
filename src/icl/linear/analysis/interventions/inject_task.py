@@ -8,12 +8,13 @@ import torch
 import icl.utils.notebook_utils as nu
 from icl.utils.logger import setup_logger
 from icl.linear.analysis.probes import train_linear_hidden_predictor
-from icl.linear.analysis._helpers import _show_or_close
+from icl.linear.analysis._helpers import _show_or_close, _task_positions
 from icl.linear.analysis.interventions._helpers import (
     _load_and_prepare_model,
     _create_ood_task,
     _cleanup_model,
     _sweep_layers,
+    _extract_hiddens_for_pool,
 )
 
 logger = setup_logger(__name__)
@@ -68,10 +69,12 @@ def intervene_inject_task_vector(
         positions=fit_positions,
         sample_mode="major",
         step=step,
-        n_minor=-1,
+        n_minor=None,
         print_summary=False,
         skip_baselines=True,
         use_log_posterior=use_log_posterior,
+        include_position_bias=False,
+        include_logit=False,
     )
     W_fit = fit_res["model_weight"].float()  # (K, D)
 
@@ -404,20 +407,20 @@ def plot_inject_task_vector_across_layers(
     bw = 0.3
 
     mse_hlines = [
-        (r"MSE(no inj, $x^\top w_{\mathrm{orig}}$)", "#9E9E9E",
-         lambda r, ik, oj: r["mse_base_to_orig_task"]),
-        (r"MSE(no inj, $x^\top w_{\mathrm{inj}}$)", "#FF9800",
-         lambda r, ik, oj: r["mse_base_to_inj_task"]),
+        (r"RMSE(no inj, $x^\top w_{\mathrm{orig}}$)", "#9E9E9E",
+         lambda r, ik, oj: r["mse_base_to_orig_task"] ** 0.5),
+        (r"RMSE(no inj, $x^\top w_{\mathrm{inj}}$)", "#FF9800",
+         lambda r, ik, oj: r["mse_base_to_inj_task"] ** 0.5),
     ]
     for label, color, key_fn in mse_hlines:
         val = _off_diag_mean(layers[0], key_fn)
         ax_m1.axhline(val, color=color, ls="--", lw=1.5, alpha=0.85, label=f"{label} = {val:.2f}")
 
     mse_bars = [
-        (r"MSE(inj, $x^\top w_{\mathrm{inj}}$)", "#4CAF50",
-         lambda r, ik, oj: r["mse_to_each_task"][ik]),
-        (r"MSE(inj, $x^\top w_{\mathrm{orig}}$)", "#F44336",
-         lambda r, ik, oj: r["mse_to_each_task"][oj]),
+        (r"RMSE(inj, $x^\top w_{\mathrm{inj}}$)", "#4CAF50",
+         lambda r, ik, oj: r["mse_to_each_task"][ik] ** 0.5),
+        (r"RMSE(inj, $x^\top w_{\mathrm{orig}}$)", "#F44336",
+         lambda r, ik, oj: r["mse_to_each_task"][oj] ** 0.5),
     ]
     n_bars = len(mse_bars)
     for bi, (label, color, key_fn) in enumerate(mse_bars):
@@ -427,7 +430,7 @@ def plot_inject_task_vector_across_layers(
         for i, v in enumerate(vals):
             ax_m1.text(x[i] + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=7)
 
-    ax_m1.set(xlabel="Layer", ylabel="MSE", title="")
+    ax_m1.set(xlabel="Layer", ylabel="RMSE", title="")
     ax_m1.set_xticks(x, [str(l) for l in layers])
     ax_m1.legend(fontsize=9); ax_m1.grid(axis="y", alpha=0.3)
 
@@ -448,17 +451,482 @@ def plot_inject_task_vector_across_layers(
     for sk in range(K):
         accs = [all_results[l]["ood_results"][sk]["task_id_accuracy"] for l in layers]
         ax_o1.plot(layers, accs, "o-", label=f"Inject task {sk}", lw=2, ms=7)
-        mses = [all_results[l]["ood_results"][sk]["mse_to_each_task"][sk] for l in layers]
+        mses = [all_results[l]["ood_results"][sk]["mse_to_each_task"][sk] ** 0.5 for l in layers]
         ax_o2.plot(layers, mses, "o-", label=f"Inject task {sk}", lw=2, ms=7)
 
     ax_o1.axhline(1 / K, color="gray", ls="--", alpha=0.5, label=f"Chance (1/{K})")
     ax_o1.set(xlabel="Layer", ylabel="Task-ID accuracy", title="", ylim=(0, 1.1))
     ax_o1.set_xticks(layers); ax_o1.legend(fontsize=11); ax_o1.grid(alpha=0.3)
 
-    ax_o2.set(xlabel="Layer", ylabel=r"MSE(output, $x^\top w_{\mathrm{inj}}$)", title="")
+    ax_o2.set(xlabel="Layer", ylabel=r"RMSE(output, $x^\top w_{\mathrm{inj}}$)", title="")
     ax_o2.set_xticks(layers); ax_o2.legend(fontsize=11); ax_o2.grid(alpha=0.3)
 
     fig_ood.suptitle("", fontsize=18, y=1.02)
+    _show_or_close(fig_ood, show)
+
+    return fig_hm, fig_mse, fig_ood, all_results
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  Averaging-based task-vector injection
+# ──────────────────────────────────────────────────────────────────────
+
+
+def intervene_averaging_inject_task_vector(
+    exp_name: str,
+    layer: int,
+    B: int = 64,
+    n_samples_eval: int = 500,
+    n_ood: int = 30,
+    eval_positions: Optional[list] = None,
+    step: Optional[int] = None,
+    estimation_positions: Optional[list] = None,
+    estimation_B: int = 128,
+    per_position_mean: bool = True,
+    verbose: bool = False,
+    print_summary: bool = True,
+) -> dict:
+    """Task-vector injection using averaging-based task vectors.
+
+    Like ``intervene_inject_task_vector`` but estimates task vectors by
+    averaging hidden states at late positions instead of fitting an OLS
+    probe.  Supports per-position mean subtraction to handle
+    position-dependent rotations (e.g. from RoPE).
+
+    For every pair (inject_k, orig_j) with k != j:
+      - Generate sequences from major task j
+      - Inject task vector k: h' = h − (h_centered @ P) + θ_k
+      - Measure which task the output is closest to (task-ID accuracy)
+    Also runs injection on OOD data.
+    """
+    from icl.linear.linear_ood_analysis import (
+        _create_eval_task_pool, _setup_eval_task, setup_device,
+    )
+    from icl.utils.separability import estimate_task_vectors_by_averaging
+
+    model, train_task, config, device = _load_and_prepare_model(
+        exp_name, step=step,
+    )
+    if step is None:
+        step = config.training.total_steps
+
+    n_points = int(config.task.n_points)
+    K_major = int(train_task.n_tasks)
+    D = int(config.model.n_embd)
+    task_pool = train_task.task_pool.to(device)       # (K, D_x, 1)
+
+    if estimation_positions is None:
+        estimation_positions = list(range(max(0, n_points - 10), n_points))
+    if eval_positions is None:
+        eval_positions = list(range(min(10, n_points), n_points))
+
+    # ── Extract hidden states for major tasks ────────────────────────
+    major_pool = train_task.task_pool.squeeze(-1).to(device)
+    eval_pool_est = major_pool[:K_major]
+    eval_task_est = _setup_eval_task(config, eval_pool_est, estimation_B, device)
+    eval_task_est.batch_size = estimation_B
+
+    pad_mode = getattr(model, "pad", "mapsto")
+    task_pos = _task_positions(pad_mode, n_points, device)
+
+    demo_data_est = eval_task_est.sample_data(step=step).to(device)
+    hiddens_major, _ = _extract_hiddens_for_pool(
+        model, eval_task_est, demo_data_est,
+        step=step, layer=layer, task_pos=task_pos, D=D,
+        n_tasks=K_major, chunk=8,
+    )
+    hiddens_major = hiddens_major.float()  # (K, T, B_est, D)
+
+    # ── Estimate task vectors by averaging ────────────────────────────
+    task_vecs, grand_mean = estimate_task_vectors_by_averaging(
+        hiddens_major, estimation_positions,
+    )
+
+    # ── Build projector ───────────────────────────────────────────────
+    tv = task_vecs.float()
+    _, S_tv, Vt_tv = torch.linalg.svd(tv, full_matrices=False)
+    rank = int((S_tv > 1e-6 * S_tv[0]).sum().item())
+    P_task = (Vt_tv[:rank].T @ Vt_tv[:rank]).to(device)
+    ref_vecs = task_vecs.to(device)                   # (K, D_model)
+
+    # ── Per-position or global means ──────────────────────────────────
+    if per_position_mean:
+        mu_per_point = hiddens_major.mean(dim=(0, 2)).to(device)  # (T, D)
+    else:
+        mu_global = grand_mean.to(device)
+
+    if verbose:
+        logger.info(
+            f"[avg inject linear] rank={rank}, K={K_major}, "
+            f"per_position_mean={per_position_mean}"
+        )
+
+    del hiddens_major, demo_data_est
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    # ── Helpers ────────────────────────────────────────────────────────
+    eval_point_tensor = torch.tensor(eval_positions, device=device, dtype=torch.long)
+
+    def _oracle_preds(demo_data, k):
+        x_at = demo_data.index_select(1, eval_point_tensor)
+        w = task_pool[k].squeeze(-1)
+        return (x_at * w.unsqueeze(0).unsqueeze(0)).sum(-1)
+
+    def _make_single_pos_hook(tv_k, point_idx):
+        """Hook that injects task vector *tv_k* at a single position."""
+        seq_pos = int(task_pos[point_idx].item())
+        if per_position_mean:
+            _mu = mu_per_point[point_idx]
+        else:
+            _mu = mu_global
+        def _hook(mod, inp, out):
+            h = out if torch.is_tensor(out) else out[0]
+            h_new = h.clone()
+            h_at = h_new[:, seq_pos, :]
+            h_centered = h_at - _mu.unsqueeze(0)
+            h_new[:, seq_pos, :] = h_at - (h_centered @ P_task) + tv_k
+            return h_new if torch.is_tensor(out) else (h_new,) + out[1:]
+        return _hook
+
+    def _run_injection_specific_target(orig_j, inject_k, n_samples):
+        tv_k = ref_vecs[inject_k]
+        baseline_mses, injected_mses = [], []
+        mse_to_tasks = [[] for _ in range(K_major)]
+        task_id_correct = []
+        mse_base_to_orig = []
+        mse_base_to_inj = []
+
+        orig_bs = int(train_task.batch_size)
+        train_task.batch_size = B
+        n_batches = (n_samples + B - 1) // B
+        w_orig = task_pool[orig_j]
+
+        for bi in range(n_batches):
+            demo_data, demo_target = train_task.sample_from_task(
+                w_orig, step=bi + 55555,
+            )
+            demo_data = demo_data.to(device)
+            demo_target = demo_target.to(device)
+
+            with torch.no_grad():
+                preds_base = model(demo_data, demo_target)
+
+            for p_idx, p in enumerate(eval_positions):
+                if p >= preds_base.shape[1]:
+                    continue
+
+                handle = model.transformer.blocks[layer].attn_block.register_forward_hook(
+                    _make_single_pos_hook(tv_k, p),
+                )
+                try:
+                    with torch.no_grad():
+                        preds_inj = model(demo_data, demo_target)
+                finally:
+                    handle.remove()
+
+                y_true = demo_target[:, p]
+                mse_bl = ((preds_base[:, p] - y_true) ** 2).mean().item()
+                mse_inj_val = ((preds_inj[:, p] - y_true) ** 2).mean().item()
+                baseline_mses.append(mse_bl)
+                injected_mses.append(mse_inj_val)
+
+                y_inj = preds_inj[:, p]
+                y_base = preds_base[:, p]
+                mse_per_task = []
+                for t in range(K_major):
+                    y_oracle_t = _oracle_preds(demo_data, t)[:, p_idx]
+                    mse_t = ((y_inj - y_oracle_t) ** 2).mean().item()
+                    mse_to_tasks[t].append(mse_t)
+                    mse_per_task.append(mse_t)
+
+                y_oracle_orig = _oracle_preds(demo_data, orig_j)[:, p_idx]
+                mse_base_to_orig.append(
+                    ((y_base - y_oracle_orig) ** 2).mean().item()
+                )
+                y_oracle_inj = _oracle_preds(demo_data, inject_k)[:, p_idx]
+                mse_base_to_inj.append(
+                    ((y_base - y_oracle_inj) ** 2).mean().item()
+                )
+                task_id_correct.append(int(np.argmin(mse_per_task) == inject_k))
+                del preds_inj
+
+            del demo_data, demo_target, preds_base
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        train_task.batch_size = orig_bs
+
+        bl = float(np.mean(baseline_mses)) if baseline_mses else 0.0
+        il = float(np.mean(injected_mses)) if injected_mses else 0.0
+        mse_means = [
+            float(np.mean(mse_to_tasks[t])) if mse_to_tasks[t] else 0.0
+            for t in range(K_major)
+        ]
+        acc = float(np.mean(task_id_correct)) if task_id_correct else 0.0
+        return {
+            "baseline_mse": bl,
+            "injected_mse": il,
+            "delta_mse": il - bl,
+            "mse_to_each_task": np.array(mse_means),
+            "task_id_accuracy": acc,
+            "mse_base_to_orig_task": float(np.mean(mse_base_to_orig)) if mse_base_to_orig else 0.0,
+            "mse_base_to_inj_task": float(np.mean(mse_base_to_inj)) if mse_base_to_inj else 0.0,
+        }
+
+    def _run_injection_ood(inject_k, n_samples):
+        tv_k = ref_vecs[inject_k]
+        baseline_mses, injected_mses = [], []
+        mse_to_tasks = [[] for _ in range(K_major)]
+        task_id_correct = []
+
+        ood_task = _create_ood_task(train_task, config, B, n_ood, device)
+        orig_bs = int(ood_task.batch_size)
+        ood_task.batch_size = B
+        n_batches = (n_samples + B - 1) // B
+
+        for bi in range(n_batches):
+            demo_data, _, demo_target = ood_task.sample_batch(
+                step=bi + 44444, is_eval=True,
+            )
+            demo_data = demo_data.to(device)
+            demo_target = demo_target.to(device)
+
+            with torch.no_grad():
+                preds_base = model(demo_data, demo_target)
+
+            for p_idx, p in enumerate(eval_positions):
+                if p >= preds_base.shape[1]:
+                    continue
+
+                handle = model.transformer.blocks[layer].attn_block.register_forward_hook(
+                    _make_single_pos_hook(tv_k, p),
+                )
+                try:
+                    with torch.no_grad():
+                        preds_inj = model(demo_data, demo_target)
+                finally:
+                    handle.remove()
+
+                y_true = demo_target[:, p]
+                mse_bl = ((preds_base[:, p] - y_true) ** 2).mean().item()
+                mse_inj_val = ((preds_inj[:, p] - y_true) ** 2).mean().item()
+                baseline_mses.append(mse_bl)
+                injected_mses.append(mse_inj_val)
+
+                y_inj = preds_inj[:, p]
+                mse_per_task = []
+                for t in range(K_major):
+                    y_oracle_t = _oracle_preds(demo_data, t)[:, p_idx]
+                    mse_t = ((y_inj - y_oracle_t) ** 2).mean().item()
+                    mse_to_tasks[t].append(mse_t)
+                    mse_per_task.append(mse_t)
+                task_id_correct.append(int(np.argmin(mse_per_task) == inject_k))
+                del preds_inj
+
+            del demo_data, demo_target, preds_base
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        ood_task.batch_size = orig_bs
+
+        bl = float(np.mean(baseline_mses)) if baseline_mses else 0.0
+        il = float(np.mean(injected_mses)) if injected_mses else 0.0
+        mse_means = [
+            float(np.mean(mse_to_tasks[t])) if mse_to_tasks[t] else 0.0
+            for t in range(K_major)
+        ]
+        acc = float(np.mean(task_id_correct)) if task_id_correct else 0.0
+        return {
+            "baseline_mse": bl,
+            "injected_mse": il,
+            "delta_mse": il - bl,
+            "mse_to_each_task": np.array(mse_means),
+            "task_id_accuracy": acc,
+        }
+
+    # ── Run all injection pairs ───────────────────────────────────────
+    injection_results = {}
+    for inject_k in range(K_major):
+        injection_results[inject_k] = {}
+        for orig_j in range(K_major):
+            if orig_j == inject_k:
+                continue
+            if verbose:
+                logger.info(f"[avg inject] inject={inject_k} -> orig={orig_j}")
+            injection_results[inject_k][orig_j] = _run_injection_specific_target(
+                orig_j, inject_k, n_samples_eval,
+            )
+
+    ood_results = {}
+    for inject_k in range(K_major):
+        if verbose:
+            logger.info(f"[avg inject] OOD inject={inject_k}")
+        ood_results[inject_k] = _run_injection_ood(inject_k, n_samples_eval)
+
+    _cleanup_model(model)
+
+    if print_summary:
+        print()
+        print("=" * 70)
+        print(f"Averaging Task-Vector Injection  (layer {layer})")
+        print("=" * 70)
+        print(f"  rank={rank}  K={K_major}  per_position_mean={per_position_mean}")
+        for ik in range(K_major):
+            for oj in range(K_major):
+                if oj == ik:
+                    continue
+                r = injection_results[ik][oj]
+                print(f"  inject {ik} -> orig {oj}: "
+                      f"task-ID acc={r['task_id_accuracy']:.1%}  "
+                      f"RMSE(inj,w_inj)={r['mse_to_each_task'][ik]**0.5:.3f}")
+        print()
+
+    return {
+        "layer": layer,
+        "rank": rank,
+        "ref_vecs": ref_vecs.cpu(),
+        "task_pool": task_pool.cpu(),
+        "injection_results": injection_results,
+        "ood_results": ood_results,
+        "K_major": K_major,
+    }
+
+
+def plot_averaging_inject_task_vector_across_layers(
+    exp_name: str,
+    layers: Optional[list] = None,
+    show: bool = True,
+    **kwargs,
+):
+    """Sweep ``intervene_averaging_inject_task_vector`` across layers.
+
+    Same plots as ``plot_inject_task_vector_across_layers`` but using
+    averaging-based task vectors.
+
+    Returns ``(fig_heatmap, fig_mse, fig_ood, all_results)``.
+    """
+    import matplotlib.pyplot as plt
+    from icl.linear.linear_path_utils import load_model_task_config
+
+    if layers is None:
+        _, _, config = load_model_task_config(exp_name)
+        layers = list(range(config.model.n_layer))
+
+    all_results = {}
+    for l in layers:
+        logger.info(f"[avg inject sweep] layer {l} ...")
+        all_results[l] = intervene_averaging_inject_task_vector(
+            exp_name=exp_name, layer=l,
+            verbose=False, print_summary=True, **kwargs,
+        )
+
+    K = all_results[layers[0]]["K_major"]
+    x = np.arange(len(layers))
+
+    def _off_diag_mean(layer_idx, key_fn):
+        inj = all_results[layer_idx]["injection_results"]
+        return float(np.mean([
+            key_fn(inj[ik][oj], ik, oj)
+            for ik in range(K) for oj in range(K) if oj != ik
+        ]))
+
+    # ---- 1. Task-ID Accuracy heatmap per layer ----
+    fig_hm, axes_hm = plt.subplots(
+        1, len(layers), figsize=(3.5 * len(layers), 3.5), squeeze=False,
+    )
+    for idx, l in enumerate(layers):
+        mat = np.full((K, K), np.nan)
+        inj = all_results[l]["injection_results"]
+        for ik in range(K):
+            for oj in range(K):
+                if oj != ik:
+                    mat[ik, oj] = inj[ik][oj]["task_id_accuracy"]
+        ax = axes_hm[0, idx]
+        im = ax.imshow(mat, vmin=0, vmax=1, cmap="YlGn", aspect="equal")
+        for ik in range(K):
+            for oj in range(K):
+                if ik == oj:
+                    ax.text(oj, ik, "-", ha="center", va="center",
+                            fontsize=11, color="gray")
+                else:
+                    v = mat[ik, oj]
+                    ax.text(oj, ik, f"{v:.0%}", ha="center", va="center",
+                            fontsize=11, color="white" if v > 0.65 else "black")
+        ax.set_xticks(range(K)); ax.set_yticks(range(K))
+        ax.set_xlabel("Original task (data)", fontsize=14)
+        if idx == 0:
+            ax.set_ylabel("Injected task (vector)", fontsize=14)
+        ax.set_title(f"Layer {l}", fontsize=13)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    _show_or_close(fig_hm, show)
+
+    # ---- 2. MSE to injected vs original task + Task-ID accuracy ----
+    fig_mse, (ax_m1, ax_m2) = plt.subplots(1, 2, figsize=(16, 5))
+    bw = 0.3
+
+    mse_hlines = [
+        (r"RMSE(no inj, $x^\top w_{\mathrm{orig}}$)", "#9E9E9E",
+         lambda r, ik, oj: r["mse_base_to_orig_task"] ** 0.5),
+        (r"RMSE(no inj, $x^\top w_{\mathrm{inj}}$)", "#FF9800",
+         lambda r, ik, oj: r["mse_base_to_inj_task"] ** 0.5),
+    ]
+    for label, color, key_fn in mse_hlines:
+        val = _off_diag_mean(layers[0], key_fn)
+        ax_m1.axhline(val, color=color, ls="--", lw=1.5, alpha=0.85,
+                      label=f"{label} = {val:.2f}")
+
+    mse_bars = [
+        (r"RMSE(inj, $x^\top w_{\mathrm{inj}}$)", "#4CAF50",
+         lambda r, ik, oj: r["mse_to_each_task"][ik] ** 0.5),
+        (r"RMSE(inj, $x^\top w_{\mathrm{orig}}$)", "#F44336",
+         lambda r, ik, oj: r["mse_to_each_task"][oj] ** 0.5),
+    ]
+    n_bars = len(mse_bars)
+    for bi, (label, color, key_fn) in enumerate(mse_bars):
+        off = (bi - (n_bars - 1) / 2) * bw
+        vals = [_off_diag_mean(l, key_fn) for l in layers]
+        ax_m1.bar(x + off, vals, bw, label=label, color=color, alpha=0.85)
+        for i, v in enumerate(vals):
+            ax_m1.text(x[i] + off, v, f"{v:.2f}", ha="center", va="bottom",
+                       fontsize=7)
+
+    ax_m1.set(xlabel="Layer", ylabel="RMSE")
+    ax_m1.set_xticks(x, [str(l) for l in layers])
+    ax_m1.legend(fontsize=9); ax_m1.grid(axis="y", alpha=0.3)
+
+    avg_acc = [
+        _off_diag_mean(l, lambda r, ik, oj: r["task_id_accuracy"])
+        for l in layers
+    ]
+    ax_m2.bar(x, avg_acc, 0.5, color="#2196F3", alpha=0.85)
+    for i, a in enumerate(avg_acc):
+        ax_m2.text(x[i], a, f"{a:.0%}", ha="center", va="bottom", fontsize=11)
+    ax_m2.set(xlabel="Layer", ylabel="Task-ID accuracy", ylim=(0, 1.15))
+    ax_m2.set_xticks(x, [str(l) for l in layers])
+    ax_m2.axhline(1 / K, color="gray", ls="--", alpha=0.5,
+                  label=f"Chance (1/{K})")
+    ax_m2.legend(fontsize=11); ax_m2.grid(axis="y", alpha=0.3)
+    _show_or_close(fig_mse, show)
+
+    # ---- 3. OOD plots ----
+    fig_ood, (ax_o1, ax_o2) = plt.subplots(1, 2, figsize=(14, 5))
+    for sk in range(K):
+        accs = [all_results[l]["ood_results"][sk]["task_id_accuracy"]
+                for l in layers]
+        ax_o1.plot(layers, accs, "o-", label=f"Inject task {sk}", lw=2, ms=7)
+        mses = [all_results[l]["ood_results"][sk]["mse_to_each_task"][sk] ** 0.5
+                for l in layers]
+        ax_o2.plot(layers, mses, "o-", label=f"Inject task {sk}", lw=2, ms=7)
+
+    ax_o1.axhline(1 / K, color="gray", ls="--", alpha=0.5,
+                  label=f"Chance (1/{K})")
+    ax_o1.set(xlabel="Layer", ylabel="Task-ID accuracy", ylim=(0, 1.1))
+    ax_o1.set_xticks(layers); ax_o1.legend(fontsize=11); ax_o1.grid(alpha=0.3)
+
+    ax_o2.set(xlabel="Layer",
+              ylabel=r"RMSE(output, $x^\top w_{\mathrm{inj}}$)")
+    ax_o2.set_xticks(layers); ax_o2.legend(fontsize=11); ax_o2.grid(alpha=0.3)
     _show_or_close(fig_ood, show)
 
     return fig_hm, fig_mse, fig_ood, all_results

@@ -19,6 +19,7 @@ import torch.optim as optim
 import numpy as np
 
 import icl.utils.notebook_utils as nu
+from icl.utils.device_utils import get_default_device
 from icl.utils.unified_interface import get_exp_name
 from icl.dyck.dyck_utils import sample_binary_mask
 
@@ -298,7 +299,6 @@ def train_prefix_probe(
     mini_batch=512,
     val_data=None,
     val_frac=0.2,
-    device="cuda",
     verbose_every=10,
     loss_threshold=0.01,
     weight_decay=1e-4,
@@ -306,6 +306,7 @@ def train_prefix_probe(
     refresh_every=3,
     refresh_fn=None,
     curriculum_threshold=None,
+    device=None,
 ):
     """
     Build and train the ``PrefixProbe`` end-to-end.
@@ -343,6 +344,8 @@ def train_prefix_probe(
     probe : PrefixProbe  (eval mode, on *device*, best-epoch weights)
     results : dict
     """
+    if device is None:
+        device = get_default_device()
     n_classes_per_length = {
         l: len(prefix_to_class[l]) for l in active_lengths
     }
@@ -607,7 +610,7 @@ def plot_2d_scatter(
     *,
     layer_index,
     k_value,
-    device="cuda",
+    device=None,
     max_pts_per_class=2000,
     legend_max_classes=12,
     show_boundary=True,
@@ -637,6 +640,8 @@ def plot_2d_scatter(
     figs : dict[int, Figure]
         One matplotlib figure per prefix length.
     """
+    if device is None:
+        device = get_default_device()
     import matplotlib.pyplot as plt
     import os
 
@@ -669,6 +674,7 @@ def plot_2d_scatter(
         color_map = _hierarchical_colors(prefixes)
 
         fig, ax = plt.subplots(figsize=(7, 6))
+        ax.tick_params(axis="both", labelsize=14)
 
         # Decision boundary background
         if show_boundary:
@@ -733,7 +739,7 @@ def plot_2d_scatter(
                               hex_lbl, color))
 
         if n_cls > legend_max_classes:
-            txt_size = max(5.5, 8 - n_cls * 0.02)
+            txt_size = max(7, 10 - n_cls * 0.02)
             bbox = dict(boxstyle="round,pad=0.15", facecolor="white",
                         edgecolor="none", alpha=0.7)
             for cx, cy, lbl, color in centroids:
@@ -746,17 +752,16 @@ def plot_2d_scatter(
                     bbox=bbox,
                 )
 
-        ax.set_title("", fontsize=14)
         if pca is not None:
             ev = pca.explained_variance_ratio_
-            ax.set_xlabel(f"PC1 ({ev[0]:.0%} var)")
-            ax.set_ylabel(f"PC2 ({ev[1]:.0%} var)")
+            ax.set_xlabel(f"PC1 ({ev[0]:.0%} var)", fontsize=16)
+            ax.set_ylabel(f"PC2 ({ev[1]:.0%} var)", fontsize=16)
         else:
-            ax.set_xlabel("Projection dim 1")
-            ax.set_ylabel("Projection dim 2")
+            ax.set_xlabel("Projection dim 1", fontsize=16)
+            ax.set_ylabel("Projection dim 2", fontsize=16)
 
         if n_cls <= legend_max_classes:
-            ax.legend(fontsize=8, markerscale=2.5, loc="best",
+            ax.legend(fontsize=10, markerscale=2.5, loc="best",
                       framealpha=0.85, ncol=max(1, (n_cls + 4) // 5))
 
         fig.tight_layout()
@@ -783,7 +788,7 @@ def plot_3d_scatter(
     *,
     layer_index,
     k_value,
-    device="cuda",
+    device=None,
     max_pts_per_class=2000,
     legend_max_classes=12,
     save_dir=None,
@@ -799,6 +804,8 @@ def plot_3d_scatter(
     elev, azim : float
         Elevation and azimuth angles for the 3D view.
     """
+    if device is None:
+        device = get_default_device()
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
     import os

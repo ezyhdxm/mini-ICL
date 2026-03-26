@@ -28,3 +28,11 @@ from icl.latent_markov.analysis.interventions.bigram import (  # noqa: F401
     intervene_remove_bigram_subspace,
     plot_remove_bigram_subspace_across_layers,
 )
+
+from icl.latent_markov.analysis.interventions.inject_posterior import (  # noqa: F401
+    intervene_direct_injection,
+    intervene_inject_posterior,
+    intervene_averaging_injection,
+    plot_inject_posterior_across_layers,
+    plot_inject_posterior_per_position,
+)

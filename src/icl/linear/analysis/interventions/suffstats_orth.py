@@ -878,8 +878,8 @@ def plot_remove_suffstats_orth_across_layers(
     x = np.arange(len(layers))
     bar_w = 0.35
 
-    int_maj = _extract("intervened_to_oracle_major")
-    int_ood = _extract("intervened_to_oracle_ood")
+    int_maj = np.sqrt(_extract("intervened_to_oracle_major"))
+    int_ood = np.sqrt(_extract("intervened_to_oracle_ood"))
 
     ax.bar(x - bar_w / 2, int_maj, bar_w, label="Major (intervened)", color="#2196F3", alpha=0.85)
     ax.bar(x + bar_w / 2, int_ood, bar_w, label="OOD (intervened)", color="#FF9800", alpha=0.85)
@@ -887,14 +887,14 @@ def plot_remove_suffstats_orth_across_layers(
         ax.text(x[i] - bar_w / 2, vm, f"{vm:.4f}", ha="center", va="bottom", fontsize=9)
         ax.text(x[i] + bar_w / 2, vo, f"{vo:.4f}", ha="center", va="bottom", fontsize=9)
 
-    base_maj = np.mean(_extract("baseline_to_oracle_major"))
-    base_ood = np.mean(_extract("baseline_to_oracle_ood"))
+    base_maj = np.sqrt(np.mean(_extract("baseline_to_oracle_major")))
+    base_ood = np.sqrt(np.mean(_extract("baseline_to_oracle_ood")))
     ax.axhline(base_maj, color="#2196F3", ls="--", lw=1.5, alpha=0.7,
                label=f"Major baseline ({base_maj:.4f})")
     ax.axhline(base_ood, color="#FF9800", ls="--", lw=1.5, alpha=0.7,
                label=f"OOD baseline ({base_ood:.4f})")
 
-    ax.set(xlabel="Layer", ylabel="MSE (model \u2192 oracle)", title="Intervened MSE to Oracle")
+    ax.set(xlabel="Layer", ylabel="RMSE (model \u2192 oracle)", title="")
     ax.set_xticks(x, [str(l) for l in layers])
     ax.tick_params(labelsize=14)
     ax.xaxis.label.set_size(16)
@@ -932,7 +932,10 @@ def plot_remove_suffstats_orth_across_layers(
             deltas = []
             for l in layers:
                 pt = all_results[l].get("per_task", [])
-                deltas.append(pt[k]["delta"] if k < len(pt) else float("nan"))
+                if k < len(pt):
+                    deltas.append(np.sqrt(pt[k]["intervened"]) - np.sqrt(pt[k]["baseline"]))
+                else:
+                    deltas.append(float("nan"))
             offset = (k - (n_major - 1) / 2) * bar_w_pt
             bars = ax_pt.bar(x + offset, deltas, bar_w_pt,
                              label=f"Task {k}", color=colors[k], alpha=0.85)
@@ -942,8 +945,8 @@ def plot_remove_suffstats_orth_across_layers(
                                ha="center", va="bottom", fontsize=8)
 
         ax_pt.set(xlabel="Layer",
-                  ylabel="\u0394 MSE (model \u2192 oracle)",
-                  title="Per-Task Intervention Effect (suffstats-orth)")
+                  ylabel="\u0394 RMSE (model \u2192 oracle)",
+                  title="")
         ax_pt.set_xticks(x, [str(l) for l in layers])
         ax_pt.tick_params(labelsize=13)
         ax_pt.xaxis.label.set_size(15)

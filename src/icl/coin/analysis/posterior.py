@@ -240,16 +240,25 @@ def plot_id_ood_loss_coin(
         logger.warning("No experiments loaded successfully.")
         return {}
 
-    k_min, k_max = min(ks_sorted), max(ks_sorted)
+    # Evenly sample colormap (avoid dark purples): use 15%--90% of viridis
+    nk = len(ks_sorted)
     cmap = plt.get_cmap("viridis")
     color_map = {}
-    for k in ks_sorted:
-        if k_max > k_min:
-            color_map[k] = cmap((k - k_min) / (k_max - k_min))
-        else:
-            color_map[k] = cmap(0.5)
+    for i, k in enumerate(ks_sorted):
+        t = 0.15 + 0.75 * (i / max(1, nk - 1))
+        color_map[k] = cmap(t)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
+    fig.patch.set_facecolor("white")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("white")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(True, which="major", alpha=0.15, linestyle="-")
+        ax.grid(True, which="minor", alpha=0.06, linestyle=":")
+
+    lw, alpha = 1.5, 0.85
+    fs_label, fs_tick = 14, 12
 
     for k in ks_sorted:
         d = results[k]
@@ -260,14 +269,27 @@ def plot_id_ood_loss_coin(
             xs, y_id = xs[mask], y_id[mask]
         if xs.size == 0:
             continue
-        ax1.plot(xs, y_id, color=c, linewidth=2.0)
+        ax1.plot(xs, y_id, color=c, linewidth=lw, alpha=alpha, label=str(k))
 
+    ax1.set_title("In-distribution", fontsize=fs_label)
     if logx:
         ax1.set_xscale("log")
-    ax1.set_xlabel("Training Step", fontsize=16)
-    ax1.set_ylabel("ID Loss", fontsize=16)
-    ax1.tick_params(labelsize=14)
-    ax1.grid(True, which="both", alpha=0.25)
+    ax1.set_xlabel("Training Step", fontsize=fs_label)
+    ax1.set_ylabel("Loss (KL)", fontsize=fs_label)
+    ax1.tick_params(labelsize=fs_tick)
+
+    handles, labels = ax1.get_legend_handles_labels()
+    ax2.legend(
+        handles,
+        labels,
+        title=r"$\log_2(n_{\mathrm{minor}})$",
+        fontsize=fs_tick,
+        title_fontsize=fs_label,
+        frameon=True,
+        framealpha=0.95,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+    )
 
     for k in ks_sorted:
         d = results[k]
@@ -278,15 +300,16 @@ def plot_id_ood_loss_coin(
             xs, y_ood = xs[mask], y_ood[mask]
         if xs.size == 0:
             continue
-        ax2.plot(xs, y_ood, color=c, linewidth=2.0)
+        ax2.plot(xs, y_ood, color=c, linewidth=lw, alpha=alpha)
 
+    ax2.set_title("Out-of-distribution", fontsize=fs_label)
     if logx:
         ax2.set_xscale("log")
-    ax2.set_xlabel("Training Step", fontsize=16)
-    ax2.set_ylabel("OOD Loss", fontsize=16)
-    ax2.tick_params(labelsize=14)
-    ax2.grid(True, which="both", alpha=0.25)
+    ax2.set_xlabel("Training Step", fontsize=fs_label)
+    ax2.set_ylabel("")
+    ax2.tick_params(labelsize=fs_tick)
 
+    fig.subplots_adjust(wspace=0.05, right=0.78)
     fig.tight_layout()
     if show:
         plt.show()
@@ -482,30 +505,28 @@ def plot_lambda_posterior_agreement_coin(
     step: Optional[int] = None,
     fit_n_samples: int = 5000,
     fit_positions: Optional[list] = None,
+    fit_include_position_bias: bool = True,
+    fit_include_logit: bool = False,
     window: int = 20,
-    figsize: tuple = (18, 5),
+    show_random_baseline: bool = True,
+    random_baseline_draws: int = 32,
+    random_seed: int = 0,
+    show_task_basis_baseline: bool = True,
+    major_only: bool = False,
+    min_position: Optional[int] = None,
+    max_position: Optional[int] = None,
+    figsize: tuple = (10, 4),
     show: bool = True,
     title: str = "",
     eps: float = 1e-12,
 ) -> dict:
     """
     Agreement between projected coefficients and Bayesian posterior,
-    measured by TV distance, cosine similarity, and rolling Pearson
-    correlation.
+    measured by Hellinger distance.
 
-    Produces a three-panel figure:
-
-    * **Left**: Total-variation distance
-      ``TV(t) = 0.5 * sum_k |lambda_k(t) - P(Z=k|x_{1:t})|``
-      averaged over samples and tasks.
-
-    * **Centre**: Cosine similarity
-      ``cos(lambda(t), P(t))`` at each position, averaged over samples
-      and tasks.
-
-    * **Right**: Rolling Pearson correlation between the component
-      time series ``lambda_j(s)`` and ``p*_j(s)`` over a window
-      ``[t-w+1, t]``, averaged over components j, samples, and tasks.
+    Plots:
+    ``H(t) = sqrt(0.5 * sum_k (sqrt(lambda_k(t)) - sqrt(P(Z=k|x_{1:t})))^2)``
+    averaged over samples and tasks, with optional random-simplex baseline.
 
     Parameters
     ----------
@@ -518,8 +539,24 @@ def plot_lambda_posterior_agreement_coin(
     fit_n_samples : int
     fit_positions : list, optional
         ``None`` -> ``range(100, seq_len)``.
+    fit_include_position_bias : bool
+        Whether to include one-hot position nuisance features in probe fitting.
+    fit_include_logit : bool
+        Reserved for API consistency. Coin hidden probe has no logit block,
+        so this must stay ``False``.
     window : int
-        Window size for the rolling Pearson correlation.
+        Deprecated (kept for backward compatibility; unused).
+    show_random_baseline : bool
+        If True, overlays random-simplex Hellinger baselines.
+    random_baseline_draws : int
+        Number of random lambda draws per sample/time for baseline TV.
+    random_seed : int
+        Seed for random baseline generation.
+    show_task_basis_baseline : bool
+        If True, overlays a baseline that always outputs the one-hot
+        standard basis vector of the underlying task (major tasks only).
+    max_position : int, optional
+        If set, restrict the x-axis display to ``[0, max_position]``.
     figsize : tuple
     show : bool
     title : str
@@ -528,13 +565,17 @@ def plot_lambda_posterior_agreement_coin(
     Returns
     -------
     dict
-        ``{'fig', 'axes', 'positions', 'tv_major', 'tv_ood',
-        'cos_major', 'cos_ood', 'rcorr_major', 'rcorr_ood', ...}``.
+        ``{'fig', 'ax', 'positions', 'tv_major', 'tv_ood',
+        'tv_random_major', 'tv_random_ood',
+        'tv_task_basis_major', 'tv_task_basis_ood', ...}``.
     """
     import matplotlib.pyplot as plt
     from icl.utils.unified_interface import _get_hiddens_at_real_positions
     from icl.linear.linear_utils import estimate_lambda_with_r2
     from icl.utils.unified_plot import posterior_over_models_over_time_per_sample
+
+    if major_only:
+        n_ood = 0
 
     _, _, config = nu.load_everything("coin", exp_name)
     n_layers = config.model.num_layers
@@ -544,12 +585,18 @@ def plot_lambda_posterior_agreement_coin(
 
     if fit_positions is None:
         fit_positions = list(range(100, seq_len))
+    if fit_include_logit:
+        raise ValueError(
+            "Coin hidden probe does not include a logit feature block; "
+            "use fit_include_logit=False."
+        )
 
     fit_res = train_linear_hidden_predictor_coin(
         exp_name=exp_name,
         layer=layer_index,
         n_samples=fit_n_samples,
         positions=fit_positions,
+        include_position_bias=fit_include_position_bias,
         sample_mode="major",
         step=step,
         print_summary=False,
@@ -597,38 +644,6 @@ def plot_lambda_posterior_agreement_coin(
         w_out = np.maximum(v - theta[:, np.newaxis], 0.0)
         return w_out[0] if squeeze else w_out
 
-    def _cosine_sim(a, b_arr):
-        """Row-wise cosine similarity.  a, b: (T, C) -> (T,)"""
-        dot = (a * b_arr).sum(axis=-1)
-        na = np.sqrt((a ** 2).sum(axis=-1)).clip(eps)
-        nb = np.sqrt((b_arr ** 2).sum(axis=-1)).clip(eps)
-        return dot / (na * nb)
-
-    def _rolling_pearson(a, b_arr, w):
-        """Per-component rolling Pearson r, averaged over components.
-
-        a, b: (T, C) -> (T,)   Positions before w-1 are NaN.
-        When both signals are near-constant in the window (std < eps),
-        returns NaN for that (position, component) pair.
-        """
-        T_len, C = a.shape
-        out = np.full(T_len, np.nan)
-        for t in range(w - 1, T_len):
-            corrs = []
-            for c in range(C):
-                x = a[t - w + 1:t + 1, c]
-                y = b_arr[t - w + 1:t + 1, c]
-                sx, sy = x.std(), y.std()
-                if sx < eps or sy < eps:
-                    continue
-                mx, my = x.mean(), y.mean()
-                dx, dy = x - mx, y - my
-                denom = np.sqrt((dx ** 2).sum() * (dy ** 2).sum())
-                corrs.append(float(np.dot(dx, dy) / denom))
-            if corrs:
-                out[t] = np.mean(corrs)
-        return out
-
     post_all = posterior_over_models_over_time_per_sample(
         demo_data, sampler_clone.major_p,
     )
@@ -638,7 +653,9 @@ def plot_lambda_posterior_agreement_coin(
     all_post = np.zeros((K, B_actual, T, n_components), dtype=float)
 
     tv_per_task = np.zeros((K, T), dtype=float)
-    cos_per_task = np.zeros((K, T), dtype=float)
+    tv_random_per_task = np.zeros((K, T), dtype=float)
+    tv_task_basis_per_task = np.full((K, T), np.nan, dtype=float)
+    rng = np.random.default_rng(random_seed)
 
     for k in range(K):
         for bi in range(B_actual):
@@ -657,65 +674,98 @@ def plot_lambda_posterior_agreement_coin(
             all_lam[k, bi] = lam_proj
             all_post[k, bi] = p_np
 
-            tv_per_task[k] += 0.5 * np.abs(p_np - lam_proj).sum(axis=-1)
-            cos_per_task[k] += _cosine_sim(lam_proj, p_np)
+            tv_per_task[k] += np.sqrt(0.5 * ((np.sqrt(np.maximum(p_np, 0)) - np.sqrt(np.maximum(lam_proj, 0))) ** 2).sum(axis=-1))
+            if show_random_baseline and random_baseline_draws > 0:
+                rand_lam = rng.dirichlet(
+                    np.ones(n_components, dtype=float),
+                    size=(random_baseline_draws, T),
+                )  # (R, T, C)
+                tv_rand = np.sqrt(0.5 * ((np.sqrt(rand_lam) - np.sqrt(np.maximum(p_np[None, :, :], 0))) ** 2).sum(axis=-1)).mean(axis=0)
+                tv_random_per_task[k] += tv_rand
+
+            if show_task_basis_baseline and k < k_major:
+                basis = np.zeros((T, n_components), dtype=float)
+                basis[:, k] = 1.0
+                tv_basis = np.sqrt(0.5 * ((np.sqrt(np.maximum(p_np, 0)) - np.sqrt(basis)) ** 2).sum(axis=-1))
+                if np.isnan(tv_task_basis_per_task[k]).all():
+                    tv_task_basis_per_task[k] = 0.0
+                tv_task_basis_per_task[k] += tv_basis
 
         tv_per_task[k] /= B_actual
-        cos_per_task[k] /= B_actual
+        if show_random_baseline and random_baseline_draws > 0:
+            tv_random_per_task[k] /= B_actual
+        if show_task_basis_baseline and k < k_major:
+            tv_task_basis_per_task[k] /= B_actual
 
     tv_major = tv_per_task[:k_major].mean(axis=0)
     tv_ood = tv_per_task[k_major:].mean(axis=0)
-    cos_major = cos_per_task[:k_major].mean(axis=0)
-    cos_ood = cos_per_task[k_major:].mean(axis=0)
-
-    rcorr_per_task = np.full((K, T), np.nan)
-    for k in range(K):
-        sample_corrs = np.full((B_actual, T), np.nan)
-        for bi in range(B_actual):
-            sample_corrs[bi] = _rolling_pearson(
-                all_lam[k, bi], all_post[k, bi], window,
-            )
-        rcorr_per_task[k] = np.nanmean(sample_corrs, axis=0)
-
-    rcorr_major = np.nanmean(rcorr_per_task[:k_major], axis=0)
-    rcorr_ood = np.nanmean(rcorr_per_task[k_major:], axis=0)
+    if show_random_baseline and random_baseline_draws > 0:
+        tv_random_major = tv_random_per_task[:k_major].mean(axis=0)
+        tv_random_ood = tv_random_per_task[k_major:].mean(axis=0)
+    else:
+        tv_random_major = None
+        tv_random_ood = None
+    if show_task_basis_baseline:
+        major_block = tv_task_basis_per_task[:k_major]
+        ood_block = tv_task_basis_per_task[k_major:]
+        tv_task_basis_major = (
+            np.nanmean(major_block, axis=0)
+            if major_block.size > 0 and np.isfinite(major_block).any()
+            else None
+        )
+        tv_task_basis_ood = (
+            np.nanmean(ood_block, axis=0)
+            if ood_block.size > 0 and np.isfinite(ood_block).any()
+            else None
+        )
+    else:
+        tv_task_basis_major = None
+        tv_task_basis_ood = None
     positions = np.arange(T)
+    _sfx = "" if major_only else " major"
 
     # ---- plot ----
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
-
-    ax1 = axes[0]
-    ax1.plot(positions, tv_major, linewidth=2.5, label="Major tasks", color="#1f77b4")
-    ax1.plot(positions, tv_ood, linewidth=2.5, label="OOD tasks", color="#d62728")
-    ax1.set_xlabel("Position", fontsize=18)
-    ax1.set_ylabel("TV distance", fontsize=18)
-    ax1.tick_params(labelsize=16)
-    ax1.legend(fontsize=14)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_ylim(bottom=0)
-
-    ax2 = axes[1]
-    ax2.plot(positions, cos_major, linewidth=2.5, label="Major tasks", color="#1f77b4")
-    ax2.plot(positions, cos_ood, linewidth=2.5, label="OOD tasks", color="#d62728")
-    ax2.set_xlabel("Position", fontsize=18)
-    ax2.set_ylabel("Cosine similarity", fontsize=18)
-    ax2.tick_params(labelsize=16)
-    ax2.legend(fontsize=14)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_ylim(0.5, 1.02)
-
-    ax3 = axes[2]
-    vm = ~np.isnan(rcorr_major)
-    vo = ~np.isnan(rcorr_ood)
-    ax3.plot(positions[vm], rcorr_major[vm], linewidth=2.5,
-             label="Major tasks", color="#1f77b4")
-    ax3.plot(positions[vo], rcorr_ood[vo], linewidth=2.5,
-             label="OOD tasks", color="#d62728")
-    ax3.set_xlabel("Position", fontsize=18)
-    ax3.set_ylabel(f"Rolling correlation (w={window})", fontsize=18)
-    ax3.tick_params(labelsize=16)
-    ax3.legend(fontsize=14)
-    ax3.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    ax.plot(positions, tv_major, linewidth=2.5,
+            label=r"$\lambda(t)$ vs $\alpha_t$" + (f" {_sfx}" if _sfx else ""),
+            color="#1f77b4", marker="o", markersize=4)
+    if not major_only:
+        ax.plot(positions, tv_ood, linewidth=2.5,
+                label=r"$\lambda(t)$ vs $\alpha_t$ OOD",
+                color="#d62728", marker="s", markersize=4)
+    if tv_random_major is not None:
+        ax.plot(
+            positions, tv_random_major, linewidth=2.0, ls="--",
+            label="uniform-random" + (f" {_sfx}" if _sfx else ""),
+            color="#7eb8da", marker="^", markersize=3,
+        )
+    if not major_only and tv_random_ood is not None:
+        ax.plot(
+            positions, tv_random_ood, linewidth=2.0, ls="--",
+            label="uniform-random OOD", color="#e8836b",
+            marker="v", markersize=3,
+        )
+    if tv_task_basis_major is not None:
+        ax.plot(
+            positions, tv_task_basis_major, linewidth=2.0, ls=":",
+            label="task-basis" + (f" {_sfx}" if _sfx else ""),
+            color="#2ca02c", marker="D", markersize=3,
+        )
+    if not major_only and tv_task_basis_ood is not None and np.isfinite(tv_task_basis_ood).any():
+        ax.plot(
+            positions, tv_task_basis_ood, linewidth=2.0, ls=":",
+            label="task-basis OOD", color="#9467bd",
+            marker="d", markersize=3,
+        )
+    ax.set_xlabel("Position", fontsize=18)
+    ax.set_ylabel("Hellinger distance", fontsize=18)
+    ax.tick_params(labelsize=16)
+    ax.legend(fontsize=13)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
+    _xlim_lo = min_position if min_position is not None else 0
+    _xlim_hi = max_position if max_position is not None else None
+    ax.set_xlim(_xlim_lo, _xlim_hi)
 
     if title:
         fig.suptitle("", fontsize=18)
@@ -728,17 +778,17 @@ def plot_lambda_posterior_agreement_coin(
 
     return {
         'fig': fig,
-        'axes': axes,
+        'ax': ax,
         'positions': positions,
         'tv_major': tv_major,
         'tv_ood': tv_ood,
-        'cos_major': cos_major,
-        'cos_ood': cos_ood,
-        'rcorr_major': rcorr_major,
-        'rcorr_ood': rcorr_ood,
+        'tv_random_major': tv_random_major,
+        'tv_random_ood': tv_random_ood,
+        'tv_task_basis_major': tv_task_basis_major,
+        'tv_task_basis_ood': tv_task_basis_ood,
         'tv_per_task': tv_per_task,
-        'cos_per_task': cos_per_task,
-        'rcorr_per_task': rcorr_per_task,
+        'tv_random_per_task': tv_random_per_task if show_random_baseline else None,
+        'tv_task_basis_per_task': tv_task_basis_per_task if show_task_basis_baseline else None,
         'all_lam': all_lam,
         'all_post': all_post,
         'W': W,

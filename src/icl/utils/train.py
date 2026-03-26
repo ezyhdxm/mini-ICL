@@ -70,6 +70,30 @@ def _init_log() -> dict:
            "eval/LengthLoss": [], "eval/LengthAcc": []}
     return log
 
+
+# Checkpoint schedule thresholds — hardcoded here (not in config) so that
+# changing these does not affect experiment hashing.
+_CKPT_SPARSE_AFTER    = 10_000   # steps before this: use config interval
+_CKPT_SPARSE_INTERVAL = 1_000    # steps from this point: save every N steps
+
+
+def _should_checkpoint(step: int, interval: int) -> bool:
+    """
+    Return True if a checkpoint should be saved at this step.
+
+    Phase 1 — dense early (step < min(interval, 200)):  every 5 steps
+    Phase 2 — regular    (step <= _CKPT_SPARSE_AFTER):  every `interval` steps
+    Phase 3 — sparse     (step >  _CKPT_SPARSE_AFTER):  every _CKPT_SPARSE_INTERVAL steps
+    """
+    if step < min(interval, 200) and step % 5 == 0:
+        return True
+    if step % interval == 0 and step <= _CKPT_SPARSE_AFTER:
+        return True
+    if step > _CKPT_SPARSE_AFTER and step % _CKPT_SPARSE_INTERVAL == 0:
+        return True
+    return False
+
+
 class BaseTrainer: 
     def __init__(self, config):
         self.config = config
@@ -261,8 +285,8 @@ class BaseTrainer:
                     with maybe_nvtx_range(f"Scheduler Step {iters}:{i}", color="yellow", enabled=self.config.profile):
                         scheduler.step()
 
-                if self.config.training.get_checkpoints > 0 and ((self.step % self.config.training.get_checkpoints == 0) 
-                                                            or (self.step < min(self.config.training.get_checkpoints, 200) and self.step % 5 == 0)):
+                if self.config.training.get_checkpoints > 0 and _should_checkpoint(
+                        self.step, self.config.training.get_checkpoints):
                     self.save_checkpoint(model, optimizer, is_final=False)
 
 
@@ -282,6 +306,12 @@ class BaseTrainer:
 
         if verbose:
             logger.info("Training complete.")
+
+        try:
+            if wandb.run is not None:
+                wandb.finish()
+        except Exception:
+            pass
 
         return get_train_result(log=self.log, config=self.config, sampler=sampler, attn_maps=self.attn_maps, probes=self.probes)
 

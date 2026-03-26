@@ -39,7 +39,8 @@ class GPT2Config:
     bias: bool = True
     dtype: Any = torch.float32
     device: str = "cpu"
-    activation: str = "gelu"  # Activation function for the model
+    activation: str = "gelu"
+    final_layernorm: bool = True
 
 
 class GPT2SelfAttention(nn.Module):
@@ -59,8 +60,11 @@ class GPT2SelfAttention(nn.Module):
         self.dropout = config.dropout
         self.resid_dropout = nn.Dropout(config.dropout)
         
-        self.freqs_cis = precompute_freqs_cis(self.head_dim, self.seq_len * 2, # config.rotary_theta,
-                                              ).to(config.device)
+        self.register_buffer(
+            "freqs_cis",
+            precompute_freqs_cis(self.head_dim, self.seq_len * 2).to(config.device),
+            persistent=False,  # not saved in state_dict, so existing checkpoints load cleanly
+        )
 
     def forward(self, x): # x: (B,T,C)
         batch_size, seq_len, _ = x.size()
@@ -139,10 +143,13 @@ class GPT2Model(nn.Module):
     def __init__(self, config: GPT2Config):
         super().__init__()
         self.config = config
-        
+
         self.drop = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList([GPT2Block(config) for _ in range(config.n_layer)])
-        self.ln_f = nn.LayerNorm(config.n_embd, eps=1e-5)
+        if config.final_layernorm:
+            self.ln_f = nn.LayerNorm(config.n_embd, eps=1e-5)
+        else:
+            self.ln_f = None
 
     def forward(self, input_embds):
         x = input_embds
@@ -151,5 +158,6 @@ class GPT2Model(nn.Module):
         for block in self.blocks:
             x = block(x)
 
-        x = self.ln_f(x)
+        if self.ln_f is not None:
+            x = self.ln_f(x)
         return x

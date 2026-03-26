@@ -30,16 +30,24 @@ def plot_lambda_posterior_agreement(
     step: Optional[int] = None,
     fit_n_samples: int = 5000,
     fit_positions: Optional[list] = None,
+    fit_include_position_bias: bool = True,
+    fit_include_logit: bool = True,
     window: int = 20,
-    figsize: tuple = (18, 5),
+    show_random_baseline: bool = True,
+    random_baseline_draws: int = 32,
+    random_seed: int = 0,
+    show_task_basis_baseline: bool = True,
+    major_only: bool = False,
+    min_position: Optional[int] = None,
+    max_position: Optional[int] = None,
+    figsize: tuple = (10, 4),
     show: bool = True,
     title: str = "",
     eps: float = 1e-12,
 ) -> dict:
     """
     Agreement between projected coefficients and latent Bayesian posterior,
-    measured by TV distance, cosine similarity, and rolling Pearson
-    correlation.
+    measured by Hellinger distance, with optional baselines.
 
     Latent counterpart of
     ``plot_lambda_posterior_agreement_coin_nonpadded``.
@@ -50,13 +58,14 @@ def plot_lambda_posterior_agreement(
     (``include_minor=False``), i.e. misspecified inference over the 3
     anchor tasks.
 
-    This implementation avoids ``Mean of empty slice`` warnings by using
-    safe averaging helpers for:
-      - empty OOD groups (e.g. ``n_ood=0``),
-      - all-NaN rolling-correlation windows.
+    This implementation avoids ``Mean of empty slice`` warnings for empty/NaN
+    OOD baseline blocks.
     """
     import matplotlib.pyplot as plt
     from icl.linear.linear_utils import estimate_lambda_with_r2
+
+    if major_only:
+        n_ood = 0
 
     _, _, config = nu.load_everything("latent", exp_name)
     n_layers = config.model.num_layers
@@ -71,6 +80,8 @@ def plot_lambda_posterior_agreement(
         layer=layer,
         n_samples=fit_n_samples,
         positions=fit_positions,
+        include_position_bias=fit_include_position_bias,
+        include_logit=fit_include_logit,
         sample_mode="major",
         n_minor=0,
         step=step,
@@ -79,7 +90,7 @@ def plot_lambda_posterior_agreement(
     )
     W = fit_res["model_weight"]
     b_vec = fit_res["model_bias"]
-    final_task_vecs = W - W.mean(dim=0, keepdim=True)
+    W_mean = W.mean(dim=0, keepdim=True)
 
     hiddens, _k_minor, demo_data, sampler_clone = _get_hiddens_at_real_positions(
         task_name="latent", exp_name=exp_name,
@@ -88,18 +99,34 @@ def plot_lambda_posterior_agreement(
     )
 
     hiddens_layer = hiddens[layer].to(torch.float32)
-    K, T, B_actual, _D = hiddens_layer.shape
+    K, T, B_actual, D = hiddens_layer.shape
     k_major = 3
+    dev = hiddens_layer.device
 
-    task_mean = hiddens_layer[:k_major].mean(dim=(0, 2)).unsqueeze(0)
+    b_f = b_vec.float().to(dev)
+    W_mean_f = W_mean.float().to(dev)
+    W_c = (W - W_mean).float().to(dev)
 
-    actual_endpoints = (
-        hiddens_layer[:k_major].mean(dim=-2) - task_mean
-    )[:, -1, :]
-    ftv_norm = final_task_vecs.float().norm()
-    ep_norm = actual_endpoints.float().norm()
-    if ftv_norm > 0:
-        final_task_vecs = final_task_vecs * (ep_norm / ftv_norm).item()
+    def _to_float_device(t):
+        if isinstance(t, torch.Tensor) and t.numel() > 0:
+            return t.float().to(dev)
+        return torch.zeros((0, D), dtype=torch.float32, device=dev)
+
+    W_tok_f = _to_float_device(fit_res.get("token_weight", None))
+    W_logit_f = _to_float_device(fit_res.get("logit_weight", None))
+    W_pos_f = _to_float_device(fit_res.get("position_weight", None))
+    fit_pos_list = [int(p) for p in fit_res.get("positions", fit_positions)]
+    fit_pos_to_col = {p: i for i, p in enumerate(fit_pos_list)}
+
+    model_for_logits = None
+    model_device = None
+    if W_logit_f.shape[0] > 0:
+        _, _, config, *_ = nu.load_everything("latent", exp_name)
+        _step = step if step is not None else config.training.num_epochs
+        model_for_logits, _ = nu.load_checkpoint(
+            config, step=_step, exp_name=exp_name, return_actual_step=True,
+        )
+        model_device = next(model_for_logits.parameters()).device
 
     def _project_onto_simplex(v):
         v = np.asarray(v, dtype=float)
@@ -119,47 +146,14 @@ def plot_lambda_posterior_agreement(
         w_out = np.maximum(v - theta[:, np.newaxis], 0.0)
         return w_out[0] if squeeze else w_out
 
-    def _cosine_sim(a, b_arr):
-        """Row-wise cosine similarity. a, b: (T, C) -> (T,)"""
-        dot = (a * b_arr).sum(axis=-1)
-        na = np.sqrt((a ** 2).sum(axis=-1)).clip(eps)
-        nb = np.sqrt((b_arr ** 2).sum(axis=-1)).clip(eps)
-        return dot / (na * nb)
-
-    def _rolling_pearson(a, b_arr, w):
-        """Per-component rolling Pearson r, averaged over components."""
-        T_len, C = a.shape
-        out = np.full(T_len, np.nan)
-        for t in range(w - 1, T_len):
-            corrs = []
-            for c in range(C):
-                x = a[t - w + 1:t + 1, c]
-                y = b_arr[t - w + 1:t + 1, c]
-                sx, sy = x.std(), y.std()
-                if sx < eps or sy < eps:
-                    continue
-                mx, my = x.mean(), y.mean()
-                dx, dy = x - mx, y - my
-                denom = np.sqrt((dx ** 2).sum() * (dy ** 2).sum())
-                corrs.append(float(np.dot(dx, dy) / denom))
-            if corrs:
-                out[t] = np.mean(corrs)
-        return out
-
-    def _mean_axis0_or_nan(arr: np.ndarray) -> np.ndarray:
+    def _safe_mean(arr, axis=0):
         arr = np.asarray(arr, dtype=float)
-        if arr.shape[0] == 0:
-            return np.full(arr.shape[1:], np.nan, dtype=float)
-        return arr.mean(axis=0)
-
-    def _nanmean_axis0_no_warning(arr: np.ndarray) -> np.ndarray:
-        arr = np.asarray(arr, dtype=float)
-        valid = ~np.isnan(arr)
-        count = valid.sum(axis=0)
-        sumv = np.where(valid, arr, 0.0).sum(axis=0)
-        out = np.full(sumv.shape, np.nan, dtype=float)
-        np.divide(sumv, count, out=out, where=count > 0)
-        return out
+        if arr.shape[axis] == 0:
+            shape = list(arr.shape)
+            shape.pop(axis)
+            return np.full(shape, np.nan, dtype=float)
+        with np.errstate(all="ignore"):
+            return np.nanmean(arr, axis=axis)
 
     post_all = task_posterior_over_time(
         sampler_clone,
@@ -172,83 +166,139 @@ def plot_lambda_posterior_agreement(
     all_post = np.zeros((K, B_actual, T, n_components), dtype=float)
 
     tv_per_task = np.zeros((K, T), dtype=float)
-    cos_per_task = np.zeros((K, T), dtype=float)
+    tv_random_per_task = np.zeros((K, T), dtype=float)
+    tv_task_basis_per_task = np.full((K, T), np.nan, dtype=float)
+    rng = np.random.default_rng(random_seed)
 
     for k in range(K):
-        for bi in range(B_actual):
-            h = hiddens_layer[k:k + 1, :, bi:bi + 1, :].squeeze(2)
-            tv = h - task_mean
+        h_tid = hiddens_layer[k].permute(1, 0, 2).contiguous()  # (B, T, D)
+        nuisance = torch.zeros_like(h_tid)
 
-            lam_raw, _, _, _ = estimate_lambda_with_r2(
-                final_task_vecs, tv, is_zero_mean=True,
+        if W_tok_f.shape[0] > 0:
+            tok_k = demo_data[k, :B_actual, :T].long().to(dev)
+            nuisance = nuisance + W_tok_f[tok_k]
+
+        if W_logit_f.shape[0] > 0 and model_for_logits is not None:
+            with torch.no_grad():
+                samples_k = demo_data[k, :B_actual].to(device=model_device)
+                logits_k = model_for_logits(samples_k).float()[:, :T, :W_logit_f.shape[0]]
+            nuisance = nuisance + torch.einsum(
+                "btd,df->btf", logits_k.to(dev), W_logit_f,
             )
-            lam_np = lam_raw if isinstance(lam_raw, np.ndarray) else np.asarray(lam_raw)
-            lam_proj = _project_onto_simplex(lam_np[0])
 
+        if W_pos_f.shape[0] > 0:
+            pos_effect = torch.zeros((T, D), dtype=torch.float32, device=dev)
+            for t in range(T):
+                j = fit_pos_to_col.get(t, None)
+                if j is not None and j < W_pos_f.shape[0]:
+                    pos_effect[t] = W_pos_f[j]
+            nuisance = nuisance + pos_effect.unsqueeze(0)
+
+        h_adj = h_tid - b_f.unsqueeze(0).unsqueeze(0) - nuisance
+
+        lam_raw, _, _, _ = estimate_lambda_with_r2(
+            W_c, h_adj - W_mean_f.unsqueeze(0), is_zero_mean=True,
+        )
+        lam_np = lam_raw if isinstance(lam_raw, np.ndarray) else np.asarray(lam_raw)
+        lam_proj = _project_onto_simplex(lam_np.reshape(-1, lam_np.shape[-1])).reshape(lam_np.shape)
+
+        for bi in range(B_actual):
             p = post_all[k, bi, :T, :]
             p_np = p.cpu().numpy() if torch.is_tensor(p) else np.asarray(p)
 
-            all_lam[k, bi] = lam_proj
+            all_lam[k, bi] = lam_proj[bi]
             all_post[k, bi] = p_np
 
-            tv_per_task[k] += 0.5 * np.abs(p_np - lam_proj).sum(axis=-1)
-            cos_per_task[k] += _cosine_sim(lam_proj, p_np)
+            tv_per_task[k] += np.sqrt(0.5 * ((np.sqrt(np.maximum(p_np, 0)) - np.sqrt(np.maximum(lam_proj[bi], 0))) ** 2).sum(axis=-1))
+            if show_random_baseline and random_baseline_draws > 0:
+                rand_lam = rng.dirichlet(
+                    np.ones(n_components, dtype=float),
+                    size=(random_baseline_draws, T),
+                )
+                tv_rand = np.sqrt(0.5 * ((np.sqrt(rand_lam) - np.sqrt(np.maximum(p_np[None, :, :], 0))) ** 2).sum(axis=-1)).mean(axis=0)
+                tv_random_per_task[k] += tv_rand
+            if show_task_basis_baseline and k < k_major:
+                basis = np.zeros((T, n_components), dtype=float)
+                basis[:, k] = 1.0
+                tv_basis = np.sqrt(0.5 * ((np.sqrt(np.maximum(p_np, 0)) - np.sqrt(basis)) ** 2).sum(axis=-1))
+                if np.isnan(tv_task_basis_per_task[k]).all():
+                    tv_task_basis_per_task[k] = 0.0
+                tv_task_basis_per_task[k] += tv_basis
 
         tv_per_task[k] /= B_actual
-        cos_per_task[k] /= B_actual
+        if show_random_baseline and random_baseline_draws > 0:
+            tv_random_per_task[k] /= B_actual
+        if show_task_basis_baseline and k < k_major:
+            tv_task_basis_per_task[k] /= B_actual
 
-    tv_major = _mean_axis0_or_nan(tv_per_task[:k_major])
-    tv_ood = _mean_axis0_or_nan(tv_per_task[k_major:])
-    cos_major = _mean_axis0_or_nan(cos_per_task[:k_major])
-    cos_ood = _mean_axis0_or_nan(cos_per_task[k_major:])
-
-    rcorr_per_task = np.full((K, T), np.nan)
-    for k in range(K):
-        sample_corrs = np.full((B_actual, T), np.nan)
-        for bi in range(B_actual):
-            sample_corrs[bi] = _rolling_pearson(
-                all_lam[k, bi], all_post[k, bi], window,
-            )
-        rcorr_per_task[k] = _nanmean_axis0_no_warning(sample_corrs)
-
-    rcorr_major = _nanmean_axis0_no_warning(rcorr_per_task[:k_major])
-    rcorr_ood = _nanmean_axis0_no_warning(rcorr_per_task[k_major:])
+    tv_major = _safe_mean(tv_per_task[:k_major])
+    tv_ood = _safe_mean(tv_per_task[k_major:])
+    if show_random_baseline and random_baseline_draws > 0:
+        tv_random_major = _safe_mean(tv_random_per_task[:k_major])
+        tv_random_ood = _safe_mean(tv_random_per_task[k_major:])
+    else:
+        tv_random_major = None
+        tv_random_ood = None
+    if show_task_basis_baseline:
+        major_block = tv_task_basis_per_task[:k_major]
+        ood_block = tv_task_basis_per_task[k_major:]
+        tv_task_basis_major = (
+            np.nanmean(major_block, axis=0)
+            if major_block.size > 0 and np.isfinite(major_block).any()
+            else None
+        )
+        tv_task_basis_ood = (
+            np.nanmean(ood_block, axis=0)
+            if ood_block.size > 0 and np.isfinite(ood_block).any()
+            else None
+        )
+    else:
+        tv_task_basis_major = None
+        tv_task_basis_ood = None
     positions = np.arange(T)
+    _sfx = "" if major_only else " major"
 
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
-
-    ax1 = axes[0]
-    ax1.plot(positions, tv_major, linewidth=2.5, label="Major tasks", color="#1f77b4")
-    ax1.plot(positions, tv_ood, linewidth=2.5, label="OOD tasks", color="#d62728")
-    ax1.set_xlabel("Position", fontsize=18)
-    ax1.set_ylabel("TV distance", fontsize=18)
-    ax1.tick_params(labelsize=16)
-    ax1.legend(fontsize=14)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_ylim(bottom=0)
-
-    ax2 = axes[1]
-    ax2.plot(positions, cos_major, linewidth=2.5, label="Major tasks", color="#1f77b4")
-    ax2.plot(positions, cos_ood, linewidth=2.5, label="OOD tasks", color="#d62728")
-    ax2.set_xlabel("Position", fontsize=18)
-    ax2.set_ylabel("Cosine similarity", fontsize=18)
-    ax2.tick_params(labelsize=16)
-    ax2.legend(fontsize=14)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_ylim(0.5, 1.02)
-
-    ax3 = axes[2]
-    vm = ~np.isnan(rcorr_major)
-    vo = ~np.isnan(rcorr_ood)
-    ax3.plot(positions[vm], rcorr_major[vm], linewidth=2.5,
-             label="Major tasks", color="#1f77b4")
-    ax3.plot(positions[vo], rcorr_ood[vo], linewidth=2.5,
-             label="OOD tasks", color="#d62728")
-    ax3.set_xlabel("Position", fontsize=18)
-    ax3.set_ylabel(f"Rolling correlation (w={window})", fontsize=18)
-    ax3.tick_params(labelsize=16)
-    ax3.legend(fontsize=14)
-    ax3.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    ax.plot(positions, tv_major, linewidth=2.5,
+            label=r"$\lambda(t)$ vs $\alpha_t$" + (f" {_sfx}" if _sfx else ""),
+            color="#1f77b4", marker="o", markersize=4)
+    if not major_only:
+        ax.plot(positions, tv_ood, linewidth=2.5,
+                label=r"$\lambda(t)$ vs $\alpha_t$ OOD",
+                color="#d62728", marker="s", markersize=4)
+    if tv_random_major is not None:
+        ax.plot(
+            positions, tv_random_major, linewidth=2.0, ls="--",
+            label="uniform-random" + (f" {_sfx}" if _sfx else ""),
+            color="#7eb8da", marker="^", markersize=3,
+        )
+    if not major_only and tv_random_ood is not None:
+        ax.plot(
+            positions, tv_random_ood, linewidth=2.0, ls="--",
+            label="uniform-random OOD", color="#e8836b",
+            marker="v", markersize=3,
+        )
+    if tv_task_basis_major is not None:
+        ax.plot(
+            positions, tv_task_basis_major, linewidth=2.0, ls=":",
+            label="task-basis" + (f" {_sfx}" if _sfx else ""),
+            color="#2ca02c", marker="D", markersize=3,
+        )
+    if not major_only and tv_task_basis_ood is not None and np.isfinite(tv_task_basis_ood).any():
+        ax.plot(
+            positions, tv_task_basis_ood, linewidth=2.0, ls=":",
+            label="task-basis OOD", color="#9467bd",
+            marker="d", markersize=3,
+        )
+    ax.set_xlabel("Position", fontsize=18)
+    ax.set_ylabel("Hellinger distance", fontsize=18)
+    ax.tick_params(labelsize=16)
+    ax.legend(fontsize=13)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(bottom=0)
+    _xlim_lo = min_position if min_position is not None else 0
+    _xlim_hi = max_position if max_position is not None else None
+    ax.set_xlim(_xlim_lo, _xlim_hi)
 
     if title:
         fig.suptitle("", fontsize=18)
@@ -261,17 +311,17 @@ def plot_lambda_posterior_agreement(
 
     return {
         'fig': fig,
-        'axes': axes,
+        'ax': ax,
         'positions': positions,
         'tv_major': tv_major,
         'tv_ood': tv_ood,
-        'cos_major': cos_major,
-        'cos_ood': cos_ood,
-        'rcorr_major': rcorr_major,
-        'rcorr_ood': rcorr_ood,
+        'tv_random_major': tv_random_major,
+        'tv_random_ood': tv_random_ood,
+        'tv_task_basis_major': tv_task_basis_major,
+        'tv_task_basis_ood': tv_task_basis_ood,
         'tv_per_task': tv_per_task,
-        'cos_per_task': cos_per_task,
-        'rcorr_per_task': rcorr_per_task,
+        'tv_random_per_task': tv_random_per_task if show_random_baseline else None,
+        'tv_task_basis_per_task': tv_task_basis_per_task if show_task_basis_baseline else None,
         'all_lam': all_lam,
         'all_post': all_post,
         'W': W,
@@ -367,16 +417,25 @@ def plot_id_ood_loss(
         logger.warning("No latent experiments loaded successfully.")
         return {}
 
-    k_min, k_max = min(ks_sorted), max(ks_sorted)
+    # Evenly sample colormap (avoid dark purples): use 15%--90% of viridis
+    nk = len(ks_sorted)
     cmap = plt.get_cmap("viridis")
     color_map = {}
-    for k in ks_sorted:
-        if k_max > k_min:
-            color_map[k] = cmap((k - k_min) / (k_max - k_min))
-        else:
-            color_map[k] = cmap(0.5)
+    for i, k in enumerate(ks_sorted):
+        t = 0.15 + 0.75 * (i / max(1, nk - 1))
+        color_map[k] = cmap(t)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
+    fig.patch.set_facecolor("white")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("white")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(True, which="major", alpha=0.15, linestyle="-")
+        ax.grid(True, which="minor", alpha=0.06, linestyle=":")
+
+    lw, alpha = 1.5, 0.85
+    fs_label, fs_tick = 14, 12
 
     for k in ks_sorted:
         d = results[k]
@@ -387,14 +446,27 @@ def plot_id_ood_loss(
             xs, ys = xs[mask], ys[mask]
         if xs.size == 0:
             continue
-        ax1.plot(xs, ys, color=c, linewidth=2.0)
+        ax1.plot(xs, ys, color=c, linewidth=lw, alpha=alpha, label=str(k))
 
+    ax1.set_title("In-distribution", fontsize=fs_label)
     if logx:
         ax1.set_xscale("log")
-    ax1.set_xlabel("Training Step", fontsize=16)
-    ax1.set_ylabel("ID Loss", fontsize=16)
-    ax1.tick_params(labelsize=14)
-    ax1.grid(True, which="both", alpha=0.25)
+    ax1.set_xlabel("Training Step", fontsize=fs_label)
+    ax1.set_ylabel("Loss (KL)", fontsize=fs_label)
+    ax1.tick_params(labelsize=fs_tick)
+
+    handles, labels = ax1.get_legend_handles_labels()
+    ax2.legend(
+        handles,
+        labels,
+        title=r"$\log_2(n_{\mathrm{minor}})$",
+        fontsize=fs_tick,
+        title_fontsize=fs_label,
+        frameon=True,
+        framealpha=0.95,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+    )
 
     for k in ks_sorted:
         d = results[k]
@@ -405,15 +477,16 @@ def plot_id_ood_loss(
             xs, ys = xs[mask], ys[mask]
         if xs.size == 0:
             continue
-        ax2.plot(xs, ys, color=c, linewidth=2.0)
+        ax2.plot(xs, ys, color=c, linewidth=lw, alpha=alpha)
 
+    ax2.set_title("Out-of-distribution", fontsize=fs_label)
     if logx:
         ax2.set_xscale("log")
-    ax2.set_xlabel("Training Step", fontsize=16)
-    ax2.set_ylabel("OOD Loss", fontsize=16)
-    ax2.tick_params(labelsize=14)
-    ax2.grid(True, which="both", alpha=0.25)
+    ax2.set_xlabel("Training Step", fontsize=fs_label)
+    ax2.set_ylabel("")
+    ax2.tick_params(labelsize=fs_tick)
 
+    fig.subplots_adjust(wspace=0.05, right=0.78)
     fig.tight_layout()
     if show:
         plt.show()

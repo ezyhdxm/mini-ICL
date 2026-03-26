@@ -229,6 +229,14 @@ def project_with_r2_trajectories_group_colors_mpl(
     final_edge_color=(0, 0, 0, 0.95),
     final_edge_width=1.5,
 
+    # --- simplex triangle ---
+    # Draw a dashed triangle connecting the three major final points.
+    show_simplex_triangle=True,
+    simplex_triangle_color=(0.4, 0.4, 0.4),
+    simplex_triangle_alpha=0.25,
+    simplex_triangle_lw=1.2,
+    simplex_triangle_ls="--",
+
     # --- cosmetics ---
     title="",
     hide_ticks=True,
@@ -249,7 +257,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     # If you want the 20th annotated, include 19 in must_include_times.
     annotate_times=(0, -1),           # Start + End only by default (can still add others)
 
-    annotation_fontsize=14,
+    annotation_fontsize=8,
     annotation_box_alpha=0.45,
     annotation_box_pad=0.20,
     annotation_box_lw=0.90,
@@ -287,6 +295,34 @@ def project_with_r2_trajectories_group_colors_mpl(
 
     # --- override the automatic t_show selection ---
     t_show_override=None,
+
+    # --- per-group time overrides ---
+    # OOD trajectories can show a sparser set of time steps (e.g. just start+end).
+    # Pass a list of absolute or python-negative indices, e.g. [0, -1].
+    # None means "use the same t_show as major trajectories".
+    ood_t_show_override=None,
+
+    # --- per-group line style overrides ---
+    # major_line_width: if set, overrides line_width for major trajectories only.
+    # ood_line_alpha_factor: multiplied onto line_alpha_end for OOD lines (< 1 = lighter).
+    major_line_width=None,
+    ood_line_alpha_factor=1.0,
+
+    # --- legend label customization ---
+    # major_legend_prefix: prefix for each major-task legend entry (e.g. "Maj: " gives "Maj: 1").
+    # ood_legend_label: label for the OOD legend entry.
+    major_legend_prefix="Maj: ",
+    ood_legend_label="OOD",
+
+    # --- font sizes ---
+    # base_fontsize controls legend, tick labels, and axis labels.
+    # Title is base_fontsize + 2.  Annotation fontsize has its own parameter above.
+    base_fontsize=9,
+
+    # --- axis padding ---
+    # axis_margin: fraction of data range added as padding on each side.
+    # Smaller values tighten the plot; matplotlib default is 0.05.
+    axis_margin=0.03,
 
     # --- compatibility alias ---
     b_maj=None,  # alias for b_major
@@ -739,15 +775,21 @@ def project_with_r2_trajectories_group_colors_mpl(
         t_show.sort()
     time_to_show_idx = {int(t): i for i, t in enumerate(t_show.tolist())}
 
-    # ============================================================
-    # Point alpha schedule (early darker -> late lighter)
-    # ============================================================
-
-    u = np.linspace(0.0, 1.0, t_show.size)
-    a_pts = float(point_alpha_end) + (float(point_alpha_start) - float(point_alpha_end)) * (
-        (1.0 - u) ** float(point_alpha_power)
-    )
-    a_pts = np.clip(a_pts, 0.0, 1.0)
+    # Normalize ood_t_show_override into an absolute-time numpy array.
+    if ood_t_show_override is not None:
+        _ood_ts = []
+        for _t in ood_t_show_override:
+            _t = int(_t)
+            if _t < 0:
+                _t = T + _t
+            if 0 <= _t < T:
+                _ood_ts.append(_t)
+        t_show_ood = np.unique(np.array(_ood_ts, dtype=int))
+        t_show_ood.sort()
+        if t_show_ood.size == 0:
+            t_show_ood = None  # fall back to full t_show
+    else:
+        t_show_ood = None
 
     # anchors
     if show_pow2_anchors and t_base_full.size > 0:
@@ -793,13 +835,15 @@ def project_with_r2_trajectories_group_colors_mpl(
     x_rng = float(np.ptp(x_all) + 1e-9)
     y_rng = float(np.ptp(y_all) + 1e-9)
 
+    # J is indexed by absolute time step so any subset of times can be drawn
+    # per group (e.g. OOD endpoint-only uses J[k, [0, T-1]]).
     if jitter_points:
         rng = np.random.default_rng(int(jitter_seed))
-        J = rng.normal(size=(K, t_show.size, 2)).astype(float)
+        J = rng.normal(size=(K, T, 2)).astype(float)
         J[:, :, 0] *= float(jitter_scale) * x_rng
         J[:, :, 1] *= float(jitter_scale) * y_rng
     else:
-        J = np.zeros((K, t_show.size, 2), dtype=float)
+        J = np.zeros((K, T, 2), dtype=float)
 
     # ============================================================
     # Styles
@@ -845,7 +889,8 @@ def project_with_r2_trajectories_group_colors_mpl(
     # Plot helpers
     # ============================================================
 
-    def _draw_gradient_polyline(Pxy, rgb, ls, gid_suffix, z=1.5):
+    def _draw_gradient_polyline(Pxy, rgb, ls, gid_suffix, z=1.5,
+                                lw_override=None, alpha_scale=1.0):
         """Line alpha: DARK at start -> LIGHT at end."""
         if Pxy.shape[0] < 2:
             return None
@@ -854,8 +899,8 @@ def project_with_r2_trajectories_group_colors_mpl(
         nseg = segs.shape[0]
         uu = np.linspace(0.0, 1.0, nseg)
 
-        a0 = float(line_alpha_end)
-        a1 = float(line_alpha_end) * float(line_alpha_start_factor)
+        a0 = float(line_alpha_end) * float(alpha_scale)
+        a1 = float(line_alpha_end) * float(line_alpha_start_factor) * float(alpha_scale)
         al = a0 + (a1 - a0) * (uu ** float(line_alpha_power))
         al = np.clip(al, 0.0, 1.0)
 
@@ -868,33 +913,45 @@ def project_with_r2_trajectories_group_colors_mpl(
             ]
         )
 
+        lw = float(lw_override) if lw_override is not None else float(line_width)
         lc = LineCollection(
             segs,
             colors=cols,
-            linewidths=float(line_width),
+            linewidths=lw,
             linestyles=ls,
             zorder=float(z),
         )
         ax.add_collection(lc)
         return _set_gid(lc, gid_suffix)
 
-    def _draw_points(Pfull, k, rgb, gid_suffix):
-        idxs = np.arange(t_show.size, dtype=int)
-        Pxy = Pfull[t_show] + J[k, idxs]
+    def _alpha_at(t_abs):
+        """Alpha schedule at arbitrary absolute time indices."""
+        u = t_abs.astype(float) / max(1.0, float(T - 1))
+        a = float(point_alpha_end) + (float(point_alpha_start) - float(point_alpha_end)) * (
+            (1.0 - u) ** float(point_alpha_power)
+        )
+        return np.clip(a, 0.0, 1.0)
+
+    def _draw_points(Pfull, k, rgb, gid_suffix, t_abs=None):
+        """Draw scatter points. t_abs: absolute time indices (default: t_show)."""
+        if t_abs is None:
+            t_abs = t_show
+        a_local = _alpha_at(t_abs)
+        Pxy = Pfull[t_abs] + J[k, t_abs]
 
         fc = np.column_stack(
             [
-                np.full_like(a_pts, rgb[0], dtype=float),
-                np.full_like(a_pts, rgb[1], dtype=float),
-                np.full_like(a_pts, rgb[2], dtype=float),
-                a_pts,
+                np.full_like(a_local, rgb[0], dtype=float),
+                np.full_like(a_local, rgb[1], dtype=float),
+                np.full_like(a_local, rgb[2], dtype=float),
+                a_local,
             ]
         )
 
         coll = ax.scatter(
             Pxy[:, 0],
             Pxy[:, 1],
-            s=sizes_area[k, t_show] * float(mid_size_factor),
+            s=sizes_area[k, t_abs] * float(mid_size_factor),
             marker="o",
             facecolors=fc,
             edgecolors="none",
@@ -907,8 +964,7 @@ def project_with_r2_trajectories_group_colors_mpl(
         if (not show_pow2_anchors) or (t_base.size == 0) or (aA is None):
             return None
 
-        ii = np.array([time_to_show_idx[int(t)] for t in t_base.tolist()], dtype=int)
-        Pxy = Pfull[t_base] + J[k, ii]
+        Pxy = Pfull[t_base] + J[k, t_base]  # J indexed by absolute time
 
         fc = np.column_stack(
             [
@@ -936,8 +992,7 @@ def project_with_r2_trajectories_group_colors_mpl(
             return None
 
         tlast = T - 1
-        ii = time_to_show_idx.get(int(tlast), None)
-        jxy = J[k, ii] if ii is not None else np.zeros(2, dtype=float)
+        jxy = J[k, tlast]  # J now indexed by absolute time
 
         px, py = float(Pfull[tlast, 0] + jxy[0]), float(Pfull[tlast, 1] + jxy[1])
 
@@ -953,22 +1008,28 @@ def project_with_r2_trajectories_group_colors_mpl(
         )
         return _set_gid(en, f"{gid_group}_end:{k}")
 
-    def _draw_one(k, Pfull, rgb, ls, gid_group):
-        Pxy_line = Pfull[t_show]  # keep the line un-jittered
+    def _draw_one(k, Pfull, rgb, ls, gid_group, t_show_local=None,
+                  lw_override=None, alpha_scale=1.0):
+        """Draw one trajectory.  t_show_local overrides t_show for line & points."""
+        t_line = t_show if t_show_local is None else t_show_local
+        Pxy_line = Pfull[t_line]  # keep the line un-jittered
         if use_gradient_line:
-            _draw_gradient_polyline(Pxy_line, rgb, ls, f"{gid_group}_gline:{k}", z=1.6)
+            _draw_gradient_polyline(Pxy_line, rgb, ls, f"{gid_group}_gline:{k}", z=1.6,
+                                    lw_override=lw_override, alpha_scale=alpha_scale)
         else:
+            lw = float(lw_override) if lw_override is not None else float(line_width)
+            a = float(line_alpha_end) * float(alpha_scale)
             ln = ax.plot(
                 Pxy_line[:, 0],
                 Pxy_line[:, 1],
-                color=(rgb[0], rgb[1], rgb[2], float(line_alpha_end)),
-                lw=float(line_width),
+                color=(rgb[0], rgb[1], rgb[2], np.clip(a, 0.0, 1.0)),
+                lw=lw,
                 linestyle=ls,
                 zorder=1.6,
             )[0]
             _set_gid(ln, f"{gid_group}_line:{k}")
 
-        _draw_points(Pfull, k, rgb, f"{gid_group}_pts:{k}")
+        _draw_points(Pfull, k, rgb, f"{gid_group}_pts:{k}", t_abs=t_line)
         _draw_pow2_anchors(Pfull, k, rgb, f"{gid_group}_anchors:{k}")
         _draw_end(Pfull, k, rgb, gid_group)
 
@@ -988,12 +1049,17 @@ def project_with_r2_trajectories_group_colors_mpl(
         ci = int(major_base_to_color.get(base, 0))
         return major_rgbs[ci]
 
+    _major_lw = float(major_line_width) if major_line_width is not None else None
+    _ood_alpha = float(ood_line_alpha_factor)
+
     for k in idx_major.tolist():
-        _draw_one(int(k), X_proj[int(k)], _major_rgb_for_k(int(k)), major_linestyle, "major")
+        _draw_one(int(k), X_proj[int(k)], _major_rgb_for_k(int(k)), major_linestyle, "major",
+                  lw_override=_major_lw)
 
     for k in idx_ood.tolist():
         rgb, ls = ood_style[int(k)]
-        _draw_one(int(k), X_proj[int(k)], rgb, ls, "ood")
+        _draw_one(int(k), X_proj[int(k)], rgb, ls, "ood", t_show_local=t_show_ood,
+                  alpha_scale=_ood_alpha)
 
     for k in idx_minor.tolist():
         rgb = minor_style[int(k)]
@@ -1003,44 +1069,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     # Legend + Cosmetics
     # ============================================================
 
-    handles = []
-    for i in range(3):
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                color=_rgba(major_colors[i], 0.95),
-                lw=2.4,
-                linestyle=major_linestyle,
-                label=f"Major: {maj_names[i]}",
-            )
-        )
-
-    if idx_ood.size > 0:
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                color=_rgba(ood_base_color, 0.95),
-                lw=2.4,
-                linestyle="--",
-                label="OOD trajectories",
-            )
-        )
-
-    if idx_minor.size > 0:
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                color=_rgba(minor_base_color, 0.95),
-                lw=2.4,
-                linestyle=minor_linestyle,
-                label="Minor trajectories",
-            )
-        )
-
-        # ============================================================
+    # ============================================================
     # Legend + Cosmetics
     #   - Legend 1: groups (lines)
     #   - Legend 2: R² -> marker size (a few reference sizes)
@@ -1055,7 +1084,7 @@ def project_with_r2_trajectories_group_colors_mpl(
                 color=_rgba(major_colors[i], 0.95),
                 lw=2.4,
                 linestyle=major_linestyle,
-                label=f"Major: {maj_names[i]}",
+                label=f"{major_legend_prefix}{i + 1}",
             )
         )
 
@@ -1067,7 +1096,7 @@ def project_with_r2_trajectories_group_colors_mpl(
                 color=_rgba(ood_base_color, 0.95),
                 lw=2.4,
                 linestyle="--",
-                label="OOD trajectories",
+                label=ood_legend_label,
             )
         )
 
@@ -1083,16 +1112,19 @@ def project_with_r2_trajectories_group_colors_mpl(
             )
         )
     
+    _fs = int(base_fontsize)
+    _fs_large = _fs + 2
+
     if show_legend:
         # --- Legend 1 (groups) ---
-        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left", fontsize=16)
+        leg1 = ax.legend(handles=handles, frameon=False, loc="upper left", fontsize=_fs)
 
         # --- Legend 2 (size ~ R²) ---
         r2_min = float(np.min(R2))
         r2_max = float(np.max(R2))
 
         # pick a few representative R² values (quantiles tend to look nice)
-        r2_levels = np.quantile(R2, [0.2, 0.5, 0.8]).astype(float)
+        r2_levels = np.quantile(R2, [0.2, 0.5, 0.8, 0.95]).astype(float)
 
         # ensure uniqueness / stability (avoid duplicates if R² is concentrated)
         r2_levels = np.unique(np.round(r2_levels, 2))
@@ -1132,8 +1164,8 @@ def project_with_r2_trajectories_group_colors_mpl(
             borderpad=0.3,
             labelspacing=0.6,
             handletextpad=0.8,
-            fontsize=16,
-            title_fontsize=16,
+            fontsize=_fs,
+            title_fontsize=_fs,
         )
 
         # Keep both legends
@@ -1142,7 +1174,8 @@ def project_with_r2_trajectories_group_colors_mpl(
         if getattr(ax, "legend_", None) is not None:
             ax.legend_.remove()
         
-    ax.set_title(title, fontsize=18)
+    ax.set_title(title, fontsize=_fs_large)
+    ax.margins(float(axis_margin))
     ax.set_aspect("equal", adjustable="datalim")
     ax.grid(False)
 
@@ -1151,16 +1184,17 @@ def project_with_r2_trajectories_group_colors_mpl(
         ax.set_yticks([])
         ax.set_xlabel("")
         ax.set_ylabel("")
+        for sp in ax.spines.values():
+            sp.set_visible(False)
     else:
-        ax.set_xlabel("axis 1", fontsize=18)
-        ax.set_ylabel("axis 2", fontsize=18)
-        ax.tick_params(labelsize=16)
-
-    if despine:
-        for sp in ("top", "right"):
-            ax.spines[sp].set_visible(False)
-        ax.spines["left"].set_alpha(0.45)
-        ax.spines["bottom"].set_alpha(0.45)
+        ax.set_xlabel("axis 1", fontsize=_fs_large)
+        ax.set_ylabel("axis 2", fontsize=_fs_large)
+        ax.tick_params(labelsize=_fs)
+        if despine:
+            for sp in ("top", "right"):
+                ax.spines[sp].set_visible(False)
+            ax.spines["left"].set_alpha(0.45)
+            ax.spines["bottom"].set_alpha(0.45)
 
     # ============================================================
     # Reference stars (NO text labels)
@@ -1180,6 +1214,19 @@ def project_with_r2_trajectories_group_colors_mpl(
                 zorder=4.2,
             )
             _set_gid(ref, f"ref_vec:{i}")
+
+        if show_simplex_triangle and F_proj.shape[0] == 3:
+            tri_xs = np.append(F_proj[:, 0], F_proj[0, 0])
+            tri_ys = np.append(F_proj[:, 1], F_proj[0, 1])
+            tri_line, = ax.plot(
+                tri_xs, tri_ys,
+                color=simplex_triangle_color,
+                alpha=simplex_triangle_alpha,
+                lw=simplex_triangle_lw,
+                linestyle=simplex_triangle_ls,
+                zorder=1.0,
+            )
+            _set_gid(tri_line, "simplex_triangle")
 
     # ============================================================
     # Prepare renderer + obstacles + point cloud for label placement
@@ -1202,7 +1249,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     ]
 
     size_factor_t = np.full(t_show.size, float(mid_size_factor), dtype=float)
-    P_sample = (X_proj[:, t_show, :] + J).reshape(-1, 2)
+    P_sample = (X_proj[:, t_show, :] + J[:, t_show, :]).reshape(-1, 2)
     S_sample = (sizes_area[:, t_show] * size_factor_t[None, :]).reshape(-1)
 
     max_point_obstacles = 14000
@@ -1426,9 +1473,7 @@ def project_with_r2_trajectories_group_colors_mpl(
                 if tt < 0 or tt >= T:
                     continue
 
-                ii = time_to_show_idx.get(int(tt), None)
-                jxy = J[k, ii] if ii is not None else np.zeros(2, dtype=float)
-
+                jxy = J[k, tt]  # J indexed by absolute time
                 px_data = float(X_proj[k, tt, 0] + jxy[0])
                 py_data = float(X_proj[k, tt, 1] + jxy[1])
 
@@ -1453,6 +1498,7 @@ def project_with_r2_trajectories_group_colors_mpl(
 
     # If nothing to annotate, return now.
     if not ann_items:
+        fig.tight_layout(pad=0.3)
         return fig, ax
 
     # ============================================================
@@ -1809,4 +1855,5 @@ def project_with_r2_trajectories_group_colors_mpl(
         )
         _set_gid(ann, f"annot:{k}:{tt}")
 
+    fig.tight_layout(pad=0.3)
     return fig, ax

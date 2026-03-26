@@ -63,6 +63,9 @@ results/**/
 .DS_Store
 Thumbs.db
 
+# Secrets
+.env
+
 # Project specific
 wandb/
 *.log

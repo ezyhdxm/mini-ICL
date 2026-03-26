@@ -18,6 +18,8 @@ from icl.linear.analysis.interventions.remove_task import (  # noqa: F401
 from icl.linear.analysis.interventions.inject_task import (  # noqa: F401
     intervene_inject_task_vector,
     plot_inject_task_vector_across_layers,
+    intervene_averaging_inject_task_vector,
+    plot_averaging_inject_task_vector_across_layers,
 )
 
 from icl.linear.analysis.interventions.suffstats_orth import (  # noqa: F401
@@ -34,4 +36,12 @@ from icl.linear.analysis.interventions.gaussian_direction import (  # noqa: F401
 from icl.linear.analysis.interventions.ood_deltah import (  # noqa: F401
     intervene_remove_ood_deltah_subspace,
     analyze_ood_deltah_direction,
+)
+
+from icl.linear.analysis.interventions.inject_posterior import (  # noqa: F401
+    intervene_direct_injection,
+    intervene_averaging_injection,
+    intervene_inject_posterior,
+    plot_inject_posterior_across_layers,
+    plot_inject_posterior_per_position,
 )

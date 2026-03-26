@@ -14,7 +14,10 @@ from icl.linear.analysis.probes import (  # noqa: F401
     get_task_variance,
     probe_gaussian_posterior,
     plot_task_vector_r2_linear,
+    plot_averaging_r2_linear,
     plot_ancova_separability_linear,
+    plot_mlp_ancova_separability_linear,
+    plot_mlp_ancova_separability_linear_joint,
 )
 
 # -- token-conditioned hiddens (P1 variance utility) ------------------------
@@ -30,6 +33,8 @@ from icl.linear.analysis.posterior import (  # noqa: F401
     task_posterior_with_gaussian_linear_regression,
     plot_kl_model_vs_two_bayes_linear,
     plot_kl_model_vs_two_bayes_linear_across_k,
+    plot_kl_model_vs_two_bayes_linear_over_steps,
+    plot_kl_model_vs_two_bayes_linear_transition_across_k,
     plot_task_posterior,
     plot_task_variance,
     plot_val_r2_across_layers,
@@ -43,6 +48,8 @@ from icl.linear.legacy.plot_posterior_predictor_loss_vs_k import (  # noqa: F401
 from icl.linear.analysis.trajectory import (  # noqa: F401
     traj_posterior_projection_plot,
     traj_post_posterior_projection_plot,
+    traj_averaging_projection_plot,
+    traj_averaging_2d_projection_plot,
     plot_lambda_posterior_agreement,
 )
 

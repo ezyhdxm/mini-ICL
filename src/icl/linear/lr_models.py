@@ -8,6 +8,7 @@ from math import log, exp, sqrt
 from icl.linear.lr_config import *
 from icl.linear.lr_transformer import GPT2Model, GPT2Config
 from icl.linear.lr_utils import to_seq, seq_to_targets
+from icl.utils.device_utils import get_default_device
 
 
 ########################################################################################################################
@@ -39,22 +40,23 @@ def get_model_name(model):
 
 
 class TransformerLin(nn.Module):
-    def __init__(self, n_dims: int, n_points: int, n_layer: int, n_embd: int, n_head: int, seed: int, dtype: Any, pad: str = "bos", activation: Optional[str] = None):
+    def __init__(self, n_dims: int, n_points: int, n_layer: int, n_embd: int, n_head: int, seed: int, dtype: Any, pad: str = "bos", activation: Optional[str] = None, final_layernorm: bool = True, device: Optional[str] = None):
         super().__init__()
         self.n_points = n_points
         self.dtype = dtype
         self.pad = pad
         self.input_dim = n_dims+1
 
-        # GPT-style config (assuming your custom GPT2Model/GPT2Config implementation)
+        _device = device if device is not None else get_default_device()
         config = GPT2Config(
             block_size=2 * n_points,
             n_layer=n_layer,
             n_head=n_head,
             n_embd=n_embd,
             dtype=dtype,
-            device= "cuda" if torch.cuda.is_available() else "cpu",
+            device=_device,
             activation=activation if activation else "gelu",
+            final_layernorm=final_layernorm,
         )
 
         torch.manual_seed(seed)
@@ -133,8 +135,8 @@ class Mixture(nn.Module):
 
         # Preprocess: squeeze and transpose for use in prediction
         self.W = task_pool.squeeze(-1).T  # shape: (n_dims, n_tasks)
-        if self.dtype == torch.float16: self.W = self.W.to("cuda")
-        
+        # Device placement is handled by model.to(device) at training/load time
+
     def forward(self, data: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -147,8 +149,8 @@ class Mixture(nn.Module):
         if targets.ndim == 3: targets = targets.squeeze(0)
         device = data.device
         if data.dtype == torch.float16:
-            data = data.to("cuda")
-            targets = targets.to("cuda")
+            data = data.to(device)
+            targets = targets.to(device)
         batch_size, n_points, _ = data.shape
         targets = targets.unsqueeze(-1)  # (batch_size, n_points, 1)
 
@@ -245,8 +247,8 @@ class MixedRidge(nn.Module):
 
         # Preprocess: squeeze and transpose for use in prediction
         self.W = task_pool.squeeze(-1).T  # shape: (n_dims, n_tasks)
-        if self.dtype == torch.float16: self.W = self.W.to("cuda")
-        
+        # Device placement is handled by model.to(device) at training/load time
+
     def forward(self, data: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -357,8 +359,8 @@ class Ridge(nn.Module):
 
         if data.ndim == 4: data = data.squeeze(0)
         if data.dtype == torch.float16:
-            data = data.to("cuda")
-            targets = targets.to("cuda")
+            data = data.to(device)
+            targets = targets.to(device)
         batch_size, n_points, _ = data.shape
         if targets.ndim == 3: targets = targets.squeeze(0)
         targets = targets.unsqueeze(-1)
@@ -411,9 +413,10 @@ class Ridge(nn.Module):
             data = data.squeeze(0)
         if targets.ndim == 3:
             targets = targets.squeeze(0)
+        device = data.device
         if data.dtype == torch.float16:
-            data = data.to("cuda")
-            targets = targets.to("cuda")
+            data = data.to(device)
+            targets = targets.to(device)
         batch_size, n_points, _ = data.shape
         targets = targets.unsqueeze(-1)  # (batch_size, n_points, 1)
 
@@ -467,8 +470,7 @@ class DiscreteMMSE(nn.Module):
 
         # Preprocess: squeeze and transpose for use in prediction
         self.W = task_pool.squeeze(-1).T  # shape: (n_dims, n_tasks)
-        if self.dtype == torch.float16:
-            self.W = self.W.to("cuda")
+        # Device placement is handled by model.to(device) at training/load time
 
     def forward(self, data: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -484,8 +486,8 @@ class DiscreteMMSE(nn.Module):
             targets = targets.squeeze(0)
         device = data.device
         if data.dtype == torch.float16:
-            data = data.to("cuda")
-            targets = targets.to("cuda")
+            data = data.to(device)
+            targets = targets.to(device)
         batch_size, n_points, _ = data.shape
         targets = targets.unsqueeze(-1)  # (batch_size, n_points, 1)
 
@@ -505,9 +507,10 @@ class DiscreteMMSE(nn.Module):
             data = data.squeeze(0)
         if targets.ndim == 3:
             targets = targets.squeeze(0)
+        device = data.device
         if data.dtype == torch.float16:
-            data = data.to("cuda")
-            targets = targets.to("cuda")
+            data = data.to(device)
+            targets = targets.to(device)
         batch_size, n_points, _ = data.shape
         targets = targets.unsqueeze(-1)  # (batch_size, n_points, 1)
 

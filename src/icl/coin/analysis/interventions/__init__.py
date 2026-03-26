@@ -21,6 +21,13 @@ from icl.coin.analysis.interventions.inject_task import (
     intervene_inject_task_vector_coin,
     plot_inject_task_vector_across_layers_coin,
 )
+from icl.coin.analysis.interventions.inject_posterior import (
+    intervene_inject_posterior_coin,
+    intervene_direct_injection_coin,
+    intervene_averaging_injection_coin,
+    plot_inject_posterior_across_layers_coin,
+    plot_inject_posterior_per_position,
+)
 
 __all__ = [
     "_historical_injection_test_next_token_coin",
@@ -34,4 +41,8 @@ __all__ = [
     "plot_optimal_orth_direction_across_layers_coin",
     "intervene_inject_task_vector_coin",
     "plot_inject_task_vector_across_layers_coin",
+    "intervene_inject_posterior_coin",
+    "intervene_direct_injection_coin",
+    "intervene_averaging_injection_coin",
+    "plot_inject_posterior_across_layers_coin",
 ]

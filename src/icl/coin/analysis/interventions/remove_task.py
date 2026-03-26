@@ -24,6 +24,7 @@ def intervene_remove_task_subspace_coin(
     B: int = 64,
     n_samples_eval: int = 500,
     n_ood: int = 30,
+    n_minor: int = 30,
     step: Optional[int] = None,
     fit_n_samples: int = 5000,
     fit_positions: Optional[list] = None,
@@ -32,6 +33,8 @@ def intervene_remove_task_subspace_coin(
     scale: float = 1.0,
     verbose: bool = False,
     print_summary: bool = True,
+    extraction_point: str = "post_attn",
+    probe_method: str = "ols",
 ) -> dict:
     """
     Causal intervention: remove the task-subspace projection from hidden
@@ -59,8 +62,8 @@ def intervene_remove_task_subspace_coin(
     device = config.device
 
     sampler_major, _ = get_new_sampler(exp_name, n_minor=0, n_ood=0)
-
-    sampler_ood, _ = get_new_sampler(exp_name, n_minor=0, n_ood=n_ood)
+    sampler_ood, _   = get_new_sampler(exp_name, n_minor=0, n_ood=n_ood)
+    sampler_min, _   = get_new_sampler(exp_name, n_minor=n_minor, n_ood=0)
 
     seq_len = sampler_major.seq_len
 
@@ -68,18 +71,50 @@ def intervene_remove_task_subspace_coin(
     if fit_positions is None:
         fit_positions = list(range(100, seq_len))
 
-    fit_res = train_linear_hidden_predictor_coin(
-        exp_name=exp_name,
-        layer=layer,
-        n_samples=fit_n_samples,
-        positions=fit_positions,
-        sample_mode="major",
-        step=step,
-        n_minor=-1,
-        print_summary=False,
-        skip_baselines=True,
-    )
-    W_fit = fit_res["model_weight"].float()  # (K_major, D)
+    if probe_method == "averaging":
+        from icl.coin.analysis._helpers import get_token_conditioned_hiddens_coin
+        anova_positions = [p for p in fit_positions if p < seq_len - 1]
+        all_hiddens_anova, anova_info = get_token_conditioned_hiddens_coin(
+            exp_name, layers=[layer], batch_size=B,
+            positions_of_interest=anova_positions,
+            step=step, n_minor=0,
+            extraction_point=extraction_point,
+        )
+        # all_hiddens_anova: (1, n_pos, V_max, n_major, B, D)
+        pos_to_anova = {p: i for i, p in enumerate(anova_info["positions"])}
+        n_uniq = anova_info["n_unique_tokens"]
+        V_max = all_hiddens_anova.shape[2]
+        n_major_anova = all_hiddens_anova.shape[3]
+        parts = []
+        for p in anova_positions:
+            if p not in pos_to_anova:
+                continue
+            pi = pos_to_anova[p]
+            V_p = n_uniq.get(p, V_max)
+            parts.append(all_hiddens_anova[0, pi, :V_p, :n_major_anova].float().mean(dim=-2))
+        if not parts:
+            raise ValueError("probe_method='averaging': no valid fit_positions found.")
+        min_V = min(p.shape[0] for p in parts)
+        parts = [p[:min_V] for p in parts]
+        demeaned = [cm - cm.mean(dim=(0, 1), keepdim=True) for cm in parts]
+        pooled = torch.stack(demeaned, dim=0).mean(dim=0)  # (V, K, D)
+        grand = pooled.mean(dim=(0, 1))
+        W_fit = pooled.mean(dim=0) - grand  # (K, D)
+        del all_hiddens_anova
+    else:
+        fit_res = train_linear_hidden_predictor_coin(
+            exp_name=exp_name,
+            layer=layer,
+            n_samples=fit_n_samples,
+            positions=fit_positions,
+            sample_mode="major",
+            step=step,
+            n_minor=-1,
+            print_summary=False,
+            skip_baselines=True,
+            extraction_point=extraction_point,
+        )
+        W_fit = fit_res["model_weight"].float()  # (K_major, D)
 
     if center_task_vecs:
         task_vecs = W_fit - W_fit.mean(dim=0, keepdim=True)
@@ -133,9 +168,12 @@ def intervene_remove_task_subspace_coin(
                     return h_modified
                 return (h_modified,) + out[1:]
 
-            handle = model.layers[layer].attn_block.register_forward_hook(
-                intervention_hook,
+            hook_target = (
+                model.layers[layer]
+                if extraction_point == "post_mlp"
+                else model.layers[layer].attn_block
             )
+            handle = hook_target.register_forward_hook(intervention_hook)
             try:
                 with torch.no_grad():
                     logits_int = model(samples)
@@ -192,6 +230,10 @@ def intervene_remove_task_subspace_coin(
         logger.info("[intervene-task] Running OOD experiment ...")
     res_ood = _run_experiment(sampler_ood, "minor", n_samples_eval)
 
+    if verbose:
+        logger.info("[intervene-task] Running minor experiment ...")
+    res_min = _run_experiment(sampler_min, "minor", n_samples_eval)
+
     model.cpu()
     del model
     if torch.cuda.is_available():
@@ -206,6 +248,10 @@ def intervene_remove_task_subspace_coin(
         100.0 * res_ood["delta"] / res_ood["baseline"]
         if res_ood["baseline"] > 0 else float("nan")
     )
+    pct_minor = (
+        100.0 * res_min["delta"] / res_min["baseline"]
+        if res_min["baseline"] > 0 else float("nan")
+    )
 
     results = {
         "baseline_loss_major": res_major["baseline"],
@@ -216,12 +262,19 @@ def intervene_remove_task_subspace_coin(
         "intervened_loss_ood": res_ood["intervened"],
         "delta_loss_ood": res_ood["delta"],
         "pct_increase_ood": pct_ood,
+        "baseline_loss_minor": res_min["baseline"],
+        "intervened_loss_minor": res_min["intervened"],
+        "delta_loss_minor": res_min["delta"],
+        "pct_increase_minor": pct_minor,
         "baseline_per_pos_major": res_major["baseline_per_pos"],
         "intervened_per_pos_major": res_major["intervened_per_pos"],
         "baseline_per_pos_ood": res_ood["baseline_per_pos"],
         "intervened_per_pos_ood": res_ood["intervened_per_pos"],
+        "baseline_per_pos_minor": res_min["baseline_per_pos"],
+        "intervened_per_pos_minor": res_min["intervened_per_pos"],
         "baseline_loss_at_0_major": res_major["baseline_loss_at_0"],
         "baseline_loss_at_0_ood": res_ood["baseline_loss_at_0"],
+        "baseline_loss_at_0_minor": res_min["baseline_loss_at_0"],
         "eval_positions": res_major["positions"],
         "layer": layer,
         "scale": scale,
@@ -229,35 +282,39 @@ def intervene_remove_task_subspace_coin(
     }
 
     if print_summary:
-        print(f"\n{'=' * 65}")
+        print(f"\n{'=' * 75}")
         print(
             f"Causal Intervention: Remove Task Subspace  "
             f"(layer {layer}, scale={scale})"
         )
-        print(f"{'=' * 65}")
+        print(f"{'=' * 75}")
         print(f"  Task subspace rank: {rank}")
         print(f"  Eval positions: {len(res_major['positions'])} positions\n")
-        print(f"{'Metric':<30} {'Major':>12} {'OOD':>12}")
-        print("-" * 54)
+        print(f"{'Metric':<30} {'Major':>12} {'OOD':>12} {'Minor':>12}")
+        print("-" * 66)
         print(
             f"{'Baseline loss':<30} "
             f"{res_major['baseline']:>12.4f} "
-            f"{res_ood['baseline']:>12.4f}"
+            f"{res_ood['baseline']:>12.4f} "
+            f"{res_min['baseline']:>12.4f}"
         )
         print(
             f"{'Intervened loss':<30} "
             f"{res_major['intervened']:>12.4f} "
-            f"{res_ood['intervened']:>12.4f}"
+            f"{res_ood['intervened']:>12.4f} "
+            f"{res_min['intervened']:>12.4f}"
         )
         print(
             f"{'Delta loss':<30} "
             f"{res_major['delta']:>12.4f} "
-            f"{res_ood['delta']:>12.4f}"
+            f"{res_ood['delta']:>12.4f} "
+            f"{res_min['delta']:>12.4f}"
         )
         print(
             f"{'Percent increase':<30} "
             f"{pct_major:>11.1f}% "
-            f"{pct_ood:>11.1f}%"
+            f"{pct_ood:>11.1f}% "
+            f"{pct_minor:>11.1f}%"
         )
 
     return results
@@ -269,6 +326,7 @@ def plot_intervention_remove_task_across_layers_coin(
     B: int = 64,
     n_samples_eval: int = 500,
     n_ood: int = 30,
+    n_minor: int = 30,
     step: Optional[int] = None,
     fit_n_samples: int = 5000,
     fit_positions: Optional[list] = None,
@@ -279,6 +337,8 @@ def plot_intervention_remove_task_across_layers_coin(
     show: bool = True,
     save_path: Optional[str] = None,
     title: Optional[str] = None,
+    extraction_point: str = "post_attn",
+    probe_method: str = "ols",
 ):
     """
     Sweep ``intervene_remove_task_subspace_coin`` across layers.
@@ -304,6 +364,7 @@ def plot_intervention_remove_task_across_layers_coin(
             B=B,
             n_samples_eval=n_samples_eval,
             n_ood=n_ood,
+            n_minor=n_minor,
             step=step,
             fit_n_samples=fit_n_samples,
             fit_positions=fit_positions,
@@ -312,56 +373,55 @@ def plot_intervention_remove_task_across_layers_coin(
             scale=scale,
             verbose=False,
             print_summary=False,
+            extraction_point=extraction_point,
+            probe_method=probe_method,
         )
         all_results[l] = res
 
-    fig, ax = plt.subplots(figsize=figsize)
+    COLORS_C = {"maj": "#2166ac", "ood": "#d6604d", "minor": "#1a9850"}
+    bw_bar_c = 0.22
+    g_step_c = 0.24
+    MC_C     = {"maj": -g_step_c, "ood": 0.0, "minor": +g_step_c}
+
+    # Gains: baseline at pos-0 minus mean baseline (same for all layers)
+    ref0 = all_results[layers[0]]
+    g_maj = ref0["baseline_loss_at_0_major"] - ref0["baseline_loss_major"]
+    g_ood = ref0["baseline_loss_at_0_ood"]   - ref0["baseline_loss_ood"]
+    g_min = ref0["baseline_loss_at_0_minor"]  - ref0["baseline_loss_minor"]
+
+    # Normalized deltas: Δ𝓛 / g × 100  (% of ICL gain disrupted)
+    norm_maj = [all_results[l]["delta_loss_major"] / g_maj * 100 for l in layers]
+    norm_ood = [all_results[l]["delta_loss_ood"]   / g_ood * 100 for l in layers]
+    norm_min = [all_results[l]["delta_loss_minor"]  / g_min * 100 for l in layers]
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=150)
     x = np.arange(len(layers))
-    bar_w = 0.35
 
-    delta_maj = [all_results[l]["delta_loss_major"] for l in layers]
-    delta_ood = [all_results[l]["delta_loss_ood"] for l in layers]
+    ax.bar(x + MC_C["maj"],   norm_maj, bw_bar_c,
+           label="Maj.", color=COLORS_C["maj"],   linewidth=0, zorder=3)
+    ax.bar(x + MC_C["ood"],   norm_ood, bw_bar_c,
+           label="OOD",  color=COLORS_C["ood"],   linewidth=0, zorder=3)
+    ax.bar(x + MC_C["minor"], norm_min, bw_bar_c,
+           label="Min.", color=COLORS_C["minor"], linewidth=0, zorder=3)
 
-    ax.bar(
-        x - bar_w / 2, delta_maj, bar_w,
-        label="Major", color="#2196F3", alpha=0.85,
-    )
-    ax.bar(
-        x + bar_w / 2, delta_ood, bar_w,
-        label="OOD", color="#FF9800", alpha=0.85,
-    )
-    for i, (vm, vo) in enumerate(zip(delta_maj, delta_ood)):
-        ax.text(
-            x[i] - bar_w / 2, vm, f"{vm:.3f}",
-            ha="center", va="bottom", fontsize=10,
-        )
-        ax.text(
-            x[i] + bar_w / 2, vo, f"{vo:.3f}",
-            ha="center", va="bottom", fontsize=10,
-        )
+    ax.axhline(100, color="grey", ls="--", lw=1.0, alpha=0.55,
+               label="100%")
 
-    ref = all_results[layers[0]]
-    maj_l0 = ref["baseline_loss_at_0_major"]
-    ood_l0 = ref["baseline_loss_at_0_ood"]
-    maj_info_gain = maj_l0 - ref["baseline_loss_major"]
-    ood_info_gain = ood_l0 - ref["baseline_loss_ood"]
-
-    ax.axhline(maj_info_gain, color="#1565C0", ls="--", lw=1.8, alpha=0.7,
-               label=f"Major $l_0 - \\bar{{l}}_t$ = {maj_info_gain:.3f}")
-    ax.axhline(ood_info_gain, color="#E65100", ls=":", lw=1.8, alpha=0.7,
-               label=f"OOD $l_0 - \\bar{{l}}_t$ = {ood_info_gain:.3f}")
-
-    ax.set_xlabel("Layer", fontsize=18)
-    ax.set_ylabel("\u0394 Loss (intervened \u2212 baseline)", fontsize=18)
-    ax.set_title("", fontsize=18)
+    ax.set_xlabel("Layer", fontsize=9)
+    ax.set_ylabel("Fraction of ICL gain disrupted (%)", fontsize=9)
     ax.set_xticks(x)
-    ax.set_xticklabels([str(l) for l in layers])
-    ax.tick_params(labelsize=16)
-    ax.legend(fontsize=14)
-    ax.grid(axis="y", alpha=0.3)
-
-    fig.suptitle("", fontsize=18, y=1.02)
-    plt.tight_layout()
+    ax.set_xticklabels([str(l) for l in layers], fontsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax.set_axisbelow(True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    if title:
+        ax.set_title(title, fontsize=9)
+    ax.legend(fontsize=9, loc="upper left", ncol=2, framealpha=0.9,
+              edgecolor="lightgrey", columnspacing=0.6,
+              handlelength=1.2, handletextpad=0.4, borderpad=0.5)
+    plt.tight_layout(pad=0.5)
 
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -369,5 +429,46 @@ def plot_intervention_remove_task_across_layers_coin(
         plt.show()
     else:
         plt.close(fig)
+
+    # ── Printed Table 1: Per-layer normalized ─────────────────────────────
+    _W = 7
+    _hd = (f"  {'Layer':>5}  {'Maj.%':>{_W}}  {'OOD%':>{_W}}  {'Min.%':>{_W}}"
+           f"  |  {'Maj.Δ':>{_W}}  {'OOD Δ':>{_W}}  {'Min.Δ':>{_W}}")
+    _ln = "  " + "─" * (len(_hd) - 2)
+    print(f"\n  Task Subspace Intervention — Δ𝓛/g (% of ICL gain)  [CE nats]")
+    print(_ln); print(_hd); print(_ln)
+    for _l in layers:
+        _r = all_results[_l]
+        _nm = _r["delta_loss_major"] / g_maj * 100
+        _no = _r["delta_loss_ood"]   / g_ood * 100
+        _nn = _r["delta_loss_minor"]  / g_min * 100
+        print(f"  {_l:>5}  {_nm:>{_W}.1f}%  {_no:>{_W}.1f}%  {_nn:>{_W}.1f}%  |  "
+              f"{_r['delta_loss_major']:>{_W}.4f}  {_r['delta_loss_ood']:>{_W}.4f}"
+              f"  {_r['delta_loss_minor']:>{_W}.4f}")
+    print(_ln)
+    print(f"  {'Gain':>5}  {'':>{_W}}   {'':>{_W}}   {'':>{_W}}   |  "
+          f"{g_maj:{_W}.4f}  {g_ood:{_W}.4f}  {g_min:{_W}.4f}")
+    print()
+
+    # ── Printed Table 2: Layer-averaged ───────────────────────────────────
+    _mean_m = float(np.mean(norm_maj)); _std_m = float(np.std(norm_maj))
+    _mean_o = float(np.mean(norm_ood)); _std_o = float(np.std(norm_ood))
+    _mean_n = float(np.mean(norm_min)); _std_n = float(np.std(norm_min))
+    _mean_dm = float(np.mean([all_results[l]["delta_loss_major"] for l in layers]))
+    _mean_do = float(np.mean([all_results[l]["delta_loss_ood"]   for l in layers]))
+    _mean_dn = float(np.mean([all_results[l]["delta_loss_minor"]  for l in layers]))
+    _WA = 12
+    _sep = "  " + "─" * 57
+    print(_sep)
+    print(f"  Layer-averaged (mean ± std across {len(layers)} layers) — CE nats")
+    print(_sep)
+    print(f"  {'Mode':<6}  {'Δ/g (%)':>{_WA}}  {'Raw Δ':>{_WA}}  {'g (CE nats)':>{_WA}}")
+    print(_sep)
+    print(f"  {'Maj.':<6}  {_mean_m:>7.1f}±{_std_m:<4.1f}  {_mean_dm:{_WA}.4f}  {g_maj:{_WA}.4f}")
+    print(f"  {'OOD':<6}  {_mean_o:>7.1f}±{_std_o:<4.1f}  {_mean_do:{_WA}.4f}  {g_ood:{_WA}.4f}")
+    print(f"  {'Min.':<6}  {_mean_n:>7.1f}±{_std_n:<4.1f}  {_mean_dn:{_WA}.4f}  {g_min:{_WA}.4f}")
+    print(_sep)
+    print()
+    # ─────────────────────────────────────────────────────────────────────
 
     return fig, all_results

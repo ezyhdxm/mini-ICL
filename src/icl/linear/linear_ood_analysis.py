@@ -3,7 +3,7 @@ Out-of-distribution task pool construction for linear regression experiments.
 """
 
 import torch
-from typing import Tuple
+from typing import Optional, Tuple
 
 from icl.linear.lr_task import get_task
 from icl.linear.processor_utils import setup_device
@@ -15,6 +15,7 @@ def _create_eval_task_pool(
     include_minor: bool = False,
     device: str = "cpu",
     n_minor: int = 256,
+    generator: Optional[torch.Generator] = None,
 ) -> Tuple[torch.Tensor, int]:
     """Create evaluation task pool with OOD tasks and optional minority tasks.
 
@@ -28,7 +29,13 @@ def _create_eval_task_pool(
     anchor_pool = train_task.task_pool.squeeze(-1).to(device)
     M, n_dims = anchor_pool.shape
 
-    ood_tasks = torch.randn(K, n_dims, device=device, dtype=anchor_pool.dtype) * train_task.task_scale
+    ood_tasks = torch.randn(
+        K,
+        n_dims,
+        device=device,
+        dtype=anchor_pool.dtype,
+        generator=generator,
+    ) * train_task.task_scale
     eval_task_pool = torch.cat([anchor_pool, ood_tasks], dim=0)
 
     n_minor_sampled = 0
@@ -36,7 +43,11 @@ def _create_eval_task_pool(
         minor_pool = train_task.minor_pool.squeeze(-1).to(device)
 
         if train_task.n_minor_tasks > n_minor:
-            indices = torch.randperm(train_task.n_minor_tasks)[:n_minor]
+            indices = torch.randperm(
+                train_task.n_minor_tasks,
+                device=device,
+                generator=generator,
+            )[:n_minor]
             minor_pool = minor_pool[indices]
             n_minor_sampled = n_minor
         else:
@@ -53,6 +64,7 @@ def _setup_eval_task(config, eval_task_pool: torch.Tensor, batch_size: int, devi
 
     eval_config = config.copy() if isinstance(config, dict) else config
     eval_config["task"].n_tasks = K
+    eval_config["task"].pool_type = None
     eval_config["device"] = device
 
     eval_task = get_task(**eval_config["task"], device=device)

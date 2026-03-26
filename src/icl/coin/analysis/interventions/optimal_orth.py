@@ -40,6 +40,7 @@ def intervene_optimal_orth_direction_coin(
     scale: float = 1.0,
     unigram_transform: str = "clr",
     unigram_alpha: float = 0.5,
+    extraction_point: str = "post_attn",
     verbose: bool = False,
     print_summary: bool = True,
 ) -> dict:
@@ -89,6 +90,7 @@ def intervene_optimal_orth_direction_coin(
         n_minor=-1,
         print_summary=False,
         skip_baselines=True,
+        extraction_point=extraction_point,
     )
     W_fit = fit_res["model_weight"].float()
 
@@ -163,9 +165,11 @@ def intervene_optimal_orth_direction_coin(
                 return h_modified
             return (h_modified,) + out[1:]
 
-        handle = model.layers[layer].attn_block.register_forward_hook(
-            intervention_hook,
+        _opt_tgt = (
+            model.layers[layer] if extraction_point == "post_mlp"
+            else model.layers[layer].attn_block
         )
+        handle = _opt_tgt.register_forward_hook(intervention_hook)
         try:
             logits = model(samples)
         finally:
@@ -286,7 +290,11 @@ def intervene_optimal_orth_direction_coin(
                 elif isinstance(out, tuple) and torch.is_tensor(out[0]):
                     cache["h"] = out[0].index_select(1, eval_pos_idx).detach()
 
-            handle = model.layers[layer].attn_block.register_forward_hook(hook_fn)
+            _hk_tgt = (
+                model.layers[layer] if extraction_point == "post_mlp"
+                else model.layers[layer].attn_block
+            )
+            handle = _hk_tgt.register_forward_hook(hook_fn)
             try:
                 with torch.no_grad():
                     model(samp)
@@ -557,9 +565,11 @@ def intervene_optimal_orth_direction_coin(
                     return h_modified
                 return (h_modified,) + out[1:]
 
-            handle = model.layers[layer].attn_block.register_forward_hook(
-                intervention_hook,
+            _run_tgt = (
+                model.layers[layer] if extraction_point == "post_mlp"
+                else model.layers[layer].attn_block
             )
+            handle = _run_tgt.register_forward_hook(intervention_hook)
             try:
                 with torch.no_grad():
                     logits_int = model(samples)
@@ -645,7 +655,11 @@ def intervene_optimal_orth_direction_coin(
                     return h_modified
                 return (h_modified,) + out[1:]
 
-            handle = model.layers[layer].attn_block.register_forward_hook(rand_hook)
+            _rand_tgt = (
+                model.layers[layer] if extraction_point == "post_mlp"
+                else model.layers[layer].attn_block
+            )
+            handle = _rand_tgt.register_forward_hook(rand_hook)
             try:
                 with torch.no_grad():
                     logits_int = model(samples)
@@ -892,6 +906,11 @@ def plot_optimal_orth_direction_across_layers_coin(
     unigram_transform: str = "clr",
     unigram_alpha: float = 0.5,
     opt_target: str = "ood",
+    extraction_point: str = "post_attn",
+    probe_method: str = "ols",
+    n_rand_int: int = 5,
+    val_patience: int = 0,
+    show_ylabel: bool = True,
     figsize: tuple = (14, 6),
     show: bool = True,
     save_path: Optional[str] = None,
@@ -912,17 +931,24 @@ def plot_optimal_orth_direction_across_layers_coin(
         ``"ood"`` finds directions whose removal hurts OOD prediction.
         ``"minor"`` finds directions whose removal hurts minor-task
         prediction.
+    probe_method : ``"ols"`` | ``"averaging"``
+        How to estimate task and token subspaces for the protected subspace.
+        ``"ols"`` (default) — fits a joint OLS probe.
+        ``"averaging"`` — collects token-conditioned (interventional) data
+        and derives task/token vectors from ANOVA cell-means, the same
+        approach used by ``plot_anova_separability`` / ``plot_averaging_r2``.
 
-    Four figures:
+    Five figures:
 
     1. **Delta loss** bar chart (major + target) with information-gain
        reference lines.
     2. **Validation loss** history.
-    3. **R²** (target): unigram <-> V_opt projection.
-    4. **Filtered barplot**: V_opt full vs unigram-explained causal
+    3. **R² forward** (target): Unigram → V_opt projection.
+    4. **R² reverse** (target): V_opt projection → Unigram.
+    5. **Filtered barplot**: V_opt full vs unigram-explained causal
        effect (target).
 
-    Returns ``(fig_delta, fig_loss, fig_r2, fig_explained, all_results)``.
+    Returns ``(fig_delta, fig_loss, fig_r2_fwd, fig_r2_rev, fig_explained, all_results)``.
     """
     import matplotlib.pyplot as plt
     from icl.coin.analysis.probes import _collect_coin_probe_data, _fit_coin_probe
@@ -943,35 +969,92 @@ def plot_optimal_orth_direction_across_layers_coin(
     sampler_minor, _ = get_new_sampler(exp_name, n_minor=1_000_000, n_ood=0)
     sampler_tgt = sampler_minor if opt_target == "minor" else sampler_ood
     tgt_label = "Minor" if opt_target == "minor" else "OOD"
+    tgt_abbr  = "Min."  if opt_target == "minor" else "OOD"
     seq_len = sampler_major.seq_len
 
     if fit_positions is None:
-        fit_positions = list(range(100, seq_len))
+        upper = seq_len - 1 if probe_method == "averaging" else seq_len
+        fit_positions = list(range(100, upper))
     if eval_positions is None:
         eval_positions = list(range(seq_len))
 
     # =================================================================
-    #  Phase 1: Fit probes (all layers, one forward pass)
+    #  Phase 1: Estimate task/token subspaces (all layers, one pass)
     # =================================================================
-    logger.info("[opt-dir] Phase 1: Fitting probes ...")
-    probe_data = _collect_coin_probe_data(
-        exp_name, layers, B=B, n_samples=fit_n_samples,
-        step=step, n_minor=-1, positions=fit_positions,
-        sample_mode="major",
-    )
-    probes = {}
-    for l in layers:
-        probes[l] = _fit_coin_probe(
-            probe_data["hiddens_by_layer"][l],
-            probe_data["posteriors_all"],
-            probe_data["real_tokens_all"],
-            layer=l,
-            n_tasks=probe_data["n_tasks"],
-            positions=probe_data["positions"],
-            skip_baselines=True,
-            print_summary=False,
+    n_major_tasks = int(sampler_major.n_major_tasks)
+
+    if probe_method == "averaging":
+        # ANOVA cell-mean approach: collect token-conditioned (interventional)
+        # hidden states and derive task/token vectors from two-way ANOVA
+        # marginals — same method as plot_anova_separability / plot_averaging_r2.
+        logger.info("[opt-dir] Phase 1: Collecting token-conditioned hiddens (ANOVA) ...")
+        from icl.coin.analysis._helpers import get_token_conditioned_hiddens_coin
+
+        all_hiddens_anova, anova_info = get_token_conditioned_hiddens_coin(
+            exp_name, layers=layers, batch_size=B,
+            positions_of_interest=fit_positions,
+            step=step, n_minor=0,
+            extraction_point=extraction_point,
         )
-    del probe_data
+        # all_hiddens_anova: (L, n_positions, V_max, n_major, B, D)
+        pos_to_anova = {p: i for i, p in enumerate(anova_info["positions"])}
+        n_uniq = anova_info["n_unique_tokens"]
+        V_max = all_hiddens_anova.shape[2]
+
+        probes = {}
+        for li, l in enumerate(layers):
+            parts = []
+            for p in fit_positions:
+                if p not in pos_to_anova:
+                    continue
+                pi = pos_to_anova[p]
+                V_p = n_uniq.get(p, V_max)
+                parts.append(
+                    all_hiddens_anova[li, pi, :V_p, :n_major_tasks].float().mean(dim=-2)
+                )  # (V_p, K, D)
+
+            if not parts:
+                raise ValueError(
+                    "[opt-dir] probe_method='averaging': none of fit_positions "
+                    "found in token-conditioned hiddens."
+                )
+
+            min_V = min(p.shape[0] for p in parts)
+            parts = [p[:min_V] for p in parts]
+
+            demeaned = [cm - cm.mean(dim=(0, 1), keepdim=True) for cm in parts]
+            pooled = torch.stack(demeaned, dim=0).mean(dim=0)  # (V, K, D)
+            grand = pooled.mean(dim=(0, 1))
+            task_vecs = pooled.mean(dim=0) - grand   # (K, D)
+            token_vecs = pooled.mean(dim=1) - grand  # (V, D)
+
+            probes[l] = {
+                "model_weight": task_vecs,
+                "token_weight": token_vecs,
+            }
+        del all_hiddens_anova
+
+    else:
+        logger.info("[opt-dir] Phase 1: Fitting OLS probes ...")
+        probe_data = _collect_coin_probe_data(
+            exp_name, layers, B=B, n_samples=fit_n_samples,
+            step=step, n_minor=-1, positions=fit_positions,
+            sample_mode="major",
+            extraction_point=extraction_point,
+        )
+        probes = {}
+        for l in layers:
+            probes[l] = _fit_coin_probe(
+                probe_data["hiddens_by_layer"][l],
+                probe_data["posteriors_all"],
+                probe_data["real_tokens_all"],
+                layer=l,
+                n_tasks=probe_data["n_tasks"],
+                positions=probe_data["positions"],
+                skip_baselines=True,
+                print_summary=False,
+            )
+        del probe_data
 
     # =================================================================
     #  Phase 2: Load model, cache eval data
@@ -1027,40 +1110,69 @@ def plot_optimal_orth_direction_across_layers_coin(
         freq = prefix_counts / prefix_len.clamp_min(1.0)
         return torch.sqrt(freq.clamp_min(0.0))
 
+    # Feature layout: [unigram_clr (V) | one_hot_x_t (V-1) | position (1)]
+    # Unigram CLR sums to zero, so full V dimensions are kept (no redundancy for OLS).
+    # One-hot of current token is reference-encoded (drop last class) to remove collinearity.
+    _enrich_feat_dim = vocab_size + (vocab_size - 1) + 1
+    _coin_feat_groups = {}
+    _s = 0
+    for _name, _k in [
+        ("unigram_clr",  vocab_size),
+        ("one_hot_x_t",  vocab_size - 1),
+        ("position",     1),
+    ]:
+        _coin_feat_groups[_name] = slice(_s, _s + _k)
+        _s += _k
+
     def _collect_all_h_and_uni(sampler, gen_mode, n):
         h_acc = {l: [] for l in layers}
         uni_acc = []
+        enrich_acc = []
         for _ in range(max(1, (n + B - 1) // B)):
             g = sampler.generate(mode=gen_mode, task=None, num_samples=B, epochs=1)
             s = (g[0] if isinstance(g, (tuple, list)) else g)
             if s.dim() == 3:
                 s = s.squeeze(0)
             s = s.to(device)
+            Bs, L = s.shape
             caches = {}
             handles = []
             for ll in layers:
                 def _hook(mod, inp, out, _l=ll):
                     h = out if torch.is_tensor(out) else out[0]
                     caches[_l] = h.index_select(1, eval_pos_idx).detach()
-                handles.append(
-                    model.layers[ll].attn_block.register_forward_hook(_hook)
+                _cah_tgt = (
+                    model.layers[ll] if extraction_point == "post_mlp"
+                    else model.layers[ll].attn_block
                 )
+                handles.append(_cah_tgt.register_forward_hook(_hook))
             with torch.no_grad():
                 model(s)
             for hh in handles:
                 hh.remove()
             for ll in layers:
                 h_acc[ll].append(caches[ll].cpu())
-            uni_acc.append(_compute_unigram(s).index_select(1, eval_pos_idx).cpu())
-            del s, caches
+            uni = _compute_unigram(s)  # (Bs, L, vocab_size)  CLR transform
+            one_hot = torch.nn.functional.one_hot(
+                s.long(), num_classes=vocab_size,
+            ).float()[..., :-1]  # (Bs, L, vocab_size-1)  reference-encoded
+            pos_feat = (
+                torch.arange(L, device=device, dtype=torch.float32)
+                .view(1, L, 1).expand(Bs, -1, 1)
+            ) / L  # (Bs, L, 1)
+            enrich = torch.cat([uni, one_hot, pos_feat], dim=-1)  # (Bs, L, V + V-1 + 1)
+            uni_acc.append(uni.index_select(1, eval_pos_idx).cpu())
+            enrich_acc.append(enrich.index_select(1, eval_pos_idx).cpu())
+            del s, caches, uni, one_hot, pos_feat, enrich
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         return (
             {ll: torch.cat(h_acc[ll]).reshape(-1, D).float() for ll in layers},
             torch.cat(uni_acc).reshape(-1, vocab_size).float(),
+            torch.cat(enrich_acc).reshape(-1, _enrich_feat_dim).float(),
         )
 
-    h_tgt, uni_tgt = _collect_all_h_and_uni(sampler_tgt, "minor", n_samples_probe)
+    h_tgt, uni_tgt, enrich_tgt = _collect_all_h_and_uni(sampler_tgt, "minor", n_samples_probe)
 
     # =================================================================
     #  Shared helpers
@@ -1068,9 +1180,15 @@ def plot_optimal_orth_direction_across_layers_coin(
     ce_fn = torch.nn.CrossEntropyLoss(reduction="none")
 
     def _eval_hooked(layer_idx, P, cached):
-        """Run intervened forward pass using cached baseline logits."""
+        """Run intervened forward pass using cached baseline logits.
+
+        Returns (baseline_mean, intervened_mean, loss_at_pos0, delta_per_batch).
+        delta_per_batch is a list of (intervened - baseline) averaged over
+        eval_positions for each cached batch — used for IQR computation.
+        """
         seqs, base_logits = cached
         b_all, i_all, bl_at_0 = [], [], []
+        batch_deltas = []
         for s_cpu, bl_cpu in zip(seqs, base_logits):
             s = s_cpu.to(device)
 
@@ -1079,7 +1197,11 @@ def plot_optimal_orth_direction_across_layers_coin(
                 hm = h - scale * (h @ _P)
                 return hm if torch.is_tensor(out) else (hm,) + out[1:]
 
-            handle = model.layers[layer_idx].attn_block.register_forward_hook(_hook)
+            _eh_tgt = (
+                model.layers[layer_idx] if extraction_point == "post_mlp"
+                else model.layers[layer_idx].attn_block
+            )
+            handle = _eh_tgt.register_forward_hook(_hook)
             try:
                 with torch.no_grad():
                     li = model(s)
@@ -1090,17 +1212,26 @@ def plot_optimal_orth_direction_across_layers_coin(
                 bl_at_0.append(
                     ce_fn(bl[:, 0], s[:, 1].long()).mean().item()
                 )
+            b_batch, i_batch = [], []
             for p in eval_positions:
                 if p + 1 >= s.shape[1]:
                     continue
                 tgt = s[:, p + 1].long()
-                b_all.append(ce_fn(bl[:, p], tgt).mean().item())
-                i_all.append(ce_fn(li[:, p], tgt).mean().item())
+                bv = ce_fn(bl[:, p], tgt).mean().item()
+                iv = ce_fn(li[:, p], tgt).mean().item()
+                b_all.append(bv)
+                i_all.append(iv)
+                b_batch.append(bv)
+                i_batch.append(iv)
+            if b_batch:
+                batch_deltas.append(
+                    float(np.mean(i_batch)) - float(np.mean(b_batch))
+                )
             del s, bl, li
         ba = float(np.mean(b_all))
         ia = float(np.mean(i_all))
         l0 = float(np.mean(bl_at_0)) if bl_at_0 else float("nan")
-        return ba, ia, l0
+        return ba, ia, l0, batch_deltas
 
     def _ols_r2(X, Y):
         N = X.shape[0]
@@ -1147,7 +1278,11 @@ def plot_optimal_orth_direction_across_layers_coin(
             return (h - scale * (h @ _P)) if torch.is_tensor(out) \
                 else (h - scale * (h @ _P),) + out[1:]
 
-        hnd = model.layers[layer_idx].attn_block.register_forward_hook(_hook)
+        _vl_tgt = (
+            model.layers[layer_idx] if extraction_point == "post_mlp"
+            else model.layers[layer_idx].attn_block
+        )
+        hnd = _vl_tgt.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 logits_v = model(val_seq)
@@ -1162,17 +1297,32 @@ def plot_optimal_orth_direction_across_layers_coin(
         return acc / cnt if cnt > 0 else float("nan")
 
     def _optimise_v(layer_idx, U_orth_l, val_every=20):
+        """Gradient ascent for V_opt in span(U_orth_l).
+
+        Early stopping:
+          - Training patience  (``patience``):   stop after this many consecutive
+            training steps with no improvement in smoothed training loss.
+          - Validation patience (``val_patience``): stop after this many consecutive
+            validation evaluations with no improvement in validation CE loss.
+            The snapshot with the best validation loss is returned as V_opt.
+            Set val_patience=0 to disable (default).
+        """
         orth_dim = U_orth_l.shape[1]
         W_p = torch.randn(orth_dim, n_directions, device=device)
         W_p = (W_p / W_p.norm(dim=0, keepdim=True)).detach().requires_grad_(True)
         opt_v = torch.optim.Adam([W_p], lr=opt_lr)
         ema_decay = 0.995
         ema_W = W_p.detach().clone()
-        best_ema = ema_W.clone()
-        best_loss = -float("inf")
-        stale = 0
-        smoothed = None
-        val_history = []
+        # Training-loss best snapshot
+        best_ema      = ema_W.clone()
+        best_loss     = -float("inf")
+        stale         = 0
+        smoothed      = None
+        # Validation-loss best snapshot
+        best_val_loss = -float("inf")
+        best_ema_val  = None
+        val_stale     = 0
+        val_history   = []
 
         for step_i in range(n_opt_steps):
             g = sampler_tgt.generate(
@@ -1189,7 +1339,11 @@ def plot_optimal_orth_direction_across_layers_coin(
                 hm = h - scale * (h @ Vq @ Vq.T)
                 return hm if torch.is_tensor(out) else (hm,) + out[1:]
 
-            hnd = model.layers[layer_idx].attn_block.register_forward_hook(_hook)
+            _ov_tgt = (
+                model.layers[layer_idx] if extraction_point == "post_mlp"
+                else model.layers[layer_idx].attn_block
+            )
+            hnd = _ov_tgt.register_forward_hook(_hook)
             try:
                 logits = model(s)
             finally:
@@ -1225,10 +1379,25 @@ def plot_optimal_orth_direction_across_layers_coin(
             else:
                 stale += 1
 
+            # Validation evaluation
             if step_i % val_every == 0 or step_i == n_opt_steps - 1:
                 with torch.no_grad():
                     V_cur, _ = torch.linalg.qr(U_orth_l @ best_ema)
-                val_history.append((step_i, _val_loss(layer_idx, V_cur)))
+                vl = _val_loss(layer_idx, V_cur)
+                val_history.append((step_i, vl))
+                if val_patience > 0:
+                    if vl > best_val_loss:
+                        best_val_loss = vl
+                        best_ema_val  = best_ema.clone()
+                        val_stale     = 0
+                    else:
+                        val_stale += 1
+                    if val_stale >= val_patience:
+                        logger.info(
+                            f"[opt-dir] layer {layer_idx}: val-patience "
+                            f"({val_patience} evals) reached at step {step_i}"
+                        )
+                        break
 
             del s, logits, acc
             if torch.cuda.is_available():
@@ -1236,15 +1405,18 @@ def plot_optimal_orth_direction_across_layers_coin(
             if patience > 0 and stale >= patience:
                 break
 
+        final_ema = (
+            best_ema_val if (val_patience > 0 and best_ema_val is not None)
+            else best_ema
+        )
         with torch.no_grad():
-            V_opt, _ = torch.linalg.qr(U_orth_l @ best_ema)
+            V_opt, _ = torch.linalg.qr(U_orth_l @ final_ema)
         return V_opt, val_history
 
     # =================================================================
     #  Phase 4: Per-layer loop
     # =================================================================
     N_RAND_R2 = 3
-    N_RAND_INT = 2
     all_results = {}
 
     for l in layers:
@@ -1268,36 +1440,30 @@ def plot_optimal_orth_direction_across_layers_coin(
         V_opt, val_hist = _optimise_v(l, U_orth_l)
         V_cpu = V_opt.cpu().float()
 
+        U_orth_cpu = U_orth_l.cpu().float()
+
         # --- (c) R² diagnostics (target data) ---
         proj_tgt = h_tgt[l] @ V_cpu
-        r2_u2v = _ols_r2(uni_tgt, proj_tgt)
+
+        # Marginal R² per individual feature group (feat_i → V_opt)
+        feat_r2_marginal = {
+            name: _ols_r2(enrich_tgt[:, sl], proj_tgt)
+            for name, sl in _coin_feat_groups.items()
+        }
+        # Combined (all enriched features together) R²
+        r2_combined = _ols_r2(enrich_tgt, proj_tgt)
+
+        # Legacy scalar R² values kept for backward compatibility
+        r2_u2v = feat_r2_marginal["unigram_clr"]
         r2_v2u = _ols_r2(proj_tgt, uni_tgt)
-        r2_u2v_mlp = _mlp_r2(uni_tgt, proj_tgt)
-        r2_v2u_mlp = _mlp_r2(proj_tgt, uni_tgt)
+        r2_p2v = r2_combined
+        r2_v2p = r2_combined
 
-        U_orth_cpu = U_orth_l.cpu().float()
-        rand_u2v, rand_v2u = [], []
-        mlp_rand_u2v, mlp_rand_v2u = [], []
-        for _ in range(N_RAND_R2):
-            Vr, _ = torch.linalg.qr(
-                U_orth_cpu @ torch.randn(orth_dim, n_directions),
-            )
-            rp = h_tgt[l] @ Vr
-            rand_u2v.append(_ols_r2(uni_tgt, rp))
-            rand_v2u.append(_ols_r2(rp, uni_tgt))
-            mlp_rand_u2v.append(_mlp_r2(uni_tgt, rp))
-            mlp_rand_v2u.append(_mlp_r2(rp, uni_tgt))
-        r2_rand_u2v = float(np.mean(rand_u2v))
-        r2_rand_v2u = float(np.mean(rand_v2u))
-        r2_mlp_rand_u2v = float(np.mean(mlp_rand_u2v))
-        r2_mlp_rand_v2u = float(np.mean(mlp_rand_v2u))
-
-        # --- (d) Unigram-explained decomposition ---
+        # --- (d) Combined-feature-explained decomposition ---
         proj_c = proj_tgt - proj_tgt.mean(0, keepdim=True)
         total_var = (proj_c ** 2).sum().item()
-        dir_pred = torch.softmax(uni_tgt, dim=-1)
         uni_explained = {}
-        for fname, feat in [("unigram_clr", uni_tgt), ("dirichlet_pred", dir_pred)]:
+        for fname, feat in [("unigram_clr", uni_tgt), ("enriched", enrich_tgt)]:
             Nf = feat.shape[0]
             X_aug = torch.cat([feat, torch.ones(Nf, 1)], 1)
             W_fit_exp = torch.linalg.pinv(X_aug) @ proj_tgt
@@ -1317,20 +1483,34 @@ def plot_optimal_orth_direction_across_layers_coin(
 
         # --- (e) Causal evaluation (uses cached baseline logits) ---
         P_v = (V_opt @ V_opt.T).to(device)
-        ba_maj, ia_maj, l0_maj = _eval_hooked(l, P_v, cache_maj)
-        ba_ood, ia_ood, l0_ood = _eval_hooked(l, P_v, cache_ood)
-        ba_minor, ia_minor, l0_minor = _eval_hooked(l, P_v, cache_minor)
+        ba_maj, ia_maj, l0_maj, bd_maj = _eval_hooked(l, P_v, cache_maj)
+        ba_ood, ia_ood, l0_ood, bd_ood = _eval_hooked(l, P_v, cache_ood)
+        ba_minor, ia_minor, l0_minor, bd_minor = _eval_hooked(l, P_v, cache_minor)
 
-        rand_deltas = []
-        for _ in range(N_RAND_INT):
-            rk_r = min(n_directions, orth_dim)
+        # Random same-rank subspace baseline (major, ood, minor)
+        rand_acc = {"major": [], "ood": [], "minor": []}
+        rk_r = min(n_directions, orth_dim)
+        for _ in range(n_rand_int):
             Vr, _ = torch.linalg.qr(
                 U_orth_cpu @ torch.randn(orth_dim, rk_r),
             )
             Pr = (Vr @ Vr.T).to(device)
-            bo, io, _ = _eval_hooked(l, Pr, cache_tgt)
-            rand_deltas.append(io - bo)
-        rand_delta_tgt = float(np.mean(rand_deltas))
+            for key, cache in [
+                ("major", cache_maj), ("ood", cache_ood), ("minor", cache_minor),
+            ]:
+                bo, io, _, _ = _eval_hooked(l, Pr, cache)
+                rand_acc[key].append(io - bo)
+
+        def _rand_stats_coin(vals):
+            arr = np.array(vals, dtype=float)
+            return {
+                "mean": float(arr.mean()),
+                "q25": float(np.percentile(arr, 25)),
+                "q75": float(np.percentile(arr, 75)),
+            }
+
+        rand_stats = {k: _rand_stats_coin(v) for k, v in rand_acc.items()}
+        rand_delta_tgt = rand_stats["minor" if opt_target == "minor" else "ood"]["mean"]
 
         for info in uni_explained.values():
             if info["explained_rank"] == 0:
@@ -1339,9 +1519,9 @@ def plot_optimal_orth_direction_across_layers_coin(
                 continue
             Ve = info["V_explained"].to(device)
             P_e = Ve @ Ve.T
-            bo, io, _ = _eval_hooked(l, P_e, cache_tgt)
+            bo, io, _, _ = _eval_hooked(l, P_e, cache_tgt)
             info["delta_tgt"] = io - bo
-            bo_o, io_o, _ = _eval_hooked(l, P_e, cache_ood)
+            bo_o, io_o, _, _ = _eval_hooked(l, P_e, cache_ood)
             info["delta_ood"] = io_o - bo_o
             del Ve, P_e
 
@@ -1366,15 +1546,17 @@ def plot_optimal_orth_direction_across_layers_coin(
             "baseline_loss_at_0_minor": l0_minor,
             "baseline_loss_at_0_tgt": l0_minor if opt_target == "minor" else l0_ood,
             "val_history": val_hist,
+            "feat_r2_marginal": feat_r2_marginal,
+            "r2_combined_tgt": r2_combined,
             "uni_to_proj_r2_tgt": r2_u2v,
             "proj_to_uni_r2_tgt": r2_v2u,
-            "mlp_u2p_tgt": r2_u2v_mlp,
-            "mlp_p2u_tgt": r2_v2u_mlp,
-            "rand_orth_u2p_tgt": r2_rand_u2v,
-            "rand_orth_p2u_tgt": r2_rand_v2u,
-            "mlp_rorth_u2p_tgt": r2_mlp_rand_u2v,
-            "mlp_rorth_p2u_tgt": r2_mlp_rand_v2u,
+            "pred_to_proj_r2_tgt": r2_p2v,
+            "proj_to_pred_r2_tgt": r2_v2p,
             "rand_int_delta_tgt": rand_delta_tgt,
+            "rand_stats": rand_stats,
+            "delta_per_batch_major": bd_maj,
+            "delta_per_batch_ood": bd_ood,
+            "delta_per_batch_minor": bd_minor,
             "uni_explained": {
                 fn: {k: v for k, v in info.items() if k != "V_explained"}
                 for fn, info in uni_explained.items()
@@ -1393,7 +1575,7 @@ def plot_optimal_orth_direction_across_layers_coin(
     #  Cleanup
     # =================================================================
     model.cpu()
-    del model, h_tgt, uni_tgt
+    del model, h_tgt, uni_tgt, enrich_tgt
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
@@ -1403,51 +1585,138 @@ def plot_optimal_orth_direction_across_layers_coin(
     # =================================================================
     x = np.arange(len(layers))
 
-    # ---- 1. Delta loss bar chart with info-gain lines ----
-    fig_delta, ax = plt.subplots(figsize=figsize)
+    # ---- 1. Delta loss bar chart — normalized by ICL gain ----
+    # 3 solid bars per layer (Major / OOD / Minor), each Δ𝓛/g × 100 (%).
+    # Black error bars = IQR across eval batches (also normalized).
+    # Shaded band = random same-rank subspace (OOD, normalized).
 
-    delta_maj = [all_results[l]["delta_loss_major"] for l in layers]
-    delta_ood = [all_results[l]["delta_loss_ood"] for l in layers]
-    delta_minor = [all_results[l]["delta_loss_minor"] for l in layers]
-
-    bw3 = 0.25
-    ax.bar(x - bw3, delta_maj, bw3, label="Major", color="#2196F3", alpha=0.85)
-    ax.bar(x, delta_ood, bw3, label="OOD", color="#FF9800", alpha=0.85)
-    ax.bar(x + bw3, delta_minor, bw3, label="Minor", color="#4CAF50", alpha=0.85)
-    for i, (vm, vo, vn) in enumerate(zip(delta_maj, delta_ood, delta_minor)):
-        ax.text(x[i] - bw3, vm, f"{vm:.3f}", ha="center", va="bottom", fontsize=9)
-        ax.text(x[i], vo, f"{vo:.3f}", ha="center", va="bottom", fontsize=9)
-        ax.text(x[i] + bw3, vn, f"{vn:.3f}", ha="center", va="bottom", fontsize=9)
-
+    # Gains: pos-0 baseline minus mean baseline (use first layer; consistent across layers)
     ref = all_results[layers[0]]
-    maj_info_gain = ref["baseline_loss_at_0_major"] - ref["baseline_loss_major"]
-    ood_info_gain = ref["baseline_loss_at_0_ood"] - ref["baseline_loss_ood"]
-    minor_info_gain = ref["baseline_loss_at_0_minor"] - ref["baseline_loss_minor"]
+    g_maj   = ref["baseline_loss_at_0_major"]  - ref["baseline_loss_major"]
+    g_ood   = ref["baseline_loss_at_0_ood"]    - ref["baseline_loss_ood"]
+    g_minor = ref["baseline_loss_at_0_minor"]  - ref["baseline_loss_minor"]
+    g_tgt   = g_minor if opt_target == "minor" else g_ood
 
-    ax.axhline(maj_info_gain, color="#1565C0", ls="--", lw=1.8, alpha=0.7,
-               label=f"Major $l_0 - \\bar{{l}}_t$ = {maj_info_gain:.3f}")
-    ax.axhline(ood_info_gain, color="#E65100", ls=":", lw=1.8, alpha=0.7,
-               label=f"OOD $l_0 - \\bar{{l}}_t$ = {ood_info_gain:.3f}")
-    ax.axhline(minor_info_gain, color="#2E7D32", ls="-.", lw=1.8, alpha=0.7,
-               label=f"Minor $l_0 - \\bar{{l}}_t$ = {minor_info_gain:.3f}")
+    # Normalized deltas: Δ𝓛 / g × 100 (% of ICL gain disrupted)
+    norm_maj   = [all_results[l]["delta_loss_major"]  / g_maj   * 100 for l in layers]
+    norm_ood   = [all_results[l]["delta_loss_ood"]    / g_ood   * 100 for l in layers]
+    norm_minor = [all_results[l]["delta_loss_minor"]  / g_minor * 100 for l in layers]
 
-    ax.set_xlabel("Layer", fontsize=16)
-    ax.set_ylabel("\u0394 Loss (intervened \u2212 baseline)", fontsize=15)
-    ax.set_title("", fontsize=18)
+    def _iqr_err_norm_coin(key_batch, g_m):
+        """IQR error bars in normalized (%) units."""
+        lo_arr, hi_arr = [], []
+        for l in layers:
+            vals = all_results[l][key_batch]
+            if len(vals) < 2:
+                lo_arr.append(0.0); hi_arr.append(0.0); continue
+            arr = np.array(vals, dtype=float) / g_m * 100
+            mn = arr.mean()
+            lo_arr.append(abs(mn - np.percentile(arr, 25)))
+            hi_arr.append(abs(np.percentile(arr, 75) - mn))
+        return np.array(lo_arr), np.array(hi_arr)
+
+    COLORS_C = {"maj": "#2166ac", "ood": "#d6604d", "minor": "#1a9850"}
+    bw_bar_c = 0.22
+    g_step_c = 0.24
+    MC_C     = {"maj": -g_step_c, "ood": 0.0, "minor": +g_step_c}
+
+    fig_delta, ax = plt.subplots(figsize=figsize, dpi=150)
+
+    # Random baseline band: OOD rand normalized by g_ood (primary target metric)
+    rand_ood_q75_norm = max(
+        all_results[l]["rand_stats"]["ood"]["q75"] / g_ood * 100 for l in layers
+    )
+    ax.axhspan(0, rand_ood_q75_norm, color="#b0b8c8", alpha=0.35, zorder=1,
+               hatch="///", label="Random")
+    ax.axhline(rand_ood_q75_norm, color="#556070", lw=1.2, ls="-", zorder=2, alpha=0.85)
+
+    for mode, norm_vals, (key_pb, g_m), label in [
+        ("maj",   norm_maj,   ("delta_per_batch_major", g_maj),   "Maj."),
+        ("ood",   norm_ood,   ("delta_per_batch_ood",   g_ood),   "OOD"),
+        ("minor", norm_minor, ("delta_per_batch_minor", g_minor), "Min."),
+    ]:
+        c  = COLORS_C[mode]
+        xm = x + MC_C[mode]
+        lo, hi = _iqr_err_norm_coin(key_pb, g_m)
+        ax.bar(xm, norm_vals, bw_bar_c, color=c, linewidth=0, zorder=3, label=label)
+        ax.errorbar(xm, norm_vals, yerr=[lo, hi], fmt="none",
+                    ecolor="black", elinewidth=0.9, capsize=3, capthick=0.9, zorder=5)
+
+    ax.axhline(100, color="grey", ls="--", lw=1.0, alpha=0.55,
+               label="100%")
+
+    ax.set_xlabel("Layer", fontsize=9)
+    if show_ylabel:
+        ax.set_ylabel("Fraction of ICL gain disrupted (%)", fontsize=9)
     ax.set_xticks(x)
-    ax.set_xticklabels([str(l) for l in layers])
-    ax.tick_params(labelsize=14)
-    ax.legend(fontsize=11)
-    ax.grid(axis="y", alpha=0.3)
-
-    fig_delta.suptitle("", fontsize=18, y=1.02)
-    plt.tight_layout()
+    ax.set_xticklabels([str(l) for l in layers], fontsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax.set_axisbelow(True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    if title:
+        ax.set_title(title, fontsize=9)
+    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.14),
+              ncol=5, framealpha=0.9, edgecolor="lightgrey",
+              columnspacing=0.5, handlelength=1.0, handletextpad=0.3, borderpad=0.4)
+    plt.tight_layout(pad=2.0)
     if save_path:
         fig_delta.savefig(save_path, dpi=300, bbox_inches="tight")
     if show:
         plt.show()
     else:
         plt.close(fig_delta)
+
+    # ── Printed Table 1: V_opt Intervention (per-layer normalized) ────────
+    _g_tgt_lab = "Min." if opt_target == "minor" else "OOD"
+    _W = 7
+    _hd = (f"  {'Layer':>5}  {'Maj.%':>{_W}}  {'OOD%':>{_W}}  {'Min.%':>{_W}}"
+           f"  {'Rand.%':>{_W}}  |  {'Maj.Δ':>{_W}}  {'OOD Δ':>{_W}}  {'Min.Δ':>{_W}}")
+    _ln = "  " + "─" * (len(_hd) - 2)
+    print(f"\n  V_opt Intervention — Δ𝓛/g (% of ICL gain)  [CE nats]")
+    print(_ln); print(_hd); print(_ln)
+    for _l in layers:
+        _r = all_results[_l]
+        _nm = _r["delta_loss_major"] / g_maj   * 100
+        _no = _r["delta_loss_ood"]   / g_ood   * 100
+        _nn = _r["delta_loss_minor"]  / g_minor * 100
+        _nr = _r["rand_stats"][_r["opt_target"]]["mean"] / g_tgt * 100
+        print(f"  {_l:>5}  {_nm:>{_W}.1f}%  {_no:>{_W}.1f}%  {_nn:>{_W}.1f}%"
+              f"  {_nr:>{_W}.1f}%  |  "
+              f"{_r['delta_loss_major']:>{_W}.4f}  {_r['delta_loss_ood']:>{_W}.4f}"
+              f"  {_r['delta_loss_minor']:>{_W}.4f}")
+    print(_ln)
+    print(f"  {'Gain':>5}  {'':>{_W}}   {'':>{_W}}   {'':>{_W}}   {'':>{_W}}   |  "
+          f"{g_maj:{_W}.4f}  {g_ood:{_W}.4f}  {g_minor:{_W}.4f}")
+    print()
+
+    # ── Printed Table 2: Layer-averaged ───────────────────────────────────
+    _rand_norm = [
+        all_results[l]["rand_stats"][all_results[l]["opt_target"]]["mean"] / g_tgt * 100
+        for l in layers
+    ]
+    _mean_m = float(np.mean(norm_maj));   _std_m = float(np.std(norm_maj))
+    _mean_o = float(np.mean(norm_ood));   _std_o = float(np.std(norm_ood))
+    _mean_n = float(np.mean(norm_minor)); _std_n = float(np.std(norm_minor))
+    _mean_r = float(np.mean(_rand_norm)); _std_r = float(np.std(_rand_norm))
+    _mean_dm = float(np.mean([all_results[l]["delta_loss_major"] for l in layers]))
+    _mean_do = float(np.mean([all_results[l]["delta_loss_ood"]   for l in layers]))
+    _mean_dn = float(np.mean([all_results[l]["delta_loss_minor"]  for l in layers]))
+    _WA = 12
+    _sep = "  " + "─" * 57
+    print(_sep)
+    print(f"  Layer-averaged (mean ± std across {len(layers)} layers) — CE nats")
+    print(_sep)
+    print(f"  {'Mode':<6}  {'Δ/g (%)':>{_WA}}  {'Raw Δ':>{_WA}}  {'g (CE nats)':>{_WA}}")
+    print(_sep)
+    print(f"  {'Maj.':<6}  {_mean_m:>7.1f}±{_std_m:<4.1f}  {_mean_dm:{_WA}.4f}  {g_maj:{_WA}.4f}")
+    print(f"  {'OOD':<6}  {_mean_o:>7.1f}±{_std_o:<4.1f}  {_mean_do:{_WA}.4f}  {g_ood:{_WA}.4f}")
+    print(f"  {'Min.':<6}  {_mean_n:>7.1f}±{_std_n:<4.1f}  {_mean_dn:{_WA}.4f}  {g_minor:{_WA}.4f}")
+    print(f"  {'Rand.':<6}  {_mean_r:>7.1f}±{_std_r:<4.1f}  {'---':>{_WA}}  {'---':>{_WA}}")
+    print(_sep)
+    print()
+    # ─────────────────────────────────────────────────────────────────────
 
     # ---- 2. Validation loss history ----
     cmap = plt.cm.tab10
@@ -1472,116 +1741,122 @@ def plot_optimal_orth_direction_across_layers_coin(
     else:
         plt.close(fig_loss)
 
-    # ---- 3. R² plot (OOD only) ----
-    fig_r2, (ax_r2a, ax_r2b) = plt.subplots(1, 2, figsize=figsize)
-
-    uni2proj_tgt = [all_results[l]["uni_to_proj_r2_tgt"] for l in layers]
-    proj2uni_tgt = [all_results[l]["proj_to_uni_r2_tgt"] for l in layers]
-    rorth_u2p_tgt = [all_results[l]["rand_orth_u2p_tgt"] for l in layers]
-    rorth_p2u_tgt = [all_results[l]["rand_orth_p2u_tgt"] for l in layers]
-    mlp_u2p_tgt_l = [all_results[l]["mlp_u2p_tgt"] for l in layers]
-    mlp_p2u_tgt_l = [all_results[l]["mlp_p2u_tgt"] for l in layers]
-    mlp_rorth_u2p_tgt_l = [all_results[l]["mlp_rorth_u2p_tgt"] for l in layers]
-    mlp_rorth_p2u_tgt_l = [all_results[l]["mlp_rorth_p2u_tgt"] for l in layers]
-
-    ax_r2a.plot(layers, uni2proj_tgt, "s-", label="V_opt Linear", color="#FF9800", linewidth=2, markersize=7)
-    ax_r2a.plot(layers, mlp_u2p_tgt_l, "s--", label="V_opt MLP", color="#E91E63", linewidth=2, markersize=7)
-    ax_r2a.plot(layers, rorth_u2p_tgt, "v:", label="Rand orth Linear", color="gray", linewidth=1.5, alpha=0.6, markersize=6)
-    ax_r2a.plot(layers, mlp_rorth_u2p_tgt_l, "v--", label="Rand orth MLP", color="#9E9E9E", linewidth=1.5, alpha=0.7, markersize=6)
-    ax_r2a.set_xlabel("Layer", fontsize=14)
-    ax_r2a.set_ylabel(r"R$^2$", fontsize=14)
-    ax_r2a.set_title("", fontsize=18)
-    ax_r2a.set_xticks(layers)
-    ax_r2a.tick_params(labelsize=12)
-    ax_r2a.legend(fontsize=11)
-    ax_r2a.grid(alpha=0.3)
-    ax_r2a.set_ylim(-0.05, 1.05)
-
-    ax_r2b.plot(layers, proj2uni_tgt, "s-", label="V_opt Linear", color="#FF9800", linewidth=2, markersize=7)
-    ax_r2b.plot(layers, mlp_p2u_tgt_l, "s--", label="V_opt MLP", color="#E91E63", linewidth=2, markersize=7)
-    ax_r2b.plot(layers, rorth_p2u_tgt, "v:", label="Rand orth Linear", color="gray", linewidth=1.5, alpha=0.6, markersize=6)
-    ax_r2b.plot(layers, mlp_rorth_p2u_tgt_l, "v--", label="Rand orth MLP", color="#9E9E9E", linewidth=1.5, alpha=0.7, markersize=6)
-    ax_r2b.set_xlabel("Layer", fontsize=14)
-    ax_r2b.set_ylabel(r"R$^2$", fontsize=14)
-    ax_r2b.set_title("", fontsize=18)
-    ax_r2b.set_xticks(layers)
-    ax_r2b.tick_params(labelsize=12)
-    ax_r2b.legend(fontsize=11)
-    ax_r2b.grid(alpha=0.3)
-    ax_r2b.set_ylim(-0.05, 1.05)
-
-    fig_r2.suptitle("", fontsize=18, y=1.02)
-    plt.tight_layout()
+    # ---- 3. R² plot — individual features + dashed combined ----
+    _COIN_FEAT_DISPLAY = [
+        ("unigram_clr",  "Unigram CLR",   "o-",  "#FF9800"),
+        ("one_hot_x_t",  "Current token", "s-",  "#4CAF50"),
+        ("position",     "Position",      "^-",  "#9C27B0"),
+    ]
+    fig_r2_fwd, ax_r2 = plt.subplots(figsize=(6, 4.5), dpi=150)
+    for name, label, style, color in _COIN_FEAT_DISPLAY:
+        vals = [all_results[l]["feat_r2_marginal"].get(name, float("nan"))
+                for l in layers]
+        ax_r2.plot(layers, vals, style, label=label, color=color, lw=2, ms=6)
+    combined_r2_vals = [all_results[l]["r2_combined_tgt"] for l in layers]
+    ax_r2.plot(layers, combined_r2_vals, ls="--", color="black", lw=1.8,
+               label="Combined", zorder=2)
+    ax_r2.set_xlabel("Layer", fontsize=9)
+    ax_r2.set_ylabel(r"$R^2$", fontsize=9)
+    ax_r2.set_xticks(layers)
+    ax_r2.tick_params(labelsize=8)
+    ax_r2.legend(fontsize=9, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.18),
+                 framealpha=0.9, edgecolor="lightgrey",
+                 columnspacing=0.5, handlelength=1.0, handletextpad=0.3, borderpad=0.4)
+    ax_r2.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax_r2.set_axisbelow(True)
+    ax_r2.spines["top"].set_visible(False)
+    ax_r2.spines["right"].set_visible(False)
+    ax_r2.set_ylim(-0.05, 1.05)
+    plt.tight_layout(pad=2.0)
+    # fig_r2_rev kept for API compatibility
+    fig_r2_rev = fig_r2_fwd
     if show:
-        plt.show()
+        plt.figure(fig_r2_fwd.number); plt.show()
     else:
-        plt.close(fig_r2)
+        plt.close(fig_r2_fwd)
 
-    # ---- 4. Filtered barplot: V_opt full vs unigram-explained ----
-    feat_names = list(all_results[layers[0]]["uni_explained"].keys())
-    feat_colors = ["#E91E63", "#9C27B0"]
-    n_groups = 2 + 2 * len(feat_names)
-    total_w = 0.8
-    bw_e = total_w / n_groups
+    # ---- 4. Filtered barplot: V_opt vs Prediction-explained ----
+    # 4 flush bars per layer, interleaved: [V_opt OOD | Pred OOD | V_opt tgt | Pred tgt]
+    # Prediction bars share the V_opt colour at lower alpha — no gaps.
+    C_OOD_e = COLORS_C["ood"]
+    C_TGT_e = COLORS_C["minor"] if opt_target == "minor" else COLORS_C["ood"]
+    ALPHA_PRED_e = 0.42
 
-    fig_explained, ax_e = plt.subplots(figsize=figsize)
-    ax_e.bar(
-        x - total_w / 2 + bw_e / 2,
-        [all_results[l]["delta_loss_ood"] for l in layers],
-        bw_e, label="V_opt (OOD)", color="#FF9800", alpha=0.85,
-    )
-    ax_e.bar(
-        x - total_w / 2 + 1.5 * bw_e,
-        [all_results[l]["delta_loss_tgt"] for l in layers],
-        bw_e, label=f"V_opt ({tgt_label})", color="#FF9800", alpha=0.35,
-        edgecolor="#E65100", linewidth=1.2,
-    )
-    for fi, fn in enumerate(feat_names):
-        vals_ood = [all_results[l]["uni_explained"][fn]["delta_ood"]
-                    for l in layers]
-        vals_tgt = [all_results[l]["uni_explained"][fn]["delta_tgt"]
-                    for l in layers]
-        r2_avg = float(np.mean([
-            all_results[l]["uni_explained"][fn]["r2_feat_to_proj"]
-            for l in layers
-        ]))
-        rk_avg = int(round(np.mean([
-            all_results[l]["uni_explained"][fn]["explained_rank"]
-            for l in layers
-        ])))
-        base_idx = 2 + fi * 2
-        c = feat_colors[fi % len(feat_colors)]
-        ax_e.bar(
-            x - total_w / 2 + (base_idx + 0.5) * bw_e, vals_ood, bw_e,
-            label=f"{fn} (OOD)",
-            color=c, alpha=0.85,
-        )
-        ax_e.bar(
-            x - total_w / 2 + (base_idx + 1.5) * bw_e, vals_tgt, bw_e,
-            label=f"{fn} ({tgt_label}, R\u00b2={r2_avg:.2f}, rk={rk_avg})",
-            color=c, alpha=0.35, edgecolor=c, linewidth=1.2,
-        )
-    tgt_info_gain = ref["baseline_loss_at_0_tgt"] - ref["baseline_loss_tgt"]
-    ood_ig = ref["baseline_loss_at_0_ood"] - ref["baseline_loss_ood"]
-    tgt_color = "#2E7D32" if opt_target == "minor" else "#E65100"
-    ax_e.axhline(tgt_info_gain, color=tgt_color, ls=":", lw=1.8, alpha=0.7,
-                 label=f"{tgt_label} $l_0 - \\bar{{l}}_t$ = {tgt_info_gain:.3f}")
-    ax_e.axhline(ood_ig, color="#E65100", ls="--", lw=1.8, alpha=0.7,
-                 label=f"OOD $l_0 - \\bar{{l}}_t$ = {ood_ig:.3f}")
-    ax_e.set_xlabel("Layer", fontsize=16)
-    ax_e.set_ylabel("\u0394 Loss", fontsize=15)
-    ax_e.set_title("", fontsize=18)
+    bw_p_e      = 0.17
+    total_w_bi_e = 4 * bw_p_e      # = 0.68 (no gaps)
+    left_e       = -total_w_bi_e / 2
+
+    xo_vopt_ood_e = left_e + 0.5 * bw_p_e
+    xo_pred_ood_e = left_e + 1.5 * bw_p_e
+    xo_vopt_tgt_e = left_e + 2.5 * bw_p_e
+    xo_pred_tgt_e = left_e + 3.5 * bw_p_e
+
+    # Use the combined (enriched) feature-explained subspace for filtering
+    fn = "enriched"
+    vals_ood_e = [all_results[l]["uni_explained"][fn]["delta_ood"] / g_ood * 100
+                  for l in layers]
+    vals_tgt_e = [all_results[l]["uni_explained"][fn]["delta_tgt"] / g_tgt * 100
+                  for l in layers]
+
+    fig_explained, ax_e = plt.subplots(figsize=figsize, dpi=150)
+
+    ax_e.bar(x + xo_vopt_ood_e,
+             [all_results[l]["delta_loss_ood"] / g_ood * 100 for l in layers],
+             bw_p_e, label=r"$V_{\rm opt}$ (OOD)",
+             color=C_OOD_e, linewidth=0, zorder=3)
+
+    ax_e.bar(x + xo_pred_ood_e, vals_ood_e, bw_p_e,
+             label="Filtered (OOD)",
+             color=C_OOD_e, alpha=ALPHA_PRED_e, linewidth=0, zorder=3)
+
+    ax_e.bar(x + xo_vopt_tgt_e,
+             [all_results[l]["delta_loss_tgt"] / g_tgt * 100 for l in layers],
+             bw_p_e, label=rf"$V_{{\rm opt}}$ ({tgt_abbr})",
+             color=C_TGT_e, linewidth=0, zorder=3)
+
+    ax_e.bar(x + xo_pred_tgt_e, vals_tgt_e, bw_p_e,
+             label=f"Filtered ({tgt_abbr})",
+             color=C_TGT_e, alpha=ALPHA_PRED_e, linewidth=0, zorder=3)
+
+    ax_e.axhline(100, color="grey", ls="--", lw=1.0, alpha=0.55,
+                 label="100%")
+
+    ax_e.set_xlabel("Layer", fontsize=9)
+    if show_ylabel:
+        ax_e.set_ylabel("Fraction of ICL gain disrupted (%)", fontsize=9)
     ax_e.set_xticks(x)
-    ax_e.set_xticklabels([str(l) for l in layers])
-    ax_e.tick_params(labelsize=14)
-    ax_e.legend(fontsize=9, loc="best")
-    ax_e.grid(axis="y", alpha=0.3)
-
-    fig_explained.suptitle("", fontsize=18, y=1.02)
-    plt.tight_layout()
+    ax_e.set_xticklabels([str(l) for l in layers], fontsize=8)
+    ax_e.tick_params(axis="y", labelsize=8)
+    ax_e.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax_e.set_axisbelow(True)
+    ax_e.spines["top"].set_visible(False)
+    ax_e.spines["right"].set_visible(False)
+    ax_e.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.14),
+                ncol=5, framealpha=0.9, edgecolor="lightgrey",
+                columnspacing=0.5, handlelength=1.0, handletextpad=0.3, borderpad=0.4)
+    plt.tight_layout(pad=2.0)
     if show:
         plt.show()
     else:
         plt.close(fig_explained)
 
-    return fig_delta, fig_loss, fig_r2, fig_explained, all_results
+    # ── Printed Table 5: V_opt & Prediction ──────────────────────────────
+    _W5 = 9
+    _hd5 = (f"  {'Layer':>5}  {'Vopt OOD%':>{_W5}}  {'Pred OOD%':>{_W5}}  "
+            f"{'Vopt '+tgt_abbr+'%':>{_W5}}  {'Pred '+tgt_abbr+'%':>{_W5}}")
+    _ln5 = "  " + "─" * (len(_hd5) - 2)
+    print(f"\n  V_opt & Prediction — Δ𝓛/g (% of ICL gain)  (feat: {fn})")
+    print(_ln5); print(_hd5); print(_ln5)
+    for _l in layers:
+        _r = all_results[_l]
+        _vo = _r["delta_loss_ood"] / g_ood * 100
+        _po = _r["uni_explained"][fn]["delta_ood"] / g_ood * 100
+        _vt = _r["delta_loss_tgt"] / g_tgt * 100
+        _pt = _r["uni_explained"][fn]["delta_tgt"] / g_tgt * 100
+        print(f"  {_l:>5}  {_vo:>{_W5}.1f}%  {_po:>{_W5}.1f}%  "
+              f"{_vt:>{_W5}.1f}%  {_pt:>{_W5}.1f}%")
+    print(_ln5)
+    print()
+    # ─────────────────────────────────────────────────────────────────────
+
+    return fig_delta, fig_loss, fig_r2_fwd, fig_r2_rev, fig_explained, all_results

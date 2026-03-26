@@ -67,9 +67,8 @@ def _historical_injection_test_next_token_coin(
     if not (0.0 <= p <= 1.0):
         raise ValueError(f"p must be in [0, 1], got {p}")
 
-    device = torch.device(
-        getattr(config, "device", "cuda" if torch.cuda.is_available() else "cpu")
-    )
+    from icl.utils.device_utils import get_default_device
+    device = torch.device(getattr(config, "device", get_default_device()))
     model.eval().to(device)
 
     n_layers = len(model.layers)

@@ -13,6 +13,8 @@ Preds = dict[str, dict[str, torch.Tensor]]
 ########################################################################################################################
 
 def mse(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Per-position MSE: mean over batch (dim=0). Inputs shape (N, T) -> output (T,)."""
+    assert a.shape == b.shape, f"mse: shape mismatch {a.shape} vs {b.shape}"
     return ((a - b) ** 2).mean(dim=0)
 
 

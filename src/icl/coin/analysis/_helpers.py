@@ -116,6 +116,8 @@ def compute_hiddens_token_conditioned_coin(
     positions_of_interest: Sequence[int] = None,
     max_unique_tokens: int = None,
     task_batch_size: int = 8,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
 ) -> Tuple[torch.Tensor, dict]:
     """
     Token-conditioned hidden extraction on non-padded sequences.
@@ -249,6 +251,8 @@ def compute_hiddens_token_conditioned_coin(
                     batch_data=big_batch,
                     layers=layers,
                     task_pos=extract_pos_tensor,
+                    post_layernorm=post_layernorm,
+                    extraction_point=extraction_point,
                 )  # (L, (t1-t0)*batch_size, 1, n_embd)
 
                 h_cpu = chunk_hiddens[:, :, 0, :].cpu()  # (L, (t1-t0)*B, D)
@@ -572,6 +576,8 @@ def get_token_conditioned_hiddens_coin(
     step: Optional[int] = None,
     verbose: bool = False,
     task_batch_size: int = 8,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
 ) -> tuple:
     """
     Get token-conditioned hidden representations for Coin task (non-padded).
@@ -637,6 +643,8 @@ def get_token_conditioned_hiddens_coin(
         positions_of_interest=positions_of_interest,
         max_unique_tokens=max_unique_tokens,
         task_batch_size=task_batch_size,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
 
     if verbose:

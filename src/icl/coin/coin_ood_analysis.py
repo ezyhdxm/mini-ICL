@@ -4,8 +4,17 @@ import torch
 import icl.utils.notebook_utils as nu
 
 
-def get_new_sampler(exp_name, n_minor=64, n_ood=30):
-    _, sampler, _ = nu.load_everything("coin", exp_name)
+def get_new_sampler(exp_name, n_minor=64, n_ood=30, sampler=None):
+    """Build an OOD+minor sampler clone for the coin task.
+
+    Parameters
+    ----------
+    sampler : optional
+        If provided, use this already-loaded sampler instead of calling
+        ``nu.load_everything`` (which would waste a GPU allocation).
+    """
+    if sampler is None:
+        _, sampler, _ = nu.load_everything("coin", exp_name)
     sampler_clone = copy.deepcopy(sampler)
 
     orig = sampler_clone.minor_p
@@ -23,9 +32,9 @@ def get_new_sampler(exp_name, n_minor=64, n_ood=30):
 
     def make_random_rows(n: int):
         n = int(n)
-        x = torch.rand((n, *trailing_shape), device=orig.device, dtype=orig.dtype)
-        if orig.ndim >= 2 and n > 0:
-            x = x / x.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        # Dirichlet(1,...,1) via the Exp(1) trick: x_i ~ Exp(1), then x / sum(x)
+        x = torch.empty((n, *trailing_shape), device=orig.device, dtype=orig.dtype).exponential_()
+        x = x / x.sum(dim=-1, keepdim=True).clamp_min(1e-12)
         return x
 
     new_minor = orig.new_empty((n_tasks, *trailing_shape)) if n_tasks > 0 else orig.new_empty((0, *trailing_shape))

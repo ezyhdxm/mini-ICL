@@ -237,33 +237,41 @@ def intervene_remove_ood_deltah_subspace(
     del ood_task_eval
     gc.collect()
 
-    # ── 6. Ablation sweep plot ────────────────────────────────────────────
+    # ── 6. Ablation sweep plot (MSE → RMSE for display) ────────────────
+    indiv_maj_r = [np.sqrt(v) for v in indiv_maj]
+    indiv_ood_r = [np.sqrt(v) for v in indiv_ood]
+    cumul_maj_r = [np.sqrt(v) for v in cumul_maj]
+    cumul_ood_r = [np.sqrt(v) for v in cumul_ood]
+    base_maj_r = np.sqrt(base_maj)
+    base_ood_r = np.sqrt(base_ood)
+    pos0_ood_r = np.sqrt(pos0_ood)
+
     fig, axes = plt.subplots(1, 2, figsize=(max(14, 1.2 * max_k), 7))
     x = np.arange(max_k)
     bw = 0.35
 
-    all_bar_vals = indiv_maj + indiv_ood + cumul_maj + cumul_ood
-    y_data_max = max(max(all_bar_vals), base_maj, base_ood)
+    all_bar_vals = indiv_maj_r + indiv_ood_r + cumul_maj_r + cumul_ood_r
+    y_data_max = max(max(all_bar_vals), base_maj_r, base_ood_r)
     y_lim = y_data_max * 1.25
-    pos0_in_range = (pos0_ood <= y_lim)
+    pos0_in_range = (pos0_ood_r <= y_lim)
 
     for ax, mj, od, title_str, xlabel in [
-        (axes[0], indiv_maj, indiv_ood,
-         "Individual component removal", "SVD component index"),
-        (axes[1], cumul_maj, cumul_ood,
-         "Cumulative component removal", "Remove components 0..k"),
+        (axes[0], indiv_maj_r, indiv_ood_r,
+         "", "SVD component index"),
+        (axes[1], cumul_maj_r, cumul_ood_r,
+         "", "Remove components 0..k"),
     ]:
         ax.bar(x - bw/2, mj, bw, label="Major", color="#2196F3", alpha=0.85)
         ax.bar(x + bw/2, od, bw, label="OOD", color="#FF9800", alpha=0.85)
-        ax.axhline(base_maj, color="#2196F3", ls="--", lw=1.5, alpha=0.6,
-                   label=f"Major baseline ({base_maj:.4f})")
-        ax.axhline(base_ood, color="#FF9800", ls="--", lw=1.5, alpha=0.6,
-                   label=f"OOD baseline ({base_ood:.4f})")
+        ax.axhline(base_maj_r, color="#2196F3", ls="--", lw=1.5, alpha=0.6,
+                   label=f"Major baseline ({base_maj_r:.4f})")
+        ax.axhline(base_ood_r, color="#FF9800", ls="--", lw=1.5, alpha=0.6,
+                   label=f"OOD baseline ({base_ood_r:.4f})")
         if pos0_in_range:
-            ax.axhline(pos0_ood, color="#4CAF50", ls=":", lw=2, alpha=0.8,
-                       label=f"OOD pos-0 MSE ({pos0_ood:.4f})")
+            ax.axhline(pos0_ood_r, color="#4CAF50", ls=":", lw=2, alpha=0.8,
+                       label=f"OOD pos-0 RMSE ({pos0_ood_r:.4f})")
         else:
-            p0_lbl = f"OOD pos-0 MSE = {pos0_ood:.2f}"
+            p0_lbl = f"OOD pos-0 RMSE = {pos0_ood_r:.2f}"
             ax.annotate(
                 p0_lbl, xy=(0.98, 0.97), xycoords="axes fraction",
                 ha="right", va="top", fontsize=11, color="#4CAF50",
@@ -271,7 +279,7 @@ def intervene_remove_ood_deltah_subspace(
                 bbox=dict(boxstyle="round,pad=0.3", fc="white",
                           ec="#4CAF50", alpha=0.9),
             )
-        ax.set(xlabel=xlabel, ylabel=r"MSE to oracle $w^\top x$ (avg)",
+        ax.set(xlabel=xlabel, ylabel=r"RMSE to oracle $w^\top x$ (avg)",
                title=title_str)
         ax.set_xticks(x)
         ax.set_ylim(0, y_lim)

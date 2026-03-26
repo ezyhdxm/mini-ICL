@@ -18,6 +18,7 @@ from icl.coin.analysis.posterior import (
 from icl.coin.analysis.probes import (
     train_linear_hidden_predictor_coin,
     plot_val_r2_across_layers_coin,
+    plot_averaging_r2_coin,
 )
 
 from icl.coin.legacy.coin_analysis_legacy import (
@@ -42,11 +43,17 @@ from icl.coin.analysis.trajectory import (
     traj_projection_plot_coin,
     traj_posterior_projection_plot_coin,
     traj_post_posterior_projection_plot_coin,
+    traj_cellmean_projection_plot_coin,
+    traj_averaging_projection_plot_coin,
 )
 
 from icl.coin.analysis.directions import (
     decompose_hidden_posterior_vs_unigram_coin,
     plot_decomposition_across_layers_coin,
+)
+
+from icl.utils.ood_major_projection_r2 import (
+    plot_maj_r2_ood_across_steps_coin,
 )
 
 from icl.coin.legacy.orth_decomposition import (
@@ -86,6 +93,7 @@ __all__ = [
     "train_linear_hidden_predictor_coin",
     "plot_val_r2_across_layers_coin",
     "plot_val_r2_across_layers_multi_k",
+    "plot_averaging_r2_coin",
     # variance
     "get_task_variance_coin",
     "plot_task_variance_coin",
@@ -97,9 +105,12 @@ __all__ = [
     "traj_projection_plot_coin",
     "traj_posterior_projection_plot_coin",
     "traj_post_posterior_projection_plot_coin",
+    "traj_cellmean_projection_plot_coin",
+    "traj_averaging_projection_plot_coin",
     # directions
     "decompose_hidden_posterior_vs_unigram_coin",
     "plot_decomposition_across_layers_coin",
+    "plot_maj_r2_ood_across_steps_coin",
     "decompose_orth_projection_coin",
     "plot_orth_decomposition_across_layers_coin",
     # interventions

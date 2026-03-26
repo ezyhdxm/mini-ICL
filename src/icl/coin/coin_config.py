@@ -4,6 +4,8 @@ from typing import Tuple, Optional, Any
 from ml_collections import ConfigDict # DeepMind style config library
 import os
 
+from icl.device_utils import get_default_device
+
 
 def get_config_coin() -> ConfigDict:
     config = ConfigDict()
@@ -15,7 +17,7 @@ def get_config_coin() -> ConfigDict:
     config.batch_size = 128
     config.eval_size = 512
     config.test_size = 512
-    config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    config.device = get_default_device()
     TASKNAME = "coin"  # Default task name, can be overridden in config
     config.work_dir = os.path.join("results", TASKNAME)  # Specify working directory
     config.ngram = 3  # N-gram order for the n-gram learner

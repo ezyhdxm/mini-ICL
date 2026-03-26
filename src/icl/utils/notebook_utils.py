@@ -10,7 +10,7 @@ from icl.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-from .basic import get_hash
+from .basic import get_hash, get_config_hash_for_exp
 from icl.models import Transformer
 
 
@@ -140,7 +140,11 @@ def load_checkpoint(config,
     # Auto-construct checkpoint_dir from config if not provided
     if checkpoint_dir is None:
         if exp_name is None:
-            exp_name = f"train_{get_hash(config)}" 
+            # Use canonical hash for linear so exp_name matches get_exp_name() / train_linear
+            if getattr(config.task, "name", None) == "noisy_linear_regression":
+                exp_name = f"train_{get_config_hash_for_exp(config)}"
+            else:
+                exp_name = f"train_{get_hash(config)}" 
         exp_dir = os.path.join(config.work_dir, exp_name)
         
         # Handle notebooks directory case
@@ -353,10 +357,29 @@ def load_sampler(sampler_path):
             f"This usually means the training was interrupted before the sampler could be saved."
         )
     
-    # Try to load the sampler with better error handling
+    # Try to load the sampler with better error handling.
+    # Use a CPU-mapping unpickler so that any CUDA tensors stored in the pickle
+    # are restored on CPU instead of their original device.  This prevents a
+    # corrupted CUDA context (from a previous experiment's failure) from
+    # cascading into sampler-load failures for subsequent experiments.
+    import io
+
+    class _CPUUnpickler(pickle.Unpickler):
+        """Unpickler that remaps torch storage bytes to CPU."""
+        def find_class(self, module, name):
+            if module == "torch.storage" and name == "_load_from_bytes":
+                return lambda b: torch.load(io.BytesIO(b), map_location="cpu", weights_only=False)
+            return super().find_class(module, name)
+
     try:
         with open(sampler_path, "rb") as f:
-            sampler = pickle.load(f)
+            sampler = _CPUUnpickler(f).load()
+        # _CPUUnpickler remaps stored tensors to CPU, but plain string attributes
+        # like `self.device` are not tensors and remain as-is (e.g. "cuda:1").
+        # Update them so that any new tensors created inside sampler.generate()
+        # are also on CPU and don't mismatch the stored CPU tensors.
+        if hasattr(sampler, "device") and isinstance(sampler.device, str) and sampler.device != "cpu":
+            sampler.device = "cpu"
         return sampler
     except EOFError as e:
         raise EOFError(
@@ -392,6 +415,30 @@ def load_everything(task_name, train_folder, get_log=False):
         log_data = load_log(log_path)
         return model, sampler, config, log_data
     return model, sampler, config
+
+
+def load_config_and_sampler(task_name, train_folder):
+    """Load config and sampler without allocating GPU memory for the model.
+
+    This is a lightweight alternative to :func:`load_everything` for callers
+    that only need the config and sampler (e.g. to build a sampler clone before
+    loading a specific checkpoint).  Avoids a wasted GPU allocation.
+
+    Returns
+    -------
+    sampler : object
+    config : ConfigDict
+    """
+    curr_dir = os.getcwd()
+    if curr_dir.endswith("notebooks"):
+        path_prefix = os.path.join("..", "results", task_name)
+    else:
+        path_prefix = os.path.join("results", task_name)
+    config_path = os.path.join(path_prefix, train_folder, "config.json")
+    sampler_path = os.path.join(path_prefix, train_folder, "sampler.pkl")
+    config = load_config(config_path)
+    sampler = load_sampler(sampler_path)
+    return sampler, config
 
 
 # Legacy re-exports

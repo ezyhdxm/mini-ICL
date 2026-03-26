@@ -64,7 +64,8 @@ def _cleanup_model(model):
 @torch.no_grad()
 def _extract_hiddens_for_pool(
     model, eval_task, demo_data, *, step, layer, task_pos, D,
-    n_tasks=None, chunk=8,
+    n_tasks=None, chunk=8, post_layernorm=False,
+    extraction_point="post_attn",
 ):
     """Chunked extraction of h_l(x | task_k) for every task k in the pool.
 
@@ -103,6 +104,8 @@ def _extract_hiddens_for_pool(
         ch = extract_hidden_multi(
             model=model, demo_data=dr, demo_target=dt,
             layers=[layer], task_pos=task_pos,
+            post_layernorm=post_layernorm,
+            extraction_point=extraction_point,
         )
         hiddens[i:ce] = ch[0].reshape(ca, B, n_points, D).permute(0, 2, 1, 3).cpu()
         del dr, dt, ch
@@ -147,13 +150,20 @@ def _extract_baseline_per_position(
 
 def _fit_task_subspace(
     exp_name, layer, step, fit_n_samples, fit_positions, n_points,
-    center_task_vecs, *, n_minor=0,
+    center_task_vecs, *, n_minor=None,
+    include_position_bias=False, include_logit=False,
+    extraction_point="post_attn",
 ):
     """Fit a linear probe h ≈ π W + b and extract the task-subspace projector.
 
+    The posterior π is the **training posterior** computed over all tasks
+    (major + minor).  Only the K major-task columns are kept as features;
+    when minor tasks exist these columns do **not** sum to 1, so no
+    drop-column is applied.
+
     Steps:
-      1. Train OLS probe: h ≈ [π, x_t, ŷ_t] · [W; W_tok; W_logit] + b
-      2. Take W ∈ ℝ^{K×D}  (optionally centre rows: W̃ = W − w̄1ᵀ)
+      1. Train OLS probe: h ≈ [π_major, x_t] W + b
+      2. Take W_task ∈ ℝ^{K×D}  (optionally centre rows: W̃ = W − w̄1ᵀ)
       3. SVD:  W̃ = UΣVᵀ,  keep r columns with σᵢ > 10⁻⁶·σ₁
       4. Projector:  P_S = V_r V_rᵀ  ∈ ℝ^{D×D}
 
@@ -179,6 +189,9 @@ def _fit_task_subspace(
         n_minor=n_minor,
         print_summary=False,
         skip_baselines=True,
+        include_position_bias=include_position_bias,
+        include_logit=include_logit,
+        extraction_point=extraction_point,
     )
     W_fit = fit_res["model_weight"].float()
     b_fit = fit_res["model_bias"].float()
@@ -201,7 +214,7 @@ def _fit_task_subspace(
 def _run_projection_removal(
     model, layer, P_proj, scale, task_obj, eval_positions,
     n_samples, B, device, *,
-    minor_only=False, track_oracle=False,
+    minor_only=False, track_oracle=False, extraction_point="post_attn",
 ):
     """Causal intervention: h′ = h − s · h P  at layer l.
 
@@ -214,6 +227,7 @@ def _run_projection_removal(
     intervened_losses_by_pos = {p: [] for p in eval_positions}
     base_oracle_by_pos = {p: [] for p in eval_positions} if track_oracle else None
     int_oracle_by_pos = {p: [] for p in eval_positions} if track_oracle else None
+    pos0_baseline = []
 
     n_batches = max(1, (n_samples + B - 1) // B)
     orig_bs = int(task_obj.batch_size)
@@ -247,14 +261,22 @@ def _run_projection_removal(
                 return h_mod
             return (h_mod,) + out[1:]
 
-        handle = model.transformer.blocks[layer].attn_block.register_forward_hook(
-            hook_fn,
+        hook_target = (
+            model.transformer.blocks[layer]
+            if extraction_point == "post_mlp"
+            else model.transformer.blocks[layer].attn_block
         )
+        handle = hook_target.register_forward_hook(hook_fn)
         try:
             with torch.no_grad():
                 preds_int = model(demo_data, demo_target)
         finally:
             handle.remove()
+
+        if preds_base.shape[1] > 0:
+            pos0_baseline.append(
+                ((preds_base[:, 0] - demo_target[:, 0]) ** 2).mean().item()
+            )
 
         if track_oracle:
             oracle_preds = (demo_data @ demo_tasks).squeeze(-1)
@@ -303,6 +325,7 @@ def _run_projection_removal(
         "baseline_per_pos": bp,
         "intervened_per_pos": ip,
         "positions": vp,
+        "baseline_loss_at_0": float(np.mean(pos0_baseline)) if pos0_baseline else float("nan"),
     }
     if track_oracle:
         base_oracle_avg = float(np.mean(bop)) if bop else float("nan")
@@ -498,6 +521,144 @@ def _joint_fit_task_token(
     _, S, Vt = torch.linalg.svd(tv, full_matrices=False)
     rank = int((S > 1e-6 * S[0]).sum().item())
     basis = Vt[:rank].T  # (D, rank)
+
+    return {
+        "W_task": W_task,
+        "W_tok": W_tok,
+        "basis": basis,
+        "rank": rank,
+        "joint_r2": r2,
+        "tok_feat_dim": tok_feat_dim,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Averaging-based task/token subspace fit
+# ---------------------------------------------------------------------------
+
+def _averaging_fit_task_token(
+    model, layer, train_task,
+    *, device,
+    fit_positions, fit_n_samples, B, n_dims, n_embd,
+    input_protection_features="x_y",
+    center_task_vecs=True,
+    extraction_point="post_attn",
+):
+    """Posterior-weighted averaging alternative to ``_joint_fit_task_token``.
+
+    Collects the same (H, Pi, Tok) data but derives the task basis by
+    posterior-weighted averaging rather than joint OLS, eliminating the
+    implicit token-task correlation in the design matrix.
+
+    Algorithm
+    ---------
+    1. Collect hidden states, task posteriors, and token features over
+       ``fit_n_samples`` samples at ``fit_positions``.
+    2. Compute posterior-weighted task means:
+           task_mean_k = (Pi[:, k] · H) / sum(Pi[:, k])
+       These are unaffected by the token-task correlation because the
+       posterior weights are orthogonal to the token features in expectation.
+    3. Centre task means and SVD to obtain the task-subspace basis.
+    4. Regress residuals ``H - Pi @ task_means`` against token features to
+       obtain ``W_tok`` for token protection.
+
+    Returns the same dict as ``_joint_fit_task_token``.
+    """
+    from icl.linear.analysis.posterior import task_posterior_over_time_linear_regression
+
+    valid_feats = {"x", "x_y", "x_y_suff"}
+    if input_protection_features not in valid_feats:
+        raise ValueError(
+            f"input_protection_features={input_protection_features!r} not in {valid_feats}"
+        )
+    use_y = input_protection_features in {"x_y", "x_y_suff"}
+    use_suff = input_protection_features == "x_y_suff"
+
+    n_major = train_task.n_tasks
+    fit_seq_pos = torch.tensor(
+        [2 * p for p in fit_positions], device=device, dtype=torch.long,
+    )
+    fit_point_pos = torch.tensor(fit_positions, device=device, dtype=torch.long)
+
+    all_h, all_post, all_tok = [], [], []
+    n_batches = (fit_n_samples + B - 1) // B
+    saved_bs = int(train_task.batch_size)
+    train_task.batch_size = B
+
+    for bi in range(n_batches):
+        data, _, target = train_task.sample_batch(step=bi, is_eval=False)
+        data, target = data.to(device), target.to(device)
+
+        post = task_posterior_over_time_linear_regression(
+            train_task, data, target, include_minor=True,
+        )
+        post_at = post[:, fit_point_pos, :n_major]
+
+        cache = {}
+        def _hook(mod, inp, out, _c=cache):
+            h = out if torch.is_tensor(out) else out[0]
+            _c["h"] = h.index_select(1, fit_seq_pos).detach()
+
+        if extraction_point == "post_mlp":
+            hook_target = model.transformer.blocks[layer]
+        else:
+            hook_target = model.transformer.blocks[layer].attn_block
+        handle = hook_target.register_forward_hook(_hook)
+        try:
+            with torch.no_grad():
+                model(data, target)
+        finally:
+            handle.remove()
+
+        tok_feat = _build_token_features(
+            data, target, fit_point_pos,
+            device=device, use_y=use_y, use_suff=use_suff, n_dims=n_dims,
+        )
+
+        all_h.append(cache["h"].cpu())
+        all_post.append(post_at.cpu())
+        all_tok.append(tok_feat.cpu())
+        del data, target, post
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    train_task.batch_size = saved_bs
+
+    H = torch.cat(all_h, 0).reshape(-1, n_embd).float()
+    Pi = torch.cat(all_post, 0).reshape(-1, n_major).float()
+    Tok = torch.cat(all_tok, 0)
+    tok_feat_dim = Tok.shape[-1]
+    Tok = Tok.reshape(-1, tok_feat_dim).float()
+    del all_h, all_post, all_tok
+
+    # ── Posterior-weighted task averaging ────────────────────────────────────
+    w = Pi.T  # (K, N)
+    w_sum = w.sum(dim=1, keepdim=True).clamp_min(1e-12)  # (K, 1)
+    task_means = (w @ H) / w_sum  # (K, D)
+    W_task = task_means
+
+    if center_task_vecs:
+        tv = task_means - task_means.mean(dim=0, keepdim=True)
+    else:
+        tv = task_means.clone()
+    _, S, Vt = torch.linalg.svd(tv, full_matrices=False)
+    rank = int((S > 1e-6 * S[0]).sum().item())
+    basis = Vt[:rank].T  # (D, rank)
+
+    # ── Token directions from residuals ──────────────────────────────────────
+    H_resid = H - Pi @ task_means  # (N, D)
+    Tok_aug = torch.cat([Tok, torch.ones(Tok.shape[0], 1)], dim=1)
+    W_tok_aug = torch.linalg.pinv(Tok_aug) @ H_resid
+    W_tok = W_tok_aug[:-1]  # (F, D)
+
+    pred = Pi @ task_means + Tok @ W_tok
+    ss_res = ((H - pred) ** 2).sum().item()
+    ss_tot = ((H - H.mean(0)) ** 2).sum().item()
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+    del H, Pi, Tok, H_resid, Tok_aug, W_tok_aug, pred
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return {
         "W_task": W_task,

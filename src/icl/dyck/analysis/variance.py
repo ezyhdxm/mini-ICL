@@ -640,33 +640,30 @@ def plot_task_vector_r2_dyck(
                 print(f"{li:>6} {pos:>5} {r2_dict[li][j]:>8.4f}")
         print("=" * len(header))
 
-    _COLORS = [
-        "#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7",
-        "#56B4E9", "#F0E442", "#000000",
-    ]
-    _LINESTYLES = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
+    from icl.utils.separability import _layer_style
 
     fig, ax = plt.subplots(figsize=figsize)
-    for i, li in enumerate(results['layers']):
+    for li in results['layers']:
+        vals = [1.0 - v for v in r2_dict[li]]
         ax.plot(
-            positions, r2_dict[li],
-            label=f"Layer {li}",
-            color=_COLORS[i % len(_COLORS)],
-            linestyle=_LINESTYLES[i % len(_LINESTYLES)],
-            linewidth=2.2,
+            positions, vals,
+            label=str(li),
+            **_layer_style(li, len(positions)),
         )
 
     ax.set_xlabel("Dyck position", fontsize=14)
     if show_ylabel:
-        ax.set_ylabel("Task-token vector $R^2$", fontsize=14)
+        ax.set_ylabel("Residual variance ratio", fontsize=14)
     if log_x and len(positions) > 1:
         ax.set_xscale("symlog", linthresh=1)
     from matplotlib.ticker import MaxNLocator
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_ylim(None, 1.02)
+    ax.set_ylim(-0.02, 1.02)
     ax.tick_params(labelsize=12)
-    ax.legend(fontsize=10, framealpha=0.9, loc="best",
-              borderaxespad=0.3, handlelength=1.8)
+    ax.legend(title="Layer", fontsize=12, title_fontsize=12,
+              framealpha=0.9, loc="center left",
+              bbox_to_anchor=(1.02, 0.5),
+              borderaxespad=0.3, handlelength=2.2)
     ax.grid(True, alpha=0.25, linewidth=0.5)
     plt.tight_layout()
     if show:

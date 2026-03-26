@@ -6,6 +6,8 @@ This module provides functionality to:
 2. Search experiments by configuration parameters
 3. Generate a web UI for browsing experiments
 """
+import copy
+import hashlib
 import os
 import json
 import sqlite3
@@ -13,6 +15,16 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from ml_collections import ConfigDict
+
+
+# ── Standalone hash helper (mirrors icl.utils.basic, no torch dependency) ────
+def _get_config_hash(config: ConfigDict) -> str:
+    """Return a stable MD5 hash of config, canonicalizing cuda device strings."""
+    c = copy.deepcopy(config)
+    device = c.get("device", "")
+    if isinstance(device, str) and device.startswith("cuda"):
+        c.device = "cuda"
+    return hashlib.md5(c.to_json(sort_keys=True).encode("utf-8")).hexdigest()
 
 
 class ExperimentIndex:
@@ -60,6 +72,13 @@ class ExperimentIndex:
             )
         """)
         
+        # Migrate: add new columns if they don't exist yet
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(experiments)").fetchall()]
+        if 'size_bytes' not in cols:
+            cursor.execute("ALTER TABLE experiments ADD COLUMN size_bytes INTEGER")
+        if 'folder_mtime' not in cols:
+            cursor.execute("ALTER TABLE experiments ADD COLUMN folder_mtime REAL")
+
         # Create indices for faster searches
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_exp_name ON experiments(exp_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_config_hash ON experiments(config_hash)")
@@ -82,6 +101,10 @@ class ExperimentIndex:
         
         # Task parameters
         if hasattr(config, 'task'):
+            # major_means: store True if custom means were set, else omit
+            major_means_raw = getattr(config.task, 'major_means', None)
+            major_means = True if major_means_raw is not None else None
+
             params['task'] = {
                 'name': getattr(config.task, 'name', None),
                 'vocab_size': getattr(config, 'vocab_size', None),
@@ -90,11 +113,22 @@ class ExperimentIndex:
                 'order': getattr(config.task, 'order', None),
                 'n_tasks': getattr(config.task, 'n_tasks', None),
                 'n_minor_tasks': getattr(config.task, 'n_minor_tasks', None),
-                'n_points': getattr(config.task, 'n_points', None),  # For linear tasks
+                'p_minor': getattr(config.task, 'p_minor', None),
+                'n_points': getattr(config.task, 'n_points', None),
+                'n_dims': getattr(config.task, 'n_dims', None),
+                'dyck_length': getattr(config.task, 'dyck_length', None),
                 'total_trans': getattr(config.task, 'total_trans', None),
                 'stationary': getattr(config.task, 'stationary', None),
                 'pad': getattr(config.task, 'pad', None),
                 'ood': getattr(config.task, 'ood', None),
+                # coin-specific
+                'major_pool_type': getattr(config.task, 'major_pool_type', None),
+                'major_means': major_means,
+                # dyck-specific
+                'repeat_prob': getattr(config.task, 'repeat_prob', None),
+                # linear-specific
+                'noise_scale': getattr(config.task, 'noise_scale', None),
+                'is_mixture': getattr(config.task, 'is_mixture', None),
             }
             # Remove None values
             params['task'] = {k: v for k, v in params['task'].items() if v is not None}
@@ -122,6 +156,8 @@ class ExperimentIndex:
                 'weight_decay': getattr(config.training, 'weight_decay', None),
                 'batch_size': getattr(config.training, 'batch_size', None) or getattr(config, 'batch_size', None),
                 'scheduler': getattr(config.training, 'scheduler', None),
+                'scheduler_type': getattr(config.training, 'scheduler_type', getattr(config.training, 'schedule', None)),
+                'grad_clip_norm': getattr(config.training, 'grad_clip_norm', getattr(config.training, 'max_grad_norm', None)),
             }
             params['training'] = {k: v for k, v in params['training'].items() if v is not None}
         
@@ -142,11 +178,50 @@ class ExperimentIndex:
         params['general'] = {
             'seed': getattr(config, 'seed', None),
             'device': getattr(config, 'device', None),
+            'mixed_precision': getattr(config, 'mixed_precision', None),
         }
         params['general'] = {k: v for k, v in params['general'].items() if v is not None}
         
         return params
     
+    @staticmethod
+    def _folder_size(path: str) -> int:
+        """Return total size of all files under path in bytes."""
+        total = 0
+        for dirpath, _, filenames in os.walk(path):
+            for fname in filenames:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, fname))
+                except OSError:
+                    pass
+        return total
+
+    @staticmethod
+    def _folder_mtime(path: str) -> float:
+        """Return a mtime that changes whenever checkpoints are added or removed.
+
+        Uses the max of:
+          - The experiment root directory's own mtime  (catches linear-style changes
+            where model_*.pt files live directly in the root)
+          - The checkpoints/ subdirectory's mtime, if it exists  (catches coin/dyck/
+            latent-style changes where files live in exp/checkpoints/)
+
+        On NTFS, deleting a file from a directory updates that directory's mtime,
+        so this correctly invalidates the size cache after pruning.
+        """
+        mtimes = []
+        try:
+            mtimes.append(os.path.getmtime(path))
+        except OSError:
+            pass
+        ckpt_subdir = os.path.join(path, "checkpoints")
+        if os.path.isdir(ckpt_subdir):
+            try:
+                mtimes.append(os.path.getmtime(ckpt_subdir))
+            except OSError:
+                pass
+        return max(mtimes) if mtimes else 0.0
+
     def index_experiment(self, exp_path: str, task_name: str = "latent") -> bool:
         """
         Index a single experiment by reading its config.json.
@@ -167,45 +242,63 @@ class ExperimentIndex:
             return False
         
         try:
-            # Load config
+            # ── Fast path: skip all file I/O if folder hasn't changed ────────────
+            current_mtime = self._folder_mtime(exp_path)
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA synchronous = NORMAL")   # safe + faster than FULL
+            cursor = conn.cursor()
+
+            existing = cursor.execute(
+                "SELECT id, size_bytes, folder_mtime, config_hash FROM experiments WHERE exp_name = ?",
+                (exp_name,)
+            ).fetchone()
+
+            if existing and existing[1] is not None and existing[2] is not None \
+                    and abs(existing[2] - current_mtime) < 1.0:
+                # Nothing changed — just bump updated_at and move on
+                cursor.execute(
+                    "UPDATE experiments SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (existing[0],)
+                )
+                conn.commit()
+                conn.close()
+                return True
+
+            # ── Slow path: read config.json and recompute everything ─────────────
             with open(config_path, 'r') as f:
                 config = ConfigDict(json.load(f))
-            
-            # Generate config hash
-            from .basic import get_hash
-            config_hash = get_hash(config)
-            
-            # Extract key parameters
+
+            config_hash = _get_config_hash(config)
+            size_bytes = self._folder_size(exp_path)
             key_params = self._extract_key_params(config)
-            
-            # Insert into database
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Insert or update experiment
-            cursor.execute("""
-                INSERT OR REPLACE INTO experiments (exp_name, exp_path, task_name, config_hash, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (exp_name, exp_path, task_name, config_hash))
-            
-            exp_id = cursor.lastrowid
-            if exp_id is None:
-                cursor.execute("SELECT id FROM experiments WHERE exp_name = ?", (exp_name,))
-                exp_id = cursor.fetchone()[0]
-            
-            # Delete old parameters
+
+            if existing:
+                exp_id = existing[0]
+                cursor.execute("""
+                    UPDATE experiments
+                    SET exp_path=?, task_name=?, config_hash=?, size_bytes=?, folder_mtime=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                """, (exp_path, task_name, config_hash, size_bytes, current_mtime, exp_id))
+            else:
+                cursor.execute("""
+                    INSERT INTO experiments (exp_name, exp_path, task_name, config_hash, size_bytes, folder_mtime)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (exp_name, exp_path, task_name, config_hash, size_bytes, current_mtime))
+                exp_id = cursor.lastrowid
+
+            # Refresh parameters (delete + re-insert for this exp_id)
             cursor.execute("DELETE FROM config_params WHERE exp_id = ?", (exp_id,))
-            
-            # Insert parameters
+            param_rows = []
             for category, params in key_params.items():
                 for param_name, param_value in params.items():
-                    # Convert value to string for storage
                     value_str = json.dumps(param_value) if isinstance(param_value, (dict, list)) else str(param_value)
-                    cursor.execute("""
-                        INSERT INTO config_params (exp_id, category, param_name, param_value)
-                        VALUES (?, ?, ?, ?)
-                    """, (exp_id, category, param_name, value_str))
-            
+                    param_rows.append((exp_id, category, param_name, value_str))
+            cursor.executemany("""
+                INSERT INTO config_params (exp_id, category, param_name, param_value)
+                VALUES (?, ?, ?, ?)
+            """, param_rows)
+
             conn.commit()
             conn.close()
             return True
@@ -217,34 +310,140 @@ class ExperimentIndex:
     def index_all_experiments(self, root_dir: str = "results", task_names: Optional[List[str]] = None):
         """
         Index all experiments in the results directory.
-        
+
+        Uses a single shared DB connection with all existing state loaded into
+        memory upfront, so re-indexing unchanged experiments is essentially free.
+
         Args:
             root_dir: Root directory containing task folders (default: "results")
             task_names: List of task names to index (e.g., ["latent", "linear"]).
                        If None, scans all subdirectories.
         """
         if task_names is None:
-            # Scan for task directories
-            task_names = [d for d in os.listdir(root_dir) 
-                         if os.path.isdir(os.path.join(root_dir, d))]
-        
+            task_names = [
+                d for d in os.listdir(root_dir)
+                if os.path.isdir(os.path.join(root_dir, d))
+                and any(
+                    e.startswith("train_")
+                    for e in os.listdir(os.path.join(root_dir, d))
+                    if os.path.isdir(os.path.join(root_dir, d, e))
+                )
+            ]
+
+        # ── Open ONE connection for the entire run ───────────────────────────
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA journal_mode = WAL")   # concurrent reads during write
+        cursor = conn.cursor()
+
+        # Load all existing experiments into memory (one query)
+        cursor.execute("SELECT id, exp_name, exp_path, size_bytes, folder_mtime FROM experiments")
+        db_cache = {row[1]: {"id": row[0], "path": row[2], "size": row[3], "mtime": row[4]}
+                    for row in cursor.fetchall()}
+
         total = 0
         success = 0
-        
+        skipped = 0   # fast-path hits
+        slow = 0      # experiments that needed file I/O
+
         for task_name in task_names:
             task_dir = os.path.join(root_dir, task_name)
             if not os.path.isdir(task_dir):
                 continue
-            
+
             print(f"Indexing experiments in {task_dir}...")
-            
+
             for exp_name in os.listdir(task_dir):
-                exp_path = os.path.join(task_dir, exp_name)
-                if os.path.isdir(exp_path) and exp_name.startswith("train_"):
-                    total += 1
-                    if self.index_experiment(exp_path, task_name):
-                        success += 1
-            
+                exp_path_rel = os.path.join(task_dir, exp_name)
+                if not (os.path.isdir(exp_path_rel) and exp_name.startswith("train_")):
+                    continue
+                total += 1
+                exp_path = os.path.abspath(exp_path_rel)
+                config_path = os.path.join(exp_path, "config.json")
+                if not os.path.exists(config_path):
+                    continue
+
+                current_mtime = self._folder_mtime(exp_path)
+                cached = db_cache.get(exp_name)
+
+                # ── Fast path: nothing changed ────────────────────────────────
+                if (cached
+                        and cached["size"] is not None
+                        and cached["mtime"] is not None
+                        and abs(cached["mtime"] - current_mtime) < 1.0):
+                    cursor.execute(
+                        "UPDATE experiments SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (cached["id"],)
+                    )
+                    success += 1
+                    skipped += 1
+                    continue
+
+                # ── Slow path: new or changed experiment ─────────────────────
+                slow += 1
+                try:
+                    with open(config_path, "r") as f:
+                        config = ConfigDict(json.load(f))
+
+                    config_hash = _get_config_hash(config)
+                    size_bytes = self._folder_size(exp_path)
+                    key_params = self._extract_key_params(config)
+
+                    if cached:
+                        exp_id = cached["id"]
+                        cursor.execute("""
+                            UPDATE experiments
+                            SET exp_path=?, task_name=?, config_hash=?, size_bytes=?,
+                                folder_mtime=?, updated_at=CURRENT_TIMESTAMP
+                            WHERE id=?
+                        """, (exp_path, task_name, config_hash, size_bytes, current_mtime, exp_id))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO experiments
+                                (exp_name, exp_path, task_name, config_hash, size_bytes, folder_mtime)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (exp_name, exp_path, task_name, config_hash, size_bytes, current_mtime))
+                        exp_id = cursor.lastrowid
+
+                    cursor.execute("DELETE FROM config_params WHERE exp_id = ?", (exp_id,))
+                    param_rows = []
+                    for category, params in key_params.items():
+                        for pname, pval in params.items():
+                            vstr = json.dumps(pval) if isinstance(pval, (dict, list)) else str(pval)
+                            param_rows.append((exp_id, category, pname, vstr))
+                    cursor.executemany("""
+                        INSERT INTO config_params (exp_id, category, param_name, param_value)
+                        VALUES (?, ?, ?, ?)
+                    """, param_rows)
+
+                    success += 1
+                except Exception as e:
+                    print(f"  Error indexing {exp_name}: {e}")
+
+        # ── Remove stale entries (experiments deleted from disk) ─────────────
+        cursor.execute("SELECT id, exp_name, exp_path FROM experiments")
+        stale = [(row[0], row[1]) for row in cursor.fetchall()
+                 if not os.path.isdir(row[2])]
+        if stale:
+            ids = [r[0] for r in stale]
+            cursor.executemany("DELETE FROM config_params WHERE exp_id = ?", [(i,) for i in ids])
+            cursor.executemany("DELETE FROM experiments WHERE id = ?", [(i,) for i in ids])
+            print(f"Removed {len(stale)} stale entries: {[r[1] for r in stale]}")
+
+        # ── Orphan sweep (belt-and-suspenders) ───────────────────────────────
+        cursor.execute("""
+            DELETE FROM config_params
+            WHERE exp_id NOT IN (SELECT id FROM experiments)
+        """)
+        if cursor.rowcount:
+            print(f"Purged {cursor.rowcount} orphaned config_params rows")
+
+        conn.commit()
+        conn.close()
+
+        if skipped:
+            print(f"  ({skipped} unchanged, {slow} updated/new)")
         print(f"\nIndexed {success}/{total} experiments successfully.")
     
     def search_experiments(
@@ -327,6 +526,7 @@ class ExperimentIndex:
                 'task_name': row['task_name'],
                 'config_hash': row['config_hash'],
                 'indexed_at': row['indexed_at'],
+                'size_bytes': row['size_bytes'],
                 'params': {}
             }
             

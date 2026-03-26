@@ -241,9 +241,11 @@ def intervene_remove_gaussian_direction(
             positions=fit_positions,
             sample_mode="major",
             step=step,
-            n_minor=-1,
+            n_minor=None,
             print_summary=False,
             skip_baselines=True,
+            include_position_bias=False,
+            include_logit=False,
         )
         W_task = fit_res["model_weight"].float()  # (K, D)
         task_vecs = W_task - W_task.mean(dim=0, keepdim=True)
@@ -562,9 +564,21 @@ def plot_remove_gaussian_direction_across_layers(
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
 
-    # ---- Left panel: % MSE increase ----
-    pct_maj = [all_results[l]["pct_increase_major"] for l in layers]
-    pct_ood = [all_results[l]["pct_increase_ood"] for l in layers]
+    # ---- Left panel: % RMSE increase ----
+    pct_maj = [
+        100.0 * (np.sqrt(all_results[l]["intervened_loss_major"])
+                 - np.sqrt(all_results[l]["baseline_loss_major"]))
+        / np.sqrt(all_results[l]["baseline_loss_major"])
+        if all_results[l]["baseline_loss_major"] > 0 else float("nan")
+        for l in layers
+    ]
+    pct_ood = [
+        100.0 * (np.sqrt(all_results[l]["intervened_loss_ood"])
+                 - np.sqrt(all_results[l]["baseline_loss_ood"]))
+        / np.sqrt(all_results[l]["baseline_loss_ood"])
+        if all_results[l]["baseline_loss_ood"] > 0 else float("nan")
+        for l in layers
+    ]
 
     ax1.bar(x - bar_w / 2, pct_maj, bar_w, label="Major", color="#2196F3", alpha=0.85)
     ax1.bar(x + bar_w / 2, pct_ood, bar_w, label="OOD", color="#FF9800", alpha=0.85)
@@ -575,7 +589,7 @@ def plot_remove_gaussian_direction_across_layers(
 
     ax1.axhline(0, color="gray", linewidth=0.5)
     ax1.set_xlabel("Layer", fontsize=13)
-    ax1.set_ylabel("% MSE Increase", fontsize=13)
+    ax1.set_ylabel("% RMSE Increase", fontsize=13)
     ax1.set_title("", fontsize=18)
     ax1.set_xticks(x)
     ax1.set_xticklabels([str(l) for l in layers])

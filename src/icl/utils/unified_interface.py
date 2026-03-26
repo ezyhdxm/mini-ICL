@@ -12,10 +12,8 @@ from icl.linear.linear_ood_analysis import (
 from icl.latent_markov.task_vecs import compute_hiddens_onepos_all_layers_kvcache_beta
 from icl.linear.linear_path_utils import load_model_task_config
 from icl.linear.task_vecs import extract_hidden_multi
-from icl.linear.legacy.task_vecs_padded import compute_hiddens_multi
 from icl.utils.logger import setup_logger
 from icl.utils.unified_path_finder import unified_get_config, get_exp_name  # noqa: F401
-from icl.latent_markov.legacy.latent_task_vec import compute_hiddens
 from icl.coin.coin_ood_analysis import get_new_sampler
 from icl.dyck.legacy.dyck_task_vec import get_dyck_sampler, compute_hiddens_dyck
 from icl.dyck.dyck_utils import sample_binary_mask
@@ -23,56 +21,91 @@ from icl.dyck.dyck_utils import sample_binary_mask
 logger = setup_logger(__name__)
 
 
+def _make_linear_eval_generator(device: str, train_task, step: int) -> torch.Generator:
+    """Deterministic generator for linear eval-pool construction."""
+    base_seed = int(getattr(train_task, "task_seed", 0))
+    gen = torch.Generator(device=device)
+    gen.manual_seed(base_seed + 1_000_003 + int(step))
+    return gen
+
+
 def _get_hiddens(
-        task_name, 
-        exp_name, 
-        n_minor=64, 
-        n_ood=30, 
+        task_name,
+        exp_name,
+        n_minor=64,
+        n_ood=30,
         B=64,
         step: Optional[int] = None,
         force_recompute=False,
         verbose=False,
+        device: Optional[str] = None,
         **kwargs,
-        ):
+):
 
     if task_name == "latent":
-        _, sampler, config = nu.load_everything("latent", exp_name)
+        # Load config + sampler without wasting GPU on the final-checkpoint model
+        sampler, config = nu.load_config_and_sampler("latent", exp_name)
         k_minor = min(n_minor, sampler.n_minor_tasks)
         if step is None:
             step = config.training.num_epochs
 
         model, _ = nu.load_checkpoint(config, step=step, exp_name=exp_name, return_actual_step=True)
+        if device is not None:
+            config.device = device
+            model.to(device)
         if verbose:
             logger.info("Getting samples...")
-        all_samples, k_minor = get_all_samples(exp_name, n_minor=n_minor, n_ood=n_ood, B=B)
+        # Pass the already-loaded sampler to avoid a second load_everything call
+        all_samples, k_minor = get_all_samples(exp_name, n_minor=n_minor, n_ood=n_ood, B=B, sampler=sampler)
         if verbose:
             logger.info("Computing hiddens...")
         hiddens = compute_hiddens_onepos_all_layers_kvcache_beta(
-                config, 
-                model, 
-                all_samples, 
-                k_step = 32,
-                b_step = 32,
-                t_step = 4
-            ).permute(0, 1, 3, 2, 4, 5) # (n_layers, n_tasks, num_states, T, B, D)
-    
+                config,
+                model,
+                all_samples,
+                k_step=32,
+                b_step=32,
+                t_step=4,
+            ).permute(0, 1, 3, 2, 4, 5)  # (n_layers, n_tasks, num_states, T, B, D) — already on CPU
+
+        # Free the model from GPU now that hiddens are on CPU
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     elif task_name == "coin":
-        _, sampler, config = nu.load_everything("coin", exp_name)
+        # Load config + sampler without wasting GPU on the final-checkpoint model
+        sampler, config = nu.load_config_and_sampler("coin", exp_name)
         k_minor = min(n_minor, sampler.n_minor_tasks)
         if step is None:
             step = config.training.num_epochs
 
         model, _ = nu.load_checkpoint(config, step=step, exp_name=exp_name, return_actual_step=True)
+        if device is not None:
+            config.device = device
+            model.to(device)
         if verbose:
             logger.info("Getting samples...")
-        sampler_clone, k_minor = get_new_sampler(exp_name, n_minor, n_ood)
+        # Pass the already-loaded sampler to avoid a second load_everything call
+        sampler_clone, k_minor = get_new_sampler(exp_name, n_minor, n_ood, sampler=sampler)
+        if device is not None:
+            sampler_clone.to(device)
         if kwargs.get("return_data", False):
-            hiddens, demo_data = compute_hiddens(config, model, sampler_clone, B, return_data=True)
+            hiddens, demo_data = _compute_hiddens_at_real_tokens(
+                config, model, sampler_clone, B, return_data=True
+            )
+            demo_data = demo_data.cpu()
         else:
-            hiddens = compute_hiddens(config, model, sampler_clone, B)
-        
+            hiddens = _compute_hiddens_at_real_tokens(config, model, sampler_clone, B)
+
+        # Move hiddens to CPU and free the model from GPU
+        hiddens = hiddens.cpu()
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         if kwargs.get("return_p", False):
-            return hiddens, k_minor, torch.concat([sampler_clone.major_p, sampler_clone.minor_p])
+            return hiddens, k_minor, torch.concat([sampler_clone.major_p.cpu(), sampler_clone.minor_p.cpu()])
         if kwargs.get("return_data", False):
             return hiddens, k_minor, demo_data, sampler_clone
 
@@ -82,8 +115,11 @@ def _get_hiddens(
         k_minor = min(n_minor, sampler.n_minor_tasks)
         if step is None:
             step = config.training.num_epochs
-        
+
         model, _ = nu.load_checkpoint(config, step=step, exp_name=exp_name, return_actual_step=True)
+        if device is not None:
+            config.device = device
+            model.to(device)
         if verbose:
             logger.info("Getting samples...")
         sampler_clone, k_minor = get_dyck_sampler(exp_name, n_minor, n_ood)
@@ -101,30 +137,68 @@ def _get_hiddens(
         k_minor = min(n_minor, train_task.n_minor_tasks)
         if step is None:
             step = config.training.total_steps
+
+        # Determine target device BEFORE loading the checkpoint so the model
+        # is mapped directly onto it.  Also move train_task tensors so that
+        # _create_eval_task_pool doesn't mix devices (e.g. task_scale).
+        dev = device if device is not None else setup_device(None)
+        config.device = dev
+        if hasattr(train_task, "to"):
+            train_task.to(dev)
+        else:
+            for attr in ("task_pool", "minor_pool", "task_scale"):
+                val = getattr(train_task, attr, None)
+                if isinstance(val, torch.Tensor):
+                    setattr(train_task, attr, val.to(dev))
+
         model, _ = nu.load_checkpoint(config, step=step, exp_name=exp_name, return_actual_step=True)
-        
-        device = setup_device(None)
+        model.to(dev)
+        # TransformerLin stores self.device as a plain string set at construction
+        # time; model.to() moves weights but does NOT update it, causing the forward
+        # pass to send inputs to the wrong device.  Patch it explicitly here.
+        if hasattr(model, "device"):
+            model.device = dev
         if verbose:
             logger.info("Creating eval task pool...")
-        
+
+        eval_gen = _make_linear_eval_generator(dev, train_task, step)
         eval_task_pool, k_minor = _create_eval_task_pool(
-            train_task, 
-            K=n_ood, 
-            include_minor=True, 
-             
-            device=device,
+            train_task,
+            K=n_ood,
+            include_minor=True,
+            device=dev,
             n_minor=n_minor,
+            generator=eval_gen,
         )
-        eval_task = _setup_eval_task(config, eval_task_pool, B, device)
+        eval_task = _setup_eval_task(config, eval_task_pool, B, dev)
         if verbose:
             logger.info("Computing hiddens...")
-        
-        # Use smaller chunk_size for compute_hiddens_multi to reduce memory usage
-        # Calculate chunk_size based on number of tasks and batch size to avoid OOM
-        # For linear tasks, eval_task_pool is a tensor with shape (n_tasks, n_dims)
-        n_tasks_estimate = eval_task_pool.shape[0] if isinstance(eval_task_pool, torch.Tensor) else (train_task.n_tasks + min(n_minor, train_task.n_minor_tasks) + n_ood)
-        # Use smaller chunks for large numbers of tasks or large batch sizes
-        # For B=96 and many tasks, use very small chunks
+
+        # Determine real-token positions based on pad mode (no legacy padded logic)
+        n_points = config.task.n_points
+        n_tasks = eval_task.task_pool.shape[0]
+        batch_size = eval_task.batch_size
+        n_embd = config.model.n_embd
+        layers = list(range(config.model.n_layer))
+        L = len(layers)
+
+        _ep = kwargs.get("extraction_point", "post_attn")
+
+        pad_mode = getattr(model, "pad", "mapsto")
+        if pad_mode == "mapsto":
+            # [data, PAD, tgt, ...] — extract at data positions (real input tokens)
+            task_pos = 3 * torch.arange(n_points, device=dev)
+        elif pad_mode == "none":
+            # [data, tgt, data, tgt, ...] — extract at data positions
+            task_pos = 2 * torch.arange(n_points, device=dev)
+        elif pad_mode == "bos":
+            # [BOS, data, tgt, ...] — extract at data positions (after BOS)
+            task_pos = 2 * torch.arange(n_points, device=dev) + 1
+        else:
+            raise ValueError(f"Unknown pad mode for linear model: {pad_mode!r}")
+
+        # Chunk size heuristic (same as before, avoids OOM)
+        n_tasks_estimate = n_tasks
         if B >= 64 and n_tasks_estimate >= 64:
             chunk_size_hiddens = max(2, min(8, 32 // max(1, B // 32)))
         elif n_tasks_estimate >= 256:
@@ -132,16 +206,52 @@ def _get_hiddens(
         else:
             chunk_size_hiddens = min(16, max(4, 64 // max(1, n_tasks_estimate // 64)))
         if verbose:
-            logger.info(f"Using chunk_size={chunk_size_hiddens} for compute_hiddens_multi (n_tasks={n_tasks_estimate}, B={B})")
-        
-        hiddens, _ = compute_hiddens_multi(
-            config, model, eval_task, 
-            chunk_size=chunk_size_hiddens
-        ) # (n_layers, n_tasks, T, B, D)
-        
-        # hiddens is already on CPU from compute_hiddens_multi
-        
-        # Clean up model and other GPU objects
+            logger.info(
+                f"Linear hidden extraction: pad_mode={pad_mode!r}, "
+                f"task_pos={task_pos.tolist()[:4]}..., chunk_size={chunk_size_hiddens}"
+            )
+
+        output_shape = (L, n_tasks, n_points, batch_size, n_embd)
+        all_hiddens = torch.empty(output_shape, dtype=torch.float32, device="cpu")
+        demo_data = eval_task.sample_data(step=step)
+
+        for i in range(0, n_tasks, chunk_size_hiddens):
+            chunk_end = min(i + chunk_size_hiddens, n_tasks)
+            chunk_size_actual = chunk_end - i
+
+            demo_data_repeated = (
+                demo_data.unsqueeze(0)
+                .expand(chunk_size_actual, batch_size, n_points, -1)
+                .reshape(-1, n_points, demo_data.size(-1))
+            )
+            demo_target = eval_task.evaluate(
+                demo_data,
+                eval_task.task_pool[i:chunk_end].squeeze(-1).T,
+                step=step,
+            )
+            if demo_target.ndim == 3:
+                demo_target = demo_target.permute(2, 0, 1).reshape(-1, n_points)
+
+            chunk_hiddens = extract_hidden_multi(
+                model=model,
+                demo_data=demo_data_repeated,
+                demo_target=demo_target,
+                layers=layers,
+                task_pos=task_pos,
+                extraction_point=_ep,
+            )  # (L, chunk*B, n_points, D)
+            chunk_hiddens = chunk_hiddens.reshape(
+                L, chunk_size_actual, batch_size, n_points, n_embd
+            ).permute(0, 1, 3, 2, 4)  # (L, chunk, n_points, B, D)
+            all_hiddens[:, i:chunk_end] = chunk_hiddens.cpu()
+
+            del chunk_hiddens
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        hiddens = all_hiddens.detach()
+
+        # Clean up GPU objects
         del model, eval_task, eval_task_pool, train_task, config
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -150,6 +260,45 @@ def _get_hiddens(
 
 
 @torch.no_grad()
+def pregenerate_task_sequences(
+    sampler,
+    B: int,
+    n_tasks: Optional[int] = None,
+    dyck_mask=None,
+) -> torch.Tensor:
+    """Pre-generate all task sequences once on CPU for reuse across checkpoints.
+
+    Parameters
+    ----------
+    sampler : object
+        Must support ``.generate(mode, task, num_samples)`` and ``.seq_len``.
+    B : int
+        Number of sequences per task.
+    n_tasks : int, optional
+        Total number of tasks. Defaults to
+        ``sampler.n_major_tasks + sampler.n_minor_tasks``.
+    dyck_mask : torch.Tensor, optional
+        Binary mask for dyck tasks.
+
+    Returns
+    -------
+    precomputed_data : torch.Tensor, shape ``(n_tasks, B, seq_len)`` on CPU.
+        Memory footprint: n_tasks × B × seq_len × 8 bytes (int64).
+        For typical settings (97 tasks, B=64, seq_len=128) ≈ 6 MB.
+    """
+    if n_tasks is None:
+        n_tasks = sampler.n_major_tasks + sampler.n_minor_tasks
+    seq_len = sampler.seq_len
+    precomputed = torch.empty((n_tasks, B, seq_len), dtype=torch.long)
+    for i in range(n_tasks):
+        gen_kwargs = dict(mode="testing", task=i, num_samples=B)
+        if dyck_mask is not None:
+            gen_kwargs["dyck_mask"] = dyck_mask.clone()
+        demo_data, _ = sampler.generate(**gen_kwargs)
+        precomputed[i] = demo_data.cpu()
+    return precomputed
+
+
 def _compute_hiddens_at_real_tokens(
     config,
     model,
@@ -159,7 +308,11 @@ def _compute_hiddens_at_real_tokens(
     n_tasks=None,
     dyck_mask=None,
     return_data=False,
+    post_layernorm=False,
+    extraction_point: str = "post_attn",
     verbose=False,
+    task_batch_size=None,
+    precomputed_data: Optional[torch.Tensor] = None,
 ):
     """
     Extract hidden representations at real-token positions from non-padded sequences.
@@ -189,6 +342,15 @@ def _compute_hiddens_at_real_tokens(
     return_data : bool
         If True, also return the raw (non-padded) sequences.
     verbose : bool
+    task_batch_size : int or None
+        Number of tasks to batch together per forward pass for better GPU
+        utilization.  ``None`` (default) batches all tasks at once.  Use 1
+        for the legacy one-task-per-forward-pass behaviour.
+    precomputed_data : torch.Tensor, optional
+        Pre-generated sequences of shape ``(n_tasks, B, seq_len)`` on CPU,
+        produced by :func:`pregenerate_task_sequences`.  When provided,
+        ``sampler.generate`` is skipped entirely, hiding its CPU overhead
+        from the GPU forward pass.  ``dyck_mask`` is ignored when this is set.
 
     Returns
     -------
@@ -204,9 +366,6 @@ def _compute_hiddens_at_real_tokens(
     n_embd = config.model.emb_dim
     n_layers = len(model.layers)
 
-    # Key difference from padded version:
-    #   padded   task_pos = 2 * arange(seq_len - 1) + 1   →  [1, 3, 5, ...]
-    #   nonpadded task_pos = arange(seq_len - 1)           →  [0, 1, 2, ...]
     task_pos = torch.arange(seq_len - 1, device=device)
 
     all_hiddens = torch.empty(
@@ -214,49 +373,92 @@ def _compute_hiddens_at_real_tokens(
         device=device,
     )
 
-    # ---- hook-based extraction (same pattern as compute_hiddens) ----
+    _ep = extraction_point
+
+    def _apply_next_ln(h, l):
+        if _ep == "post_attn":
+            mlp_block = model.layers[l].mlp
+            if hasattr(mlp_block, "ln2"):
+                return mlp_block.ln2(h)
+        elif _ep == "post_mlp":
+            if l + 1 < n_layers:
+                next_blk = model.layers[l + 1]
+                if hasattr(next_blk, "attn_block") and hasattr(next_blk.attn_block, "ln1"):
+                    return next_blk.attn_block.ln1(h)
+        return h
+
     def run_and_extract(batch_data):
         cache = {}
         handles = []
         for l in range(n_layers):
             def make_hook(layer_idx):
                 def hook_fn(module, inp, out):
-                    # out: (B, L, d)
-                    cache[layer_idx] = out.index_select(1, task_pos).detach()
+                    h = out.index_select(1, task_pos).detach()
+                    if post_layernorm:
+                        h = _apply_next_ln(h, layer_idx)
+                    cache[layer_idx] = h
                 return hook_fn
-            h = model.layers[l].attn_block.register_forward_hook(make_hook(l))
+
+            if _ep == "post_mlp":
+                h = model.layers[l].register_forward_hook(make_hook(l))
+            else:
+                h = model.layers[l].attn_block.register_forward_hook(make_hook(l))
             handles.append(h)
 
-        _ = model(batch_data)
+        with torch.no_grad():
+            _ = model(batch_data)
 
         for h in handles:
             h.remove()
-        return cache  # layer_idx -> (B, P, d)
+        return cache
 
     if return_data:
         data_collector = torch.empty((n_tasks, B, seq_len), device=device)
 
-    for i in range(n_tasks):
-        gen_kwargs = dict(mode="testing", task=i, num_samples=B)
-        if dyck_mask is not None:
-            gen_kwargs["dyck_mask"] = dyck_mask.clone()
+    if task_batch_size is None:
+        task_batch_size = n_tasks
+    task_batch_size = max(1, task_batch_size)
 
-        demo_data, _ = sampler.generate(**gen_kwargs)
+    for chunk_start in range(0, n_tasks, task_batch_size):
+        chunk_end = min(chunk_start + task_batch_size, n_tasks)
+        chunk_size = chunk_end - chunk_start
 
-        if demo_data.device != device:
-            demo_data = demo_data.to(device, non_blocking=True)
+        chunk_data = []
+        for i in range(chunk_start, chunk_end):
+            if precomputed_data is not None:
+                demo_data = precomputed_data[i].to(device, non_blocking=True)
+            else:
+                gen_kwargs = dict(mode="testing", task=i, num_samples=B)
+                if dyck_mask is not None:
+                    gen_kwargs["dyck_mask"] = dyck_mask.clone()
+                demo_data, _ = sampler.generate(**gen_kwargs)
+                if demo_data.device != device:
+                    demo_data = demo_data.to(device, non_blocking=True)
+            chunk_data.append(demo_data)
 
-        cache = run_and_extract(demo_data)
+            if return_data:
+                data_collector[i] = demo_data
 
-        for l in range(n_layers):
-            # (B, P, d) -> (P, B, d)
-            all_hiddens[l, i] = cache[l].permute(1, 0, 2)
+        if chunk_size == 1:
+            cache = run_and_extract(chunk_data[0])
+            for l in range(n_layers):
+                all_hiddens[l, chunk_start] = cache[l].permute(1, 0, 2)
+        else:
+            big_batch = torch.cat(chunk_data, dim=0)
+            cache = run_and_extract(big_batch)
+            for l in range(n_layers):
+                # (chunk_size*B, P, d) → (chunk_size, B, P, d) → (chunk_size, P, B, d)
+                reshaped = cache[l].view(chunk_size, B, seq_len - 1, n_embd)
+                all_hiddens[l, chunk_start:chunk_end] = reshaped.permute(0, 2, 1, 3)
+            del big_batch
+        del chunk_data, cache
 
-        if return_data:
-            data_collector[i] = demo_data
-
-        if verbose and (i == 0 or (i + 1) % 10 == 0 or i == n_tasks - 1):
-            logger.info(f"[_compute_hiddens_at_real_tokens] task {i+1}/{n_tasks} done")
+        if verbose and (chunk_end == n_tasks or chunk_start == 0
+                        or chunk_end % (task_batch_size * 5) == 0):
+            logger.info(
+                f"[_compute_hiddens_at_real_tokens] "
+                f"tasks {chunk_start+1}-{chunk_end}/{n_tasks} done"
+            )
 
     if return_data:
         return all_hiddens, data_collector
@@ -312,9 +514,12 @@ def _get_hiddens_at_real_positions(
     """
 
     device_override = kwargs.get("device", None)
+    _post_ln = kwargs.get("post_layernorm", False)
+    _ep = kwargs.get("extraction_point", "post_attn")
 
     if task_name == "latent":
-        _, sampler, config = nu.load_everything("latent", exp_name)
+        # Load config + sampler without wasting GPU on the final-checkpoint model
+        sampler, config = nu.load_config_and_sampler("latent", exp_name)
         if device_override is not None:
             config.device = device_override
         k_minor = min(n_minor, sampler.n_minor_tasks)
@@ -325,23 +530,37 @@ def _get_hiddens_at_real_positions(
 
         if verbose:
             logger.info("Getting latent sampler...")
-        sampler_clone, k_minor, _ = get_latent_sampler(exp_name, n_minor, n_ood)
+        # Pass the already-loaded sampler to avoid a second load_everything call
+        sampler_clone, k_minor, _ = get_latent_sampler(exp_name, n_minor, n_ood, sampler=sampler)
 
         if verbose:
             logger.info("Computing non-padded hiddens for latent task...")
         if kwargs.get("return_data", False):
             hiddens, demo_data = _compute_hiddens_at_real_tokens(
                 config, model, sampler_clone, B,
-                return_data=True, verbose=verbose,
+                return_data=True, post_layernorm=_post_ln,
+                extraction_point=_ep, verbose=verbose,
             )
+            hiddens = hiddens.cpu()
+            demo_data = demo_data.cpu()
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return hiddens, k_minor, demo_data, sampler_clone
         else:
             hiddens = _compute_hiddens_at_real_tokens(
-                config, model, sampler_clone, B, verbose=verbose,
+                config, model, sampler_clone, B,
+                post_layernorm=_post_ln, extraction_point=_ep,
+                verbose=verbose,
             )
+            hiddens = hiddens.cpu()
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     elif task_name == "coin":
-        _, sampler, config = nu.load_everything("coin", exp_name)
+        # Load config + sampler without wasting GPU on the final-checkpoint model
+        sampler, config = nu.load_config_and_sampler("coin", exp_name)
         if device_override is not None:
             config.device = device_override
         k_minor = min(n_minor, sampler.n_minor_tasks)
@@ -352,22 +571,33 @@ def _get_hiddens_at_real_positions(
 
         if verbose:
             logger.info("Getting coin sampler...")
-        sampler_clone, k_minor = get_new_sampler(exp_name, n_minor, n_ood)
+        # Pass the already-loaded sampler to avoid a second load_everything call
+        sampler_clone, k_minor = get_new_sampler(exp_name, n_minor, n_ood, sampler=sampler)
 
         if verbose:
             logger.info("Computing non-padded hiddens for coin task...")
         if kwargs.get("return_data", False):
             hiddens, demo_data = _compute_hiddens_at_real_tokens(
                 config, model, sampler_clone, B,
-                return_data=True, verbose=verbose,
+                return_data=True, post_layernorm=_post_ln,
+                extraction_point=_ep, verbose=verbose,
             )
+            hiddens = hiddens.cpu()
+            demo_data = demo_data.cpu()
         else:
             hiddens = _compute_hiddens_at_real_tokens(
-                config, model, sampler_clone, B, verbose=verbose,
+                config, model, sampler_clone, B,
+                post_layernorm=_post_ln, extraction_point=_ep,
+                verbose=verbose,
             )
+            hiddens = hiddens.cpu()
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if kwargs.get("return_p", False):
-            return hiddens, k_minor, torch.concat([sampler_clone.major_p, sampler_clone.minor_p])
+            return hiddens, k_minor, torch.concat([sampler_clone.major_p.cpu(), sampler_clone.minor_p.cpu()])
         if kwargs.get("return_data", False):
             return hiddens, k_minor, demo_data, sampler_clone
 
@@ -390,7 +620,8 @@ def _get_hiddens_at_real_positions(
             logger.info("Computing non-padded hiddens for dyck task...")
         hiddens = _compute_hiddens_at_real_tokens(
             config, model, sampler_clone, B,
-            dyck_mask=mask, verbose=verbose,
+            dyck_mask=mask, post_layernorm=_post_ln,
+            extraction_point=_ep, verbose=verbose,
         )
         return hiddens, k_minor, mask
 
@@ -407,6 +638,7 @@ def _get_hiddens_at_real_positions(
         if verbose:
             logger.info("Creating eval task pool...")
 
+        eval_gen = _make_linear_eval_generator(device, train_task, step)
         eval_task_pool, k_minor = _create_eval_task_pool(
             train_task,
             K=n_ood,
@@ -414,6 +646,7 @@ def _get_hiddens_at_real_positions(
             
             device=device,
             n_minor=n_minor,
+            generator=eval_gen,
         )
         eval_task = _setup_eval_task(config, eval_task_pool, B, device)
 
@@ -493,6 +726,8 @@ def _get_hiddens_at_real_positions(
                 demo_target=demo_target,
                 layers=layers,
                 task_pos=task_pos,
+                post_layernorm=_post_ln,
+                extraction_point=_ep,
             )
             # (L, chunk*B, n_points, D) -> (L, chunk, B, n_points, D)
             #                           -> (L, chunk, n_points, B, D)
@@ -582,7 +817,23 @@ def unified_train(
     pad = None,
     major_pool_type: str = None,
     major_means = None,
+    total_steps: int = None,
+    warmup_steps: int = None,
+    lr: float = None,
+    schedule: str = None,
+    max_grad_norm: float = None,
+    batch_size: int = None,
+    noise_scale: float = None,
+    p_minor: float = None,
+    n_layer: int = None,
+    n_points: int = None,
+    min_lr: float = None,
+    decay_power: float = None,
+    batch_size_schedule: list = None,
+    p_minor_schedule: list = None,
+    final_layernorm: bool = None,
     quiet: bool = True,
+    device: Optional[str] = None,
 ):
     import os
     _prev_wandb_silent = os.environ.get("WANDB_SILENT")
@@ -591,6 +842,8 @@ def unified_train(
 
     try:
         config = unified_get_config(task_name)
+        if device is not None:
+            config.device = device
         if k >= 0:
             if log2:
                 config.task.n_minor_tasks = 2 ** k
@@ -606,6 +859,42 @@ def unified_train(
             config.task.major_pool_type = major_pool_type
         if major_means is not None:
             config.task.major_means = list(major_means)
+        if total_steps is not None:
+            if task_name == "linear":
+                config.training.total_steps = total_steps
+            else:
+                config.training.num_epochs = total_steps
+        if warmup_steps is not None:
+            config.training.warmup_steps = warmup_steps
+        if lr is not None:
+            config.training.lr = lr
+        if schedule is not None:
+            config.training.schedule = schedule
+        if max_grad_norm is not None:
+            config.training.max_grad_norm = max_grad_norm
+        if batch_size is not None:
+            config.task.batch_size = batch_size
+        if noise_scale is not None:
+            config.task.noise_scale = noise_scale
+        if p_minor is not None:
+            config.task.p_minor = p_minor
+        if n_layer is not None:
+            config.model.n_layer = n_layer
+        if n_points is not None:
+            if task_name == "linear":
+                config.task.n_points = n_points
+                config.model.n_points = n_points
+        if min_lr is not None:
+            config.training.min_lr = min_lr
+        if decay_power is not None:
+            config.training.decay_power = decay_power
+        if batch_size_schedule is not None:
+            config.training.batch_size_schedule = list(batch_size_schedule)
+        if p_minor_schedule is not None:
+            config.training.p_minor_schedule = list(p_minor_schedule)
+        if final_layernorm is not None:
+            if task_name == "linear":
+                config.model.final_layernorm = final_layernorm
         if task_name == "linear":
             return train(config)
         else:
@@ -618,3 +907,99 @@ def unified_train(
             os.environ.pop("WANDB_SILENT", None)
         else:
             os.environ["WANDB_SILENT"] = _prev_wandb_silent
+
+
+def _unified_train_worker(args):
+    """Picklable worker for ProcessPoolExecutor: run one unified_train on a given device."""
+    task_name, k, device, kwargs = args
+    verbose = kwargs.pop("_parallel_verbose", False)
+    if verbose:
+        import sys
+        print(f"[unified_train_parallel] Training k={k} ({task_name}) on {device} ...", flush=True)
+        sys.stdout.flush()
+    return unified_train(task_name, k, device=device, **kwargs)
+
+
+def unified_train_parallel(
+    task_name: str,
+    k_list: list,
+    n_gpus: Optional[int] = None,
+    verbose: bool = False,
+    **kwargs,
+) -> list:
+    """Run multiple k experiments in parallel across GPUs.
+
+    Each k is run in a separate process with config.device = f"cuda:{i % n_gpus}".
+    With 2 GPUs and k_list=[0, 1, 2, 3], k=0 and k=2 use cuda:0, k=1 and k=3 use cuda:1.
+
+    Parameters
+    ----------
+    task_name : str
+        Same as unified_train (e.g. "linear", "coin", "latent", "dyck").
+    k_list : list of int
+        List of k values to train (e.g. [0, 1, 2, 3]).
+    n_gpus : int, optional
+        Number of GPUs to use. Default: min(2, torch.cuda.device_count()) or 1.
+    verbose : bool, default False
+        If True, log which k is being trained and when each run completes.
+    **kwargs
+        Passed through to unified_train for each run (e.g. total_steps, quiet, pad).
+
+    Returns
+    -------
+    list
+        Results from unified_train for each k, in the same order as k_list.
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    n_available = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    n_workers = n_gpus if n_gpus is not None else min(2, n_available or 1)
+    n_workers = min(n_workers, len(k_list))
+    if n_workers <= 0:
+        n_workers = 1
+    use_gpu = n_available > 0
+
+    # Drop device if caller passed it; we set it per worker
+    kwargs = {k: v for k, v in kwargs.items() if k != "device"}
+    # Pass verbose to worker only (worker pops it; unified_train does not accept it)
+    worker_kwargs = {**kwargs, "_parallel_verbose": verbose}
+
+    def _device(i: int) -> str:
+        return f"cuda:{i % n_available}" if use_gpu else "cpu"
+
+    args_list = [
+        (task_name, k, _device(i), worker_kwargs)
+        for i, k in enumerate(k_list)
+    ]
+
+    if n_workers == 1:
+        # Avoid process spawn overhead when only one worker
+        out = []
+        for k in k_list:
+            if verbose:
+                print(f"[unified_train_parallel] Training k={k} ({task_name}) on {_device(0)} ...", flush=True)
+            out.append(unified_train(task_name, k, device=_device(0), **kwargs))
+        return out
+
+    if verbose:
+        print(
+            f"[unified_train_parallel] Starting parallel training for {task_name} k_list={k_list} (n_workers={n_workers})",
+            flush=True,
+        )
+        for i, (_, k, dev, _) in enumerate(args_list):
+            print(f"[unified_train_parallel] Submitted k={k} on {dev}", flush=True)
+
+    results = [None] * len(k_list)
+    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+        future_to_idx = {ex.submit(_unified_train_worker, args): i for i, args in enumerate(args_list)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            k = k_list[idx]
+            try:
+                results[idx] = future.result()
+                if verbose:
+                    print(f"[unified_train_parallel] Completed k={k}", flush=True)
+            except Exception as e:
+                logger.exception("unified_train_parallel failed for k=%s: %s", k, e)
+                results[idx] = e  # store exception so order is preserved
+    return results

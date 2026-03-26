@@ -11,6 +11,7 @@ from icl.linear.analysis.interventions._helpers import (
     _cleanup_model,
     _create_ood_task,
     _joint_fit_task_token,
+    _averaging_fit_task_token,
     _build_protected_subspace,
 )
 
@@ -110,6 +111,7 @@ def _optimize_v_directions(
     scale,
     opt_source,
     max_mse_oracle, min_opt_steps,
+    extraction_point: str = "post_attn",
     verbose,
 ):
     """Gradient ascent in the orthogonal complement to maximise intervened MSE.
@@ -171,7 +173,11 @@ def _optimize_v_directions(
             h_mod = h - scale * (h @ V_q @ V_q.T)
             return h_mod if torch.is_tensor(out) else (h_mod,) + out[1:]
 
-        handle = model.transformer.blocks[layer].attn_block.register_forward_hook(_hook)
+        _opt_lin_tgt = (
+            model.transformer.blocks[layer] if extraction_point == "post_mlp"
+            else model.transformer.blocks[layer].attn_block
+        )
+        handle = _opt_lin_tgt.register_forward_hook(_hook)
         try:
             preds = model(demo_data, demo_target)
         finally:
@@ -215,7 +221,11 @@ def _optimize_v_directions(
                     h_mod = h - scale * (h @ _Vq @ _Vq.T)
                     return h_mod if torch.is_tensor(out) else (h_mod,) + out[1:]
 
-                handle_val = model.transformer.blocks[layer].attn_block.register_forward_hook(_val_hook)
+                _val_lin_tgt = (
+                    model.transformer.blocks[layer] if extraction_point == "post_mlp"
+                    else model.transformer.blocks[layer].attn_block
+                )
+                handle_val = _val_lin_tgt.register_forward_hook(_val_hook)
                 try:
                     val_preds = model(val_data, val_target)
                 finally:
@@ -295,12 +305,14 @@ def _optimize_v_directions(
 def _collect_features(
     model, layer, task_obj, train_task,
     *, device, B, eval_positions, n_dims, n_samples,
+    extraction_point: str = "post_attn",
 ):
     """Collect hidden states and diagnostic feature vectors at *eval_positions*.
 
     For each sequence position t in eval_positions, we extract:
 
-    - h      : hidden state h_l(xₜ) at layer l after the attention block
+    - h      : hidden state at layer l (post_attn or post_mlp depending on
+               *extraction_point*)
     - beta   : running ridge estimate  ŵₜ = (XᵀX + λI)⁻¹ XᵀY
     - xty    : running average  XᵀY / t
     - xt     : current input xₜ
@@ -320,10 +332,11 @@ def _collect_features(
     point_pos = torch.tensor(eval_positions, device=device, dtype=torch.long)
     P_ev = len(eval_positions)
 
-    lists = {k: [] for k in ("h", "beta", "xty", "xt", "pgauss")}
+    lists = {k: [] for k in ("h", "beta", "xty", "xt", "pgauss", "post")}
     n_batches = (n_samples + B - 1) // B
     orig_bs = int(task_obj.batch_size)
     task_obj.batch_size = B
+    _post_dim = None
 
     for bi in range(n_batches):
         data, _, target = task_obj.sample_batch(
@@ -336,7 +349,11 @@ def _collect_features(
             h = out if torch.is_tensor(out) else out[0]
             _c["h"] = h.index_select(1, eval_seq_pos).detach()
 
-        handle = model.transformer.blocks[layer].attn_block.register_forward_hook(_hook)
+        _cf_tgt = (
+            model.transformer.blocks[layer] if extraction_point == "post_mlp"
+            else model.transformer.blocks[layer].attn_block
+        )
+        handle = _cf_tgt.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 model(data, target)
@@ -351,23 +368,27 @@ def _collect_features(
             post = task_posterior_with_gaussian_linear_regression(
                 train_task, data, target, include_minor=False,
             )
-        pgauss = post[:, -1:].unsqueeze(1).expand(-1, P_ev, -1)
+        _post_dim = post.shape[1]
+        pgauss   = post[:, -1:].unsqueeze(1).expand(-1, P_ev, -1)
+        post_full = post.unsqueeze(1).expand(-1, P_ev, -1)
 
         lists["h"].append(cache["h"].cpu())
         lists["beta"].append(beta.cpu())
         lists["xty"].append(xty.cpu())
         lists["xt"].append(xt.cpu())
         lists["pgauss"].append(pgauss.cpu())
+        lists["post"].append(post_full.cpu())
 
     task_obj.batch_size = orig_bs
 
     D = lists["h"][0].shape[-1]
     return {
-        "h": torch.cat(lists["h"], 0).reshape(-1, D).float(),
-        "beta": torch.cat(lists["beta"], 0).reshape(-1, n_dims).float(),
-        "xty": torch.cat(lists["xty"], 0).reshape(-1, n_dims).float(),
-        "xt": torch.cat(lists["xt"], 0).reshape(-1, n_dims).float(),
+        "h":      torch.cat(lists["h"],      0).reshape(-1, D).float(),
+        "beta":   torch.cat(lists["beta"],   0).reshape(-1, n_dims).float(),
+        "xty":    torch.cat(lists["xty"],    0).reshape(-1, n_dims).float(),
+        "xt":     torch.cat(lists["xt"],     0).reshape(-1, n_dims).float(),
         "pgauss": torch.cat(lists["pgauss"], 0).reshape(-1, 1).float(),
+        "post":   torch.cat(lists["post"],   0).reshape(-1, _post_dim).float(),
     }
 
 
@@ -379,6 +400,8 @@ def _run_intervention_eval(
     model, layer, proj_matrix, task_obj,
     *, device, B, eval_positions, scale, n_samples,
     track_oracle=True,
+    minor_only: bool = False,
+    extraction_point: str = "post_attn",
 ):
     """Remove ``proj_matrix`` component from hidden states and measure MSE.
 
@@ -401,6 +424,9 @@ def _run_intervention_eval(
     track_oracle : bool
         If True, also compute MSE relative to oracle predictions and
         per-position breakdowns.
+    minor_only : bool
+        If True, pass ``minor_only=True`` to ``task_obj.sample_batch()``
+        (requires task_obj to have a populated minor pool).
     """
     bl_by_pos = {p: [] for p in eval_positions}
     it_by_pos = {p: [] for p in eval_positions}
@@ -409,6 +435,7 @@ def _run_intervention_eval(
     bl_pos0 = [] if track_oracle else None
     bl_pos0_oracle = [] if track_oracle else None
     pred_delta_sum, pred_delta_count = 0.0, 0
+    batch_deltas: list = []
 
     n_batches = (n_samples + B - 1) // B
     orig_bs = int(task_obj.batch_size)
@@ -416,7 +443,7 @@ def _run_intervention_eval(
 
     for bi in range(n_batches):
         data, tasks, target = task_obj.sample_batch(
-            step=bi + 55555, is_eval=True,
+            step=bi + 55555, is_eval=True, minor_only=minor_only,
         )
         data, target = data.to(device), target.to(device)
 
@@ -429,7 +456,11 @@ def _run_intervention_eval(
             h_mod = h - scale * (h @ _P)
             return h_mod if torch.is_tensor(out) else (h_mod,) + out[1:]
 
-        handle = model.transformer.blocks[layer].attn_block.register_forward_hook(_hook)
+        _rie_tgt = (
+            model.transformer.blocks[layer] if extraction_point == "post_mlp"
+            else model.transformer.blocks[layer].attn_block
+        )
+        handle = _rie_tgt.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 preds_int = model(data, target)
@@ -440,15 +471,15 @@ def _run_intervention_eval(
             tasks = tasks.to(device)
             oracle_preds = (data @ tasks).squeeze(-1)
 
+        batch_delta_vals = []
         for p in eval_positions:
             if p >= preds_base.shape[1]:
                 continue
-            bl_by_pos[p].append(
-                ((preds_base[:, p] - target[:, p]) ** 2).mean().item()
-            )
-            it_by_pos[p].append(
-                ((preds_int[:, p] - target[:, p]) ** 2).mean().item()
-            )
+            bl_p = ((preds_base[:, p] - target[:, p]) ** 2).mean().item()
+            it_p = ((preds_int[:, p] - target[:, p]) ** 2).mean().item()
+            bl_by_pos[p].append(bl_p)
+            it_by_pos[p].append(it_p)
+            batch_delta_vals.append(it_p - bl_p)
             if track_oracle:
                 bl_oracle[p].append(
                     ((preds_base[:, p] - oracle_preds[:, p]) ** 2).mean().item()
@@ -459,6 +490,9 @@ def _run_intervention_eval(
                 d_pred = (preds_int[:, p] - preds_base[:, p]).cpu()
                 pred_delta_sum += d_pred.abs().sum().item()
                 pred_delta_count += d_pred.shape[0]
+
+        if batch_delta_vals:
+            batch_deltas.append(float(np.mean(batch_delta_vals)))
 
         if track_oracle and preds_base.shape[1] > 0:
             bl_pos0.append(
@@ -482,6 +516,7 @@ def _run_intervention_eval(
         "baseline": bl_avg,
         "intervened": it_avg,
         "delta": it_avg - bl_avg,
+        "delta_per_batch": batch_deltas,
     }
     if track_oracle:
         bl_o, it_o = _avg(bl_oracle), _avg(it_oracle)
@@ -502,6 +537,7 @@ def _run_intervention_eval(
 def _eval_per_major_task(
     model, layer, proj_matrix, train_task,
     *, device, B, eval_positions, scale, n_samples,
+    extraction_point: str = "post_attn",
 ):
     """Evaluate the intervention separately for each major task.
 
@@ -541,7 +577,11 @@ def _eval_per_major_task(
             h_mod = h - scale * (h @ _P)
             return h_mod if torch.is_tensor(out) else (h_mod,) + out[1:]
 
-        handle = model.transformer.blocks[layer].attn_block.register_forward_hook(_hook)
+        _ept_tgt = (
+            model.transformer.blocks[layer] if extraction_point == "post_mlp"
+            else model.transformer.blocks[layer].attn_block
+        )
+        handle = _ept_tgt.register_forward_hook(_hook)
         try:
             with torch.no_grad():
                 preds_int = model(data, target)
@@ -683,8 +723,10 @@ def _print_intervention_summary(results):
     _row("Baseline MSE (\u2192 oracle)",   "baseline_to_oracle_major", "baseline_to_oracle_ood")
     _row("Intervened MSE (\u2192 oracle)",  "intervened_to_oracle_major", "intervened_to_oracle_ood")
     _row("\u0394 MSE (\u2192 oracle)",      "delta_to_oracle_major",  "delta_to_oracle_ood")
-    _row("Rand orth 3x \u0394 MSE",        "rand3x_int_delta_major", "rand3x_int_delta_ood")
-    _pct_row("Rand orth 3x % increase",    "rand3x_int_pct_major",   "rand3x_int_pct_ood")
+    rs = results.get("rand_stats", {})
+    _rand_m = rs.get("major", {}).get("mean", float("nan"))
+    _rand_o = rs.get("ood",   {}).get("mean", float("nan"))
+    print(f"{'Rand orth Δ MSE (mean)':<30} {_rand_m:>12.4f} {_rand_o:>12.4f}")
     print()
     _row("MSE at pos 0 (\u2192 target)",   "baseline_pos0_major",    "baseline_pos0_ood")
     ctx_gain_m = results["baseline_pos0_major"] - results["baseline_loss_major"]
@@ -696,6 +738,14 @@ def _print_intervention_summary(results):
     frac_o = 100.0 * delta_o / ctx_gain_o if ctx_gain_o > 0 else float("nan")
     _frac_label = "\u0394 / context gain"
     print(f"{_frac_label:<30} {frac_m:>11.1f}% {frac_o:>11.1f}%")
+    if results.get("has_minor") and "baseline_pos0_minor" in results:
+        ctx_gain_n = results["baseline_pos0_minor"] - results["baseline_loss_minor"]
+        delta_n = results["delta_loss_minor"]
+        frac_n = 100.0 * delta_n / ctx_gain_n if ctx_gain_n > 0 else float("nan")
+        _minor_gain_label = "  Minor context gain"
+        _minor_frac_label = "  Minor \u0394 / context gain"
+        print(f"{_minor_gain_label:<30} {ctx_gain_n:>12.4f}")
+        print(f"{_minor_frac_label:<30} {frac_n:>11.1f}%")
 
     # Per-task breakdown
     per_task = results.get("per_task")
@@ -747,6 +797,7 @@ def _probe_and_filter_vopt(
     train_task, ood_task_eval,
     *, device, B, eval_positions, n_dims, n_samples_probe,
     r2_filter_threshold=0.1,
+    extraction_point: str = "post_attn",
 ):
     """Probe V_opt with known features and filter to interpretable directions.
 
@@ -771,18 +822,22 @@ def _probe_and_filter_vopt(
         model, layer, train_task, train_task,
         device=device, B=B, eval_positions=eval_positions,
         n_dims=n_dims, n_samples=n_samples_probe,
+        extraction_point=extraction_point,
     )
     feat_ood = _collect_features(
         model, layer, ood_task_eval, train_task,
         device=device, B=B, eval_positions=eval_positions,
         n_dims=n_dims, n_samples=n_samples_probe,
+        extraction_point=extraction_point,
     )
 
     proj_maj = feat_maj["h"] @ V_opt_cpu
     proj_ood = feat_ood["h"] @ V_opt_cpu
 
-    xt_beta_maj = (feat_maj["xt"] * feat_maj["beta"]).sum(-1, keepdim=True)
-    xt_beta_ood = (feat_ood["xt"] * feat_ood["beta"]).sum(-1, keepdim=True)
+    xt_beta_maj  = (feat_maj["xt"] * feat_maj["beta"]).sum(-1, keepdim=True)
+    xt_beta_ood  = (feat_ood["xt"] * feat_ood["beta"]).sum(-1, keepdim=True)
+    xt_norm_maj  = feat_maj["xt"].pow(2).sum(-1, keepdim=True)
+    xt_norm_ood  = feat_ood["xt"].pow(2).sum(-1, keepdim=True)
 
     probe_groups_ood = [
         feat_ood["xty"],
@@ -790,6 +845,8 @@ def _probe_and_filter_vopt(
         feat_ood["xt"],
         xt_beta_ood,
         feat_ood["pgauss"],
+        xt_norm_ood,
+        feat_ood["post"],
     ]
     probe_groups_maj = [
         feat_maj["xty"],
@@ -797,8 +854,13 @@ def _probe_and_filter_vopt(
         feat_maj["xt"],
         xt_beta_maj,
         feat_maj["pgauss"],
+        xt_norm_maj,
+        feat_maj["post"],
     ]
-    group_names = ["X^TY/t", "beta_hat", "x_t", "x_t @ beta_hat", "P(Z=K+1)"]
+    group_names = [
+        "X^TY/t", "beta_hat", "x_t", "x_t @ beta_hat",
+        "P(Z=K+1)", "||x_t||^2", "P(Z)",
+    ]
 
     # ---- 1. Joint probe (all features simultaneously) ----
     joint_r2_ood = _joint_probe_r2(probe_groups_ood, proj_ood)
@@ -836,10 +898,6 @@ def _probe_and_filter_vopt(
             "fwd_major": _ols_r2(probe_groups_maj[i], proj_maj),
             "fwd_ood":   _ols_r2(probe_groups_ood[i], proj_ood),
         }
-    enriched_r2["X^TY/t (MLP)"] = {
-        "fwd_major": _fit_r2_mlp(probe_groups_maj[0], proj_maj),
-        "fwd_ood":   _fit_r2_mlp(probe_groups_ood[0], proj_ood),
-    }
 
     # ── Joint probe filtering of V_opt ──────────────────────────────
     # Fit all feature groups jointly to predict  proj(h, V_opt) ∈ ℝ^r.
@@ -945,35 +1003,46 @@ def _rand_orth_trials(
     model, layer, U_orth_cpu, orth_dim, n_directions,
     train_task, ood_task_eval,
     *, device, B, eval_positions, scale, n_samples_eval,
-    n_trials=3,
-):
-    """Average delta-MSE from random orthogonal directions of given rank."""
+    n_trials: int = 5,
+    has_minor: bool = False,
+    extraction_point: str = "post_attn",
+) -> dict:
+    """Random same-rank orthogonal direction baseline with IQR stats.
+
+    Returns a dict ``{mode: {"mean": float, "q25": float, "q75": float}}``
+    for modes ``"major"``, ``"ood"``, and (if ``has_minor``) ``"minor"``.
+    """
     actual_rank = min(n_directions, orth_dim)
-    d_maj, d_ood, p_maj, p_ood = [], [], [], []
-    for _ in range(n_trials):
-        W_r = torch.randn(orth_dim, actual_rank)
-        V_r, _ = torch.linalg.qr(U_orth_cpu @ W_r)
-        P_r = (V_r @ V_r.T).to(device)
-        rm = _run_intervention_eval(
-            model, layer, P_r, train_task,
-            device=device, B=B, eval_positions=eval_positions,
-            scale=scale, n_samples=n_samples_eval,
-            track_oracle=False,
-        )
-        ro = _run_intervention_eval(
-            model, layer, P_r, ood_task_eval,
-            device=device, B=B, eval_positions=eval_positions,
-            scale=scale, n_samples=n_samples_eval,
-            track_oracle=False,
-        )
-        d_maj.append(rm["delta"])
-        d_ood.append(ro["delta"])
-        p_maj.append(100.0 * rm["delta"] / rm["baseline"] if rm["baseline"] > 0 else float("nan"))
-        p_ood.append(100.0 * ro["delta"] / ro["baseline"] if ro["baseline"] > 0 else float("nan"))
-    return (
-        float(np.mean(d_maj)), float(np.mean(d_ood)),
-        float(np.mean(p_maj)), float(np.mean(p_ood)),
+    acc: dict = {"major": [], "ood": [], "minor": []}
+    eval_kw = dict(
+        device=device, B=B, eval_positions=eval_positions,
+        scale=scale, n_samples=n_samples_eval, track_oracle=False,
+        extraction_point=extraction_point,
     )
+    for _ in range(n_trials):
+        V_r, _ = torch.linalg.qr(U_orth_cpu @ torch.randn(orth_dim, actual_rank))
+        P_r = (V_r @ V_r.T).to(device)
+        rm = _run_intervention_eval(model, layer, P_r, train_task, **eval_kw)
+        ro = _run_intervention_eval(model, layer, P_r, ood_task_eval, **eval_kw)
+        acc["major"].append(rm["delta"])
+        acc["ood"].append(ro["delta"])
+        if has_minor:
+            rn = _run_intervention_eval(
+                model, layer, P_r, train_task, **eval_kw, minor_only=True,
+            )
+            acc["minor"].append(rn["delta"])
+
+    def _stats(vals):
+        if not vals:
+            return {"mean": float("nan"), "q25": float("nan"), "q75": float("nan")}
+        arr = np.array(vals, dtype=float)
+        return {
+            "mean": float(arr.mean()),
+            "q25": float(np.percentile(arr, 25)),
+            "q75": float(np.percentile(arr, 75)),
+        }
+
+    return {k: _stats(v) for k, v in acc.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -1006,6 +1075,9 @@ def intervene_optimal_orth_direction(
     opt_source: str = "ood",
     max_mse_oracle: Optional[float] = None,
     min_opt_steps: int = 0,
+    n_rand_int: int = 5,
+    extraction_point: str = "post_attn",
+    probe_method: str = "ols",
     verbose: bool = False,
     print_summary: bool = True,
 ) -> dict:
@@ -1049,6 +1121,13 @@ def intervene_optimal_orth_direction(
         Data source for the optimisation objective.
         ``"ood"`` (default) — maximise intervened MSE on fresh OOD tasks.
         ``"minor"`` — maximise intervened MSE on the minor task pool.
+    probe_method : ``"ols"`` | ``"averaging"``
+        How to estimate the task and token subspaces.
+        ``"ols"`` (default) — joint OLS fit ``h = [π, tok] W + b`` with
+        Frisch-Waugh-Lovell orthogonalisation.
+        ``"averaging"`` — posterior-weighted averaging of hidden states per
+        task (analogous to ANOVA cell means), then residual OLS for token
+        directions.  Avoids any token-task correlation in the design matrix.
     """
     from icl.linear.linear_path_utils import load_model_task_config
 
@@ -1086,15 +1165,27 @@ def intervene_optimal_orth_direction(
     ood_task = _create_ood_task(train_task, config, B, n_ood, device)
     ood_task_eval = _create_ood_task(train_task, config, B, n_ood, device)
 
-    # ---- 2. Joint fit + protected subspace ----
-    fit = _joint_fit_task_token(
-        model, layer, train_task,
+    has_minor = (
+        int(getattr(train_task, "n_minor_tasks", 0)) > 0
+        and getattr(train_task, "minor_pool", None) is not None
+    )
+
+    # ---- 2. Fit task/token subspace + build protected subspace ----
+    _fit_kw = dict(
         device=device, fit_positions=fit_positions,
         fit_n_samples=fit_n_samples, B=B,
         n_dims=n_dims, n_embd=n_embd,
         input_protection_features=input_protection_features,
         center_task_vecs=center_task_vecs,
     )
+    if probe_method == "averaging":
+        fit = _averaging_fit_task_token(
+            model, layer, train_task,
+            extraction_point=extraction_point,
+            **_fit_kw,
+        )
+    else:
+        fit = _joint_fit_task_token(model, layer, train_task, **_fit_kw)
     joint_r2 = fit["joint_r2"]
     rank = fit["rank"]
 
@@ -1128,6 +1219,7 @@ def intervene_optimal_orth_direction(
         scale=scale,
         opt_source=opt_source,
         max_mse_oracle=max_mse_oracle, min_opt_steps=min_opt_steps,
+        extraction_point=extraction_point,
         verbose=verbose,
     )
 
@@ -1143,6 +1235,7 @@ def intervene_optimal_orth_direction(
         model, layer, V_opt_cpu, train_task, ood_task_eval,
         device=device, B=B, eval_positions=eval_positions,
         n_dims=n_dims, n_samples_probe=n_samples_probe,
+        extraction_point=extraction_point,
     )
 
     # ---- 5. V_opt summary stats ----
@@ -1160,26 +1253,42 @@ def intervene_optimal_orth_direction(
     eval_kw = dict(device=device, B=B, eval_positions=eval_positions,
                    scale=scale, n_samples=n_samples_eval)
 
-    res_major = _run_intervention_eval(model, layer, P_v, train_task, **eval_kw)
-    res_ood   = _run_intervention_eval(model, layer, P_v, ood_task_eval, **eval_kw)
+    res_major = _run_intervention_eval(model, layer, P_v, train_task, **eval_kw,
+                                       extraction_point=extraction_point)
+    res_ood   = _run_intervention_eval(model, layer, P_v, ood_task_eval, **eval_kw,
+                                       extraction_point=extraction_point)
+    res_minor = (
+        _run_intervention_eval(model, layer, P_v, train_task, **eval_kw,
+                               minor_only=True, extraction_point=extraction_point)
+        if has_minor else None
+    )
 
-    rand3x_rank = 3 * n_directions
-    rand3x_d_m, rand3x_d_o, rand3x_p_m, rand3x_p_o = _rand_orth_trials(
-        model, layer, prot["U_orth"].cpu().float(), orth_dim, rand3x_rank,
+    rand_stats = _rand_orth_trials(
+        model, layer, prot["U_orth"].cpu().float(), orth_dim, n_directions,
         train_task, ood_task_eval,
         device=device, B=B, eval_positions=eval_positions,
         scale=scale, n_samples_eval=n_samples_eval,
+        n_trials=n_rand_int, has_minor=has_minor,
+        extraction_point=extraction_point,
     )
 
     V_filt = probe["V_opt_filtered"]
     P_v_filt = (V_filt @ V_filt.T).to(device)
-    res_filt_major = _run_intervention_eval(model, layer, P_v_filt, train_task, **eval_kw)
-    res_filt_ood   = _run_intervention_eval(model, layer, P_v_filt, ood_task_eval, **eval_kw)
+    res_filt_major = _run_intervention_eval(model, layer, P_v_filt, train_task, **eval_kw,
+                                            extraction_point=extraction_point)
+    res_filt_ood   = _run_intervention_eval(model, layer, P_v_filt, ood_task_eval, **eval_kw,
+                                            extraction_point=extraction_point)
+    res_filt_minor = (
+        _run_intervention_eval(model, layer, P_v_filt, train_task, **eval_kw,
+                               minor_only=True, extraction_point=extraction_point)
+        if has_minor else None
+    )
 
     per_task = _eval_per_major_task(
         model, layer, P_v, train_task,
         device=device, B=B, eval_positions=eval_positions,
         scale=scale, n_samples=n_samples_eval,
+        extraction_point=extraction_point,
     )
 
     _cleanup_model(model)
@@ -1207,6 +1316,8 @@ def intervene_optimal_orth_direction(
     results = {
         **_unpack(res_major, "major"),
         **_unpack(res_ood, "ood"),
+        **(_unpack(res_minor, "minor") if res_minor is not None else {}),
+        "has_minor": has_minor,
         "eval_positions": res_major["positions"],
         "layer": layer,
         "scale": scale,
@@ -1225,11 +1336,10 @@ def intervene_optimal_orth_direction(
         "directions": V_opt.cpu(),
         "directions_filtered": V_filt,
         "loss_history": loss_history,
-        "rand3x_int_delta_major": rand3x_d_m,
-        "rand3x_int_delta_ood": rand3x_d_o,
-        "rand3x_int_pct_major": rand3x_p_m,
-        "rand3x_int_pct_ood": rand3x_p_o,
-        "rand3x_rank": min(rand3x_rank, orth_dim),
+        "rand_stats": rand_stats,
+        "delta_per_batch_major": res_major.get("delta_per_batch", []),
+        "delta_per_batch_ood": res_ood.get("delta_per_batch", []),
+        "delta_per_batch_minor": res_minor.get("delta_per_batch", []) if res_minor is not None else [],
         "enriched_r2": probe["enriched_r2"],
         "joint_diagnostics": probe["joint_diagnostics"],
         "input_loadings": input_loadings,
@@ -1249,6 +1359,8 @@ def intervene_optimal_orth_direction(
         "filtered_intervened_loss_ood": res_filt_ood["intervened"],
         "filtered_baseline_loss_major": res_filt_major["baseline"],
         "filtered_baseline_loss_ood": res_filt_ood["baseline"],
+        "filtered_intervened_to_oracle_minor": res_filt_minor["intervened_to_oracle"] if res_filt_minor is not None else float("nan"),
+        "filtered_baseline_to_oracle_minor": res_filt_minor["baseline_to_oracle"] if res_filt_minor is not None else float("nan"),
         "per_task": per_task,
     }
 
@@ -1280,7 +1392,7 @@ def plot_optimal_orth_direction_across_layers(
         Forwarded to ``intervene_optimal_orth_direction``
         (e.g. ``B``, ``n_directions``, ``scale``, ``opt_source``, etc.).
 
-    Returns ``(fig, fig_loss, fig_r2, fig_filt, fig_per_task, all_results)``.
+    Returns ``(fig_delta, fig_loss, fig_r2, fig_filt, fig_per_task, all_results)``.
     """
     import matplotlib.pyplot as plt
     from icl.linear.linear_path_utils import load_model_task_config
@@ -1297,140 +1409,373 @@ def plot_optimal_orth_direction_across_layers(
             verbose=False, print_summary=True, **kwargs,
         )
 
-    # ---- helpers ----
-    def _extract(key):
-        return [all_results[l][key] for l in layers]
+    # ══════════════════════════════════════════════════════════════════════
+    #  Plotting — same colours / geometry / aesthetic as coin/latent version
+    # ══════════════════════════════════════════════════════════════════════
+    COLORS = {"maj": "#2166ac", "ood": "#d6604d", "minor": "#1a9850"}
+    bw_bar = 0.22
+    g_step = 0.24
 
     x = np.arange(len(layers))
-    bar_w = 0.35
-    base_maj = np.mean(_extract("baseline_to_oracle_major"))
-    base_ood = np.mean(_extract("baseline_to_oracle_ood"))
-
-    n_directions = kwargs.get("n_directions", 1)
-    scale = kwargs.get("scale", 1.0)
     opt_source = kwargs.get("opt_source", "ood")
+    has_minor = any(all_results[l].get("has_minor", False) for l in layers)
 
-    pos0_ood = np.mean(_extract("baseline_pos0_to_oracle_ood"))
+    # 3-bar layout when minor exists, 2-bar otherwise
+    if has_minor:
+        MC = {"maj": -g_step, "ood": 0.0, "minor": +g_step}
+    else:
+        MC = {"maj": -g_step / 2, "ood": +g_step / 2, "minor": 0.0}
 
-    def _bar_chart(ax, maj_key, ood_key, maj_label, ood_label, chart_title,
-                   show_pos0=False):
-        vals_maj, vals_ood = _extract(maj_key), _extract(ood_key)
-        ax.bar(x - bar_w / 2, vals_maj, bar_w, label=maj_label,
-               color="#2196F3", alpha=0.85)
-        ax.bar(x + bar_w / 2, vals_ood, bar_w, label=ood_label,
-               color="#FF9800", alpha=0.85)
-        for i, (vm, vo) in enumerate(zip(vals_maj, vals_ood)):
-            ax.text(x[i] - bar_w / 2, vm, f"{vm:.4f}",
-                    ha="center", va="bottom", fontsize=9)
-            ax.text(x[i] + bar_w / 2, vo, f"{vo:.4f}",
-                    ha="center", va="bottom", fontsize=9)
-        ax.axhline(base_maj, color="#2196F3", ls="--", lw=1.5, alpha=0.7,
-                   label=f"Major baseline ({base_maj:.4f})")
-        ax.axhline(base_ood, color="#FF9800", ls="--", lw=1.5, alpha=0.7,
-                   label=f"OOD baseline ({base_ood:.4f})")
-        if show_pos0 and not np.isnan(pos0_ood):
-            ax.axhline(pos0_ood, color="#4CAF50", ls=":", lw=2, alpha=0.8,
-                       label=f"OOD pos-0 MSE ({pos0_ood:.4f})")
-        ax.set(xlabel="Layer", ylabel="MSE (model \u2192 oracle)",
-               title=chart_title)
-        ax.set_xticks(x, [str(l) for l in layers])
-        ax.xaxis.label.set_size(15)
-        ax.yaxis.label.set_size(15)
-        ax.title.set_size(15)
-        ax.tick_params(labelsize=14)
-        ax.legend(fontsize=11)
-        ax.grid(axis="y", alpha=0.3)
-
-    # ---- 1. Intervened MSE to oracle ----
-    fig, ax = plt.subplots(figsize=(max(8, 1.4 * len(layers)), 6))
-    _bar_chart(
-        ax,
-        "intervened_to_oracle_major", "intervened_to_oracle_ood",
-        "Major (intervened)", "OOD (intervened)",
-        title or f"Optimal Rank-{n_directions} Orth Subspace "
-                 f"(linear, scale={scale})",
-        show_pos0=True,
+    # Per-layer Δ RMSE to oracle
+    delta_maj = [np.sqrt(all_results[l]["intervened_to_oracle_major"])
+                 - np.sqrt(all_results[l]["baseline_to_oracle_major"]) for l in layers]
+    delta_ood = [np.sqrt(all_results[l]["intervened_to_oracle_ood"])
+                 - np.sqrt(all_results[l]["baseline_to_oracle_ood"]) for l in layers]
+    delta_minor = (
+        [np.sqrt(all_results[l]["intervened_to_oracle_minor"])
+         - np.sqrt(all_results[l]["baseline_to_oracle_minor"]) for l in layers]
+        if has_minor else []
     )
+
+    # Info-gain reference lines: RMSE at pos-0 (no context) minus trained baseline
+    base_maj_mean = float(np.mean([np.sqrt(all_results[l]["baseline_to_oracle_major"]) for l in layers]))
+    base_ood_mean = float(np.mean([np.sqrt(all_results[l]["baseline_to_oracle_ood"]) for l in layers]))
+    _pos0_maj = [np.sqrt(all_results[l].get("baseline_pos0_to_oracle_major", float("nan"))) for l in layers]
+    _pos0_ood = [np.sqrt(all_results[l].get("baseline_pos0_to_oracle_ood",   float("nan"))) for l in layers]
+    pos0_maj = float(np.nanmean(_pos0_maj))
+    pos0_ood = float(np.nanmean(_pos0_ood))
+    gain_maj = (pos0_maj - base_maj_mean) if not np.isnan(pos0_maj) else None
+    gain_ood = (pos0_ood - base_ood_mean) if not np.isnan(pos0_ood) else None
+    if has_minor:
+        base_minor_mean = float(np.mean([np.sqrt(all_results[l]["baseline_to_oracle_minor"]) for l in layers]))
+        _pos0_minor = [np.sqrt(all_results[l].get("baseline_pos0_to_oracle_minor", float("nan"))) for l in layers]
+        pos0_minor = float(np.nanmean(_pos0_minor))
+        gain_minor = (pos0_minor - base_minor_mean) if not np.isnan(pos0_minor) else None
+    else:
+        gain_minor = None
+    _fmt = lambda v: f"{v:.3f}" if v is not None else "n/a"
+
+    def _iqr_err_norm(key_batch, g_m):
+        """IQR error bars in normalized (%) units."""
+        lo_arr, hi_arr = [], []
+        for l in layers:
+            vals = all_results[l].get(key_batch, [])
+            if len(vals) < 2:
+                lo_arr.append(0.0); hi_arr.append(0.0); continue
+            arr = np.array(vals, dtype=float) / g_m * 100
+            mn = arr.mean()
+            lo_arr.append(abs(mn - np.percentile(arr, 25)))
+            hi_arr.append(abs(np.percentile(arr, 75) - mn))
+        return np.array(lo_arr), np.array(hi_arr)
+
+    def _style(ax, ylabel):
+        ax.set_xlabel("Layer", fontsize=9)
+        ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(l) for l in layers], fontsize=8)
+        ax.tick_params(axis="y", labelsize=8)
+        ax.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+        ax.set_axisbelow(True)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    # Normalized deltas: Δ RMSE / g_RMSE × 100 (% of ICL gain disrupted)
+    _g_maj   = gain_maj   if (gain_maj   is not None and gain_maj   > 0) else 1.0
+    _g_ood   = gain_ood   if (gain_ood   is not None and gain_ood   > 0) else 1.0
+    _g_minor = gain_minor if (gain_minor is not None and gain_minor > 0) else 1.0
+    _normalized = (gain_maj is not None and gain_maj > 0)
+
+    norm_maj   = [v / _g_maj   * 100 for v in delta_maj]
+    norm_ood   = [v / _g_ood   * 100 for v in delta_ood]
+    norm_minor = [v / _g_minor * 100 for v in delta_minor] if has_minor else []
+
+    # ── Plot 1: V_opt Intervention (normalized) ───────────────────────────
+    fig_delta, ax = plt.subplots(figsize=figsize, dpi=150)
+
+    # Random orthogonal baseline — axhspan up to q75 ceiling (OOD, normalized)
+    _rand_modes = ["major", "ood"] + (["minor"] if has_minor else [])
+    _rand_vals_raw = [
+        all_results[l]["rand_stats"][mk]["q75"]
+        for l in layers for mk in _rand_modes
+        if not np.isnan(all_results[l]["rand_stats"][mk]["q75"])
+    ]
+    if _rand_vals_raw and _normalized:
+        # Normalize rand ceiling by OOD gain (primary metric)
+        rand_ceil = max(
+            all_results[l]["rand_stats"]["ood"]["q75"] / _g_ood * 100
+            for l in layers
+        )
+        ax.axhspan(0, rand_ceil, color="#b0b8c8", alpha=0.35, zorder=1,
+                   hatch="///", label="Random")
+        ax.axhline(rand_ceil, color="#556070", lw=1.2, ls="-", zorder=2, alpha=0.85)
+    elif _rand_vals_raw:
+        rand_ceil = max(_rand_vals_raw)
+        ax.axhspan(0, rand_ceil, color="#b0b8c8", alpha=0.35, zorder=1,
+                   hatch="///", label="Random")
+        ax.axhline(rand_ceil, color="#556070", lw=1.2, ls="-", zorder=2, alpha=0.85)
+
+    bars_to_plot = [
+        ("maj",   norm_maj,   "delta_per_batch_major", _g_maj,   "Maj."),
+        ("ood",   norm_ood,   "delta_per_batch_ood",   _g_ood,   "OOD"),
+    ]
+    if has_minor:
+        bars_to_plot.append(("minor", norm_minor, "delta_per_batch_minor", _g_minor, "Min."))
+
+    for mode, norm_vals, key_pb, g_m, label in bars_to_plot:
+        xm = x + MC[mode]
+        lo, hi = _iqr_err_norm(key_pb, g_m)
+        ax.bar(xm, norm_vals, bw_bar, color=COLORS[mode], linewidth=0, zorder=3, label=label)
+        ax.errorbar(xm, norm_vals, yerr=[lo, hi], fmt="none",
+                    ecolor="black", elinewidth=0.9, capsize=3, capthick=0.9, zorder=5)
+
+    if _normalized:
+        ax.axhline(100, color="grey", ls="--", lw=1.0, alpha=0.55,
+                   label="100%")
+
+    _ylabel = "Fraction of ICL gain disrupted (%)" if _normalized else "RMSE increase"
+    _style(ax, _ylabel)
+    if title:
+        ax.set_title(title, fontsize=9)
+    ax.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.16),
+              ncol=5, framealpha=0.9, edgecolor="lightgrey",
+              columnspacing=0.5, handlelength=1.0, handletextpad=0.3, borderpad=0.4)
+    plt.tight_layout(pad=2.2)
     if save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight")
-    _show_or_close(fig, show)
+        fig_delta.savefig(save_path, dpi=300, bbox_inches="tight")
+    _show_or_close(fig_delta, show)
 
-    # ---- 2. Optimisation loss history ----
-    fig_loss, ax_loss = plt.subplots(figsize=(10, 5))
-    cmap = plt.cm.tab10
+    # ── Printed Table 1: per-layer normalized ─────────────────────────────
+    _W = 7
+    _fmtg = lambda v: f"{v:{_W}.4f}" if v is not None else f"{'n/a':>{_W}}"
+    _hd = f"  {'Layer':>5}  {'Maj.%':>{_W}}  {'OOD%':>{_W}}"
+    if has_minor:
+        _hd += f"  {'Min.%':>{_W}}"
+    _hd += f"  |  {'Maj.Δ':>{_W}}  {'OOD Δ':>{_W}}"
+    if has_minor:
+        _hd += f"  {'Min.Δ':>{_W}}"
+    _ln = "  " + "─" * (len(_hd) - 2)
+    print(f"\n  V_opt Intervention — Δ𝓛/g (% of ICL gain)  [RMSE]")
+    print(_ln); print(_hd); print(_ln)
+    for _i, _l in enumerate(layers):
+        _row = f"  {_l:>5}  {norm_maj[_i]:>{_W}.1f}%  {norm_ood[_i]:>{_W}.1f}%"
+        if has_minor:
+            _row += f"  {norm_minor[_i]:>{_W}.1f}%"
+        _row += f"  |  {delta_maj[_i]:>{_W}.4f}  {delta_ood[_i]:>{_W}.4f}"
+        if has_minor:
+            _row += f"  {delta_minor[_i]:>{_W}.4f}"
+        print(_row)
+    print(_ln)
+    _grow = f"  {'Gain':>5}  {'':>{_W}}   {'':>{_W}} "
+    if has_minor:
+        _grow += f"  {'':>{_W}} "
+    _grow += f"  |  {_fmtg(gain_maj)}  {_fmtg(gain_ood)}"
+    if has_minor:
+        _grow += f"  {_fmtg(gain_minor)}"
+    print(_grow)
+    print()
+
+    # ── Printed Table 2: Layer-averaged ───────────────────────────────────
+    if _normalized:
+        _rand_norm_list = [
+            all_results[l]["rand_stats"]["ood"]["q75"] / _g_ood * 100 for l in layers
+        ]
+        _mean_m = float(np.mean(norm_maj));   _std_m = float(np.std(norm_maj))
+        _mean_o = float(np.mean(norm_ood));   _std_o = float(np.std(norm_ood))
+        _mean_r = float(np.mean(_rand_norm_list)); _std_r = float(np.std(_rand_norm_list))
+        _mean_dm = float(np.mean(delta_maj)); _mean_do = float(np.mean(delta_ood))
+        _WA = 12
+        _sep = "  " + "─" * 57
+        print(_sep)
+        print(f"  Layer-averaged (mean ± std across {len(layers)} layers) — RMSE")
+        print(_sep)
+        print(f"  {'Mode':<6}  {'Δ/g (%)':>{_WA}}  {'Raw Δ':>{_WA}}  {'g (RMSE)':>{_WA}}")
+        print(_sep)
+        print(f"  {'Maj.':<6}  {_mean_m:>7.1f}±{_std_m:<4.1f}  {_mean_dm:{_WA}.4f}  {gain_maj:{_WA}.4f}")
+        print(f"  {'OOD':<6}  {_mean_o:>7.1f}±{_std_o:<4.1f}  {_mean_do:{_WA}.4f}  {gain_ood:{_WA}.4f}")
+        if has_minor:
+            _mean_n = float(np.mean(norm_minor)); _std_n = float(np.std(norm_minor))
+            _mean_dn = float(np.mean(delta_minor))
+            print(f"  {'Min.':<6}  {_mean_n:>7.1f}±{_std_n:<4.1f}  {_mean_dn:{_WA}.4f}  {gain_minor:{_WA}.4f}")
+        print(f"  {'Rand.':<6}  {_mean_r:>7.1f}±{_std_r:<4.1f}  {'---':>{_WA}}  {'---':>{_WA}}")
+        print(_sep)
+        print()
+    # ─────────────────────────────────────────────────────────────────────
+
+    # ── Plot 2: Optimisation loss history ─────────────────────────────────
+    fig_loss, ax_loss = plt.subplots(figsize=(8, 4), dpi=150)
+    _loss_colors = plt.cm.turbo(np.linspace(0.05, 0.95, len(layers)))
     for i, l in enumerate(layers):
-        ax_loss.plot(all_results[l]["loss_history"],
-                     label=f"Layer {l}", color=cmap(i % 10), alpha=0.85)
+        ax_loss.plot(np.sqrt(all_results[l]["loss_history"]),
+                     label=f"Layer {l}", color=_loss_colors[i], alpha=0.85, lw=1.5)
     opt_label = "Minor" if opt_source == "minor" else "OOD"
-    ax_loss.set(
-        xlabel="Optimisation Step",
-        ylabel=f"{opt_label} MSE (intervened)",
-        title=f"Loss History (linear, rank-{n_directions}, opt={opt_source})",
-    )
-    ax_loss.legend(fontsize=12)
-    ax_loss.grid(alpha=0.3)
-    ax_loss.tick_params(labelsize=12)
+    ax_loss.set_xlabel("Optimisation Step", fontsize=9)
+    ax_loss.set_ylabel(f"{opt_label} RMSE (intervened)", fontsize=9)
+    ax_loss.legend(fontsize=9)
+    ax_loss.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax_loss.set_axisbelow(True)
+    ax_loss.spines["top"].set_visible(False)
+    ax_loss.spines["right"].set_visible(False)
+    ax_loss.tick_params(labelsize=8)
+    plt.tight_layout(pad=0.5)
     _show_or_close(fig_loss, show)
 
-    # ---- 3. R² plot: enriched probes → V_opt (OOD) ----
-    fig_r2, ax_r2 = plt.subplots(figsize=(max(8, 1.2 * len(layers)), 5))
-    enriched_keys = list(all_results[layers[0]]["enriched_r2"].keys())
+    # ── Plot 3: R² — enriched probes → V_opt ─────────────────────────────
+    _FEAT_LATEX = {
+        "X^TY/t":         r"$X^\top Y / t$",
+        "beta_hat":        r"$\hat{\beta}$",
+        "x_t":             r"$x_t$",
+        "x_t @ beta_hat":  r"$x_t \cdot \hat{\beta}$",
+        "P(Z=K+1)":        r"$P(Z\!=\!K\!+\!1)$",
+        "||x_t||^2":       r"$\|x_t\|^2$",
+        "P(Z)":            r"$P(Z)$",
+    }
+
+    _R2_EXCLUDE = {"P(Z=K+1)", "P(Z)", "X^TY/t"}
+    fig_r2, ax_r2 = plt.subplots(figsize=figsize, dpi=150)
+    enriched_keys = [k for k in all_results[layers[0]]["enriched_r2"].keys()
+                     if k not in _R2_EXCLUDE]
     markers = ["o", "s", "^", "D", "v", "P", "X", "*", "h", "<"]
     for ki, feat_name in enumerate(enriched_keys):
-        fwd = [all_results[l]["enriched_r2"][feat_name]["fwd_ood"]
-               for l in layers]
+        fwd = [all_results[l]["enriched_r2"][feat_name]["fwd_ood"] for l in layers]
         ax_r2.plot(layers, fwd, marker=markers[ki % len(markers)], ls="-",
-                   label=feat_name, color=f"C{ki}", lw=2, ms=7)
-    ax_r2.set(xlabel="Layer", ylabel="R\u00b2",
-              title="Probe \u2192 V_opt R\u00b2 (OOD)")
+                   label=_FEAT_LATEX.get(feat_name, feat_name),
+                   color=f"C{ki}", lw=1.5, ms=5)
+    joint_r2_vals = [all_results[l]["joint_diagnostics"]["joint_r2_ood"] for l in layers]
+    ax_r2.plot(layers, joint_r2_vals, ls="--", color="black", lw=1.8,
+               label="Combined", zorder=2)
+    ax_r2.set_xlabel("Layer", fontsize=9)
+    ax_r2.set_ylabel(r"R$^2$", fontsize=9)
     ax_r2.set_xticks(layers)
-    ax_r2.tick_params(labelsize=12)
-    ax_r2.legend(fontsize=8, ncol=3, loc="upper left")
-    ax_r2.grid(alpha=0.3)
+    ax_r2.tick_params(labelsize=8)
+    ax_r2.legend(fontsize=8, ncol=5, loc="upper center", bbox_to_anchor=(0.5, -0.14),
+                 framealpha=0.9, edgecolor="lightgrey",
+                 columnspacing=0.5, handlelength=1.0, handletextpad=0.3, borderpad=0.4)
+    ax_r2.yaxis.grid(True, alpha=0.25, linewidth=0.5, color="grey")
+    ax_r2.set_axisbelow(True)
+    ax_r2.spines["top"].set_visible(False)
+    ax_r2.spines["right"].set_visible(False)
     ax_r2.set_ylim(-0.05, 1.05)
+    plt.tight_layout(pad=2.0)
     _show_or_close(fig_r2, show)
 
-    # ---- 4. Filtered V_opt intervention barplot ----
-    fig_filt, ax_filt = plt.subplots(figsize=(max(8, 1.4 * len(layers)), 6))
-    _bar_chart(
-        ax_filt,
-        "filtered_intervened_to_oracle_major",
-        "filtered_intervened_to_oracle_ood",
-        "Major (filtered)", "OOD (filtered)",
-        f"V_opt_filtered (scale={scale})",
-    )
+    # ── Plot 4: V_opt vs Filtered (aligned with coin / latent presentation) ──
+    # When no directions pass the R² threshold (filtered_n_dirs == 0) the
+    # filtered bar is set to 0 rather than silently falling back to V_opt.
+    delta_filt_maj = [np.sqrt(all_results[l]["filtered_intervened_to_oracle_major"])
+                      - np.sqrt(all_results[l]["filtered_baseline_to_oracle_major"]) for l in layers]
+    delta_filt_ood = [np.sqrt(all_results[l]["filtered_intervened_to_oracle_ood"])
+                      - np.sqrt(all_results[l]["filtered_baseline_to_oracle_ood"]) for l in layers]
+    norm_filt_maj = [
+        0.0 if all_results[l]["filtered_n_dirs"] == 0 else v / _g_maj * 100
+        for l, v in zip(layers, delta_filt_maj)
+    ]
+    norm_filt_ood = [
+        0.0 if all_results[l]["filtered_n_dirs"] == 0 else v / _g_ood * 100
+        for l, v in zip(layers, delta_filt_ood)
+    ]
+    if has_minor:
+        delta_filt_minor_e = [
+            np.sqrt(all_results[l]["filtered_intervened_to_oracle_minor"])
+            - np.sqrt(all_results[l]["filtered_baseline_to_oracle_minor"]) for l in layers
+        ]
+        norm_filt_minor_e = [
+            0.0 if all_results[l]["filtered_n_dirs"] == 0 else v / _g_minor * 100
+            for l, v in zip(layers, delta_filt_minor_e)
+        ]
+
+    C_OOD_e    = COLORS["ood"]
+    C_MIN_e    = COLORS["minor"]
+    C_MAJ_e    = COLORS["maj"]
+    ALPHA_FILT = 0.42
+
+    # 4 flush bars (with minor: OOD + Min) or 2 flush bars (OOD only)
+    # Major task bars are intentionally omitted from this comparison plot.
+    n_pairs  = 2 if has_minor else 1
+    bw_p_e   = 0.15 if has_minor else 0.20
+    left_e   = -n_pairs * bw_p_e
+    xo_vopt_ood = left_e + 0.5 * bw_p_e
+    xo_filt_ood = left_e + 1.5 * bw_p_e
+    if has_minor:
+        xo_vopt_min = left_e + 2.5 * bw_p_e
+        xo_filt_min = left_e + 3.5 * bw_p_e
+
+    fig_filt, ax_filt = plt.subplots(figsize=figsize, dpi=150)
+
+    ax_filt.bar(x + xo_vopt_ood, norm_ood, bw_p_e,
+                label=r"$V_{\rm opt}$ (OOD)",
+                color=C_OOD_e, linewidth=0, zorder=3)
+    ax_filt.bar(x + xo_filt_ood, norm_filt_ood, bw_p_e,
+                label="Filtered (OOD)",
+                color=C_OOD_e, alpha=ALPHA_FILT, linewidth=0, zorder=3)
+    if has_minor:
+        ax_filt.bar(x + xo_vopt_min, norm_minor, bw_p_e,
+                    label=r"$V_{\rm opt}$ (Min.)",
+                    color=C_MIN_e, linewidth=0, zorder=3)
+        ax_filt.bar(x + xo_filt_min, norm_filt_minor_e, bw_p_e,
+                    label="Filtered (Min.)",
+                    color=C_MIN_e, alpha=ALPHA_FILT, linewidth=0, zorder=3)
+
+    if _normalized:
+        ax_filt.axhline(100, color="grey", ls="--", lw=1.0, alpha=0.55,
+                        label="100%")
+    _style(ax_filt, _ylabel)
+    _ncol_filt = 5 if has_minor else 3
+    ax_filt.legend(fontsize=9, loc="upper center", bbox_to_anchor=(0.5, -0.14),
+                   ncol=_ncol_filt, framealpha=0.9, edgecolor="lightgrey",
+                   columnspacing=0.5, handlelength=1.0, handletextpad=0.3, borderpad=0.4)
+    plt.tight_layout(pad=2.0)
     _show_or_close(fig_filt, show)
 
-    # ---- 5. Per-task intervention delta ----
+    # ── Printed Table: V_opt & Filtered ──────────────────────────────────────
+    _W4 = 9
+    _hd4 = (f"  {'Layer':>5}  {'Vopt OOD%':>{_W4}}  {'Filt OOD%':>{_W4}}  ")
+    if has_minor:
+        _hd4 += f"{'Vopt Min%':>{_W4}}  {'Filt Min%':>{_W4}}  "
+    _hd4 += f"{'Vopt Maj%':>{_W4}}  {'Filt Maj%':>{_W4}}"
+    _ln4 = "  " + "─" * (len(_hd4) - 2)
+    print(f"\n  V_opt & Filtered — Δ𝓛/g (% of ICL gain)  [RMSE]")
+    print(_ln4); print(_hd4); print(_ln4)
+    for _i, _l in enumerate(layers):
+        _row = (f"  {_l:>5}  {norm_ood[_i]:>{_W4}.1f}%  {norm_filt_ood[_i]:>{_W4}.1f}%  ")
+        if has_minor:
+            _row += f"{norm_minor[_i]:>{_W4}.1f}%  {norm_filt_minor_e[_i]:>{_W4}.1f}%  "
+        _row += f"{norm_maj[_i]:>{_W4}.1f}%  {norm_filt_maj[_i]:>{_W4}.1f}%"
+        print(_row)
+    print(_ln4)
+    print()
+
+    # ── Plot 5: Per-major-task breakdown (normalized) ─────────────────────
     n_major = len(all_results[layers[0]]["per_task"])
-    task_colors = [f"C{k}" for k in range(n_major)]
-    fig_pt, ax_pt = plt.subplots(figsize=(max(8, 1.4 * len(layers)), 6))
-    bw = 0.8 / (n_major + 1)
+    task_palette = plt.cm.Blues(np.linspace(0.4, 0.85, n_major))
+    bw_pt = min(0.22, 0.8 / (n_major + 1))
+    g_pt  = bw_pt + 0.02
+    offsets_pt = [(k - (n_major - 1) / 2) * g_pt for k in range(n_major)]
+    off_ood_pt  = offsets_pt[-1] + g_pt
+
+    fig_pt, ax_pt = plt.subplots(figsize=figsize, dpi=150)
     for k in range(n_major):
-        deltas = [all_results[l]["per_task"][k]["delta"] for l in layers]
-        off = (k - n_major / 2 + 0.5) * bw
-        ax_pt.bar(x + off, deltas, bw, label=f"Task {k}",
-                  color=task_colors[k], alpha=0.85)
-        for i, v in enumerate(deltas):
-            ax_pt.text(x[i] + off, v, f"{v:.3f}",
-                       ha="center", va="bottom", fontsize=8)
-    delta_ood = _extract("delta_loss_ood")
-    off_ood = (n_major - n_major / 2 + 0.5) * bw
-    ax_pt.bar(x + off_ood, delta_ood, bw, label="OOD",
-              color="#FF9800", alpha=0.85)
-    for i, v in enumerate(delta_ood):
-        ax_pt.text(x[i] + off_ood, v, f"{v:.3f}",
-                   ha="center", va="bottom", fontsize=8)
-    _delta_mse = "\u0394 MSE"
-    ax_pt.set(xlabel="Layer", ylabel=_delta_mse,
-              title=f"Per-Task {_delta_mse} (rank-{n_directions}, scale={scale})")
-    ax_pt.set_xticks(x, [str(l) for l in layers])
-    ax_pt.xaxis.label.set_size(15)
-    ax_pt.yaxis.label.set_size(15)
-    ax_pt.title.set_size(15)
-    ax_pt.tick_params(labelsize=14)
-    ax_pt.legend(fontsize=12)
-    ax_pt.grid(axis="y", alpha=0.3)
+        deltas_k = [
+            (np.sqrt(all_results[l]["per_task"][k]["intervened"])
+             - np.sqrt(all_results[l]["per_task"][k]["baseline"])) / _g_maj * 100
+            for l in layers
+        ]
+        ax_pt.bar(x + offsets_pt[k], deltas_k, bw_pt, label=f"Task {k}",
+                  color=task_palette[k], linewidth=0, zorder=3)
+    delta_ood_pt = [
+        (np.sqrt(all_results[l]["intervened_to_oracle_ood"])
+         - np.sqrt(all_results[l]["baseline_to_oracle_ood"])) / _g_ood * 100
+        for l in layers
+    ]
+    ax_pt.bar(x + off_ood_pt, delta_ood_pt, bw_pt, label="OOD",
+              color=COLORS["ood"], linewidth=0, zorder=3)
+    if _normalized:
+        ax_pt.axhline(100, color="grey", ls="--", lw=1.0, alpha=0.55,
+                      label="100%")
+    _style(ax_pt, _ylabel)
+    ax_pt.legend(fontsize=9, loc="upper left", ncol=2, framealpha=0.9,
+                 edgecolor="lightgrey", columnspacing=0.6,
+                 handlelength=1.1, handletextpad=0.35, borderpad=0.5)
+    plt.tight_layout(pad=0.5)
     _show_or_close(fig_pt, show)
 
-    return fig, fig_loss, fig_r2, fig_filt, fig_pt, all_results
+    return fig_delta, fig_loss, fig_r2, fig_filt, fig_pt, all_results

@@ -1,8 +1,11 @@
+import math
+
 import torch
 import dataclasses
 from typing import Optional, Tuple, Any, List, Callable
 
 from icl.linear.lr_models import get_model
+from icl.utils.device_utils import get_default_device
 
 # Adapted from https://github.com/mansheej/icl-task-diversity/blob/main/icl/tasks.py
 
@@ -24,8 +27,10 @@ class NoisyLinearRegression:
     minor_scale: float
     noise_scale: float
     is_mixture: bool = False
+    pool_type: Optional[str] = None
     dtype: Any = torch.float32
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = dataclasses.field(default_factory=get_default_device)
+
 
     def __post_init__(self):
         self.data_gen = torch.Generator(device=self.device).manual_seed(self.data_seed) # set independent generator for data sampling
@@ -49,10 +54,54 @@ class NoisyLinearRegression:
         return task
     
     def generate_task_pool(self) -> torch.Tensor:
-        # generate a pool of tasks w1, w2, ..., wN, where N = n_tasks
-        # w_i ~ N(0, task_scale^2 * I), where I is the identity matrix of size D = n_dims
-        shape = (self.n_tasks, self.n_dims, 1)
-        return torch.randn(shape, generator=self.task_gen, dtype=self.dtype, device=self.device) * self.task_scale
+        if self.pool_type is None or self.pool_type == "random":
+            shape = (self.n_tasks, self.n_dims, 1)
+            return torch.randn(
+                shape, generator=self.task_gen,
+                dtype=self.dtype, device=self.device,
+            ) * self.task_scale
+        elif self.pool_type == "simplex":
+            return self._generate_simplex_pool()
+        else:
+            raise ValueError(f"Unknown pool_type: {self.pool_type!r}")
+
+    def _generate_simplex_pool(self) -> torch.Tensor:
+        """Regular simplex: equal norms and equal pairwise distances.
+
+        Construction:
+          1. Center K standard basis vectors: v_k = e_k - (1/K)*1.
+          2. Embed in R^D (pad with zeros).
+          3. Apply a random orthogonal rotation so the simplex is not
+             axis-aligned.
+          4. Scale so each vector has norm ``task_scale * sqrt(n_dims)``,
+             matching the expected norm of the Gaussian pool.
+
+        Requires ``n_dims >= n_tasks - 1``.
+        """
+        K, D = self.n_tasks, self.n_dims
+        assert D >= K - 1, (
+            f"simplex pool requires n_dims ({D}) >= n_tasks-1 ({K - 1})"
+        )
+        vecs = (
+            torch.eye(K, dtype=self.dtype, device=self.device) - 1.0 / K
+        )                                                        # (K, K)
+        if D > K:
+            vecs = torch.cat([
+                vecs,
+                torch.zeros(K, D - K, dtype=self.dtype, device=self.device),
+            ], dim=1)                                            # (K, D)
+
+        M = torch.randn(
+            D, D, generator=self.task_gen,
+            dtype=self.dtype, device=self.device,
+        )
+        Q, _ = torch.linalg.qr(M)
+        vecs = vecs @ Q.T                                       # (K, D)
+
+        target_norm = self.task_scale * math.sqrt(D)
+        vecs = vecs * (target_norm / vecs.norm(dim=1, keepdim=True))
+
+        return vecs.unsqueeze(-1)                                # (K, D, 1)
 
     def generate_minor_pool(self) -> torch.Tensor:
         # generate a pool of tasks w1, w2, ..., wN, where N = n_minor_tasks
@@ -268,6 +317,8 @@ _POSTERIOR_RE_EXPORTS = {
     "task_posterior_with_gaussian_linear_regression",
     "plot_kl_model_vs_two_bayes_linear",
     "plot_kl_model_vs_two_bayes_linear_across_k",
+    "plot_kl_model_vs_two_bayes_linear_over_steps",
+    "plot_kl_model_vs_two_bayes_linear_transition_across_k",
 }
 
 def __getattr__(name):
@@ -286,6 +337,8 @@ def __getattr__(name):
             task_posterior_with_gaussian_linear_regression,
             plot_kl_model_vs_two_bayes_linear,
             plot_kl_model_vs_two_bayes_linear_across_k,
+            plot_kl_model_vs_two_bayes_linear_over_steps,
+            plot_kl_model_vs_two_bayes_linear_transition_across_k,
         )
         _ns = {
             "task_posterior_linear_regression": task_posterior_linear_regression,
@@ -293,6 +346,8 @@ def __getattr__(name):
             "task_posterior_with_gaussian_linear_regression": task_posterior_with_gaussian_linear_regression,
             "plot_kl_model_vs_two_bayes_linear": plot_kl_model_vs_two_bayes_linear,
             "plot_kl_model_vs_two_bayes_linear_across_k": plot_kl_model_vs_two_bayes_linear_across_k,
+            "plot_kl_model_vs_two_bayes_linear_over_steps": plot_kl_model_vs_two_bayes_linear_over_steps,
+            "plot_kl_model_vs_two_bayes_linear_transition_across_k": plot_kl_model_vs_two_bayes_linear_transition_across_k,
         }
         globals().update(_ns)
         return _ns[name]

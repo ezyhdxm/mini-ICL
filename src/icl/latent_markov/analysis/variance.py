@@ -36,6 +36,8 @@ def _get_hiddens_cached(
     step,
     verbose: bool,
     task_batch_size: int = 8,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
 ) -> tuple:
     """Return (all_hiddens, token_info), reusing cache when parameters match."""
     key = (
@@ -45,6 +47,8 @@ def _get_hiddens_cached(
         tuple(positions_of_interest) if positions_of_interest is not None else None,
         n_minor,
         step,
+        post_layernorm,
+        extraction_point,
     )
     if key in _hiddens_cache:
         if verbose:
@@ -60,6 +64,8 @@ def _get_hiddens_cached(
         step=step,
         verbose=verbose,
         task_batch_size=task_batch_size,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
     _hiddens_cache.clear()
     _hiddens_cache[key] = result
@@ -80,6 +86,8 @@ def get_token_conditioned_hiddens(
     step: Optional[int] = None,
     verbose: bool = False,
     task_batch_size: int = 8,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
 ) -> tuple:
     """
     Get token-conditioned hidden representations for Latent Markov task (non-padded).
@@ -146,6 +154,8 @@ def get_token_conditioned_hiddens(
         positions_of_interest=positions_of_interest,
         max_unique_tokens=max_unique_tokens,
         task_batch_size=task_batch_size,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
 
     if verbose:
@@ -173,6 +183,8 @@ def plot_task_vector_r2_latent(
     positions_of_interest: Optional[list] = None,
     n_minor: int = 0,
     step: Optional[int] = None,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
     verbose: bool = False,
     figsize: tuple = (6, 4),
     log_x: bool = True,
@@ -199,6 +211,9 @@ def plot_task_vector_r2_latent(
     positions_of_interest : list, optional
     n_minor : int
     step : int, optional
+    post_layernorm : bool
+    extraction_point : str
+        ``"post_attn"`` (default) or ``"post_mlp"`` (residual stream).
     verbose : bool
     figsize, log_x, show, show_ylabel, print_summary : plot options
     task_batch_size : int
@@ -218,6 +233,8 @@ def plot_task_vector_r2_latent(
     all_hiddens, token_info = _get_hiddens_cached(
         exp_name, layers, batch_size, positions_of_interest, n_minor, step, verbose,
         task_batch_size=task_batch_size,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
 
     if layers is None:
@@ -247,6 +264,204 @@ def plot_task_vector_r2_latent(
     }
 
 
+# ---------------------------------------------------------------------------
+# 2b.  Blocked task-vector R²
+# ---------------------------------------------------------------------------
+
+def plot_task_vector_r2_blocked_latent(
+    exp_name: str,
+    layers: Optional[Sequence] = None,
+    batch_size: int = 16,
+    positions_of_interest: Optional[list] = None,
+    n_minor: int = 0,
+    step: Optional[int] = None,
+    block_size: int = 10,
+    show_per_position: bool = True,
+    verbose: bool = False,
+    figsize: tuple = (6, 4),
+    log_x: bool = True,
+    show: bool = True,
+    show_ylabel: bool = True,
+    task_batch_size: int = 8,
+) -> dict:
+    r"""Blocked task-vector R² for the Latent Markov task.
+
+    Like ``plot_task_vector_r2_latent``, but pools positions into
+    non-overlapping blocks of size ``block_size`` and estimates a
+    **single** set of cell means :math:`\theta_{k,a}` per block (shared
+    across positions within the block).  Each position retains its own
+    mean :math:`\mu_t`.
+
+    The model tested within each block is:
+
+    .. math::
+        h_{t,k,a,b} = \mu_t + \theta_{k,a} + \varepsilon_{t,k,a,b}
+
+    where :math:`\theta_{k,a}` is constant across positions in the block.
+    A drop relative to per-position R² indicates position–task interaction
+    (e.g. from rotary embeddings).
+
+    Parameters
+    ----------
+    exp_name : str
+    layers : list, optional
+    batch_size : int
+    positions_of_interest : list, optional
+    n_minor : int
+    step : int, optional
+    block_size : int
+        Number of adjacent positions per block.
+    show_per_position : bool
+        If True, overlay the per-position R² in lighter style.
+    verbose : bool
+    figsize, log_x, show, show_ylabel : plot options
+    task_batch_size : int
+
+    Returns
+    -------
+    dict
+        ``{'all_hiddens', 'token_info', 'blocked_r2', 'per_pos_r2', 'fig'}``.
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from icl.utils.separability import task_vector_r2_multi
+
+    all_hiddens, token_info = _get_hiddens_cached(
+        exp_name, layers, batch_size, positions_of_interest, n_minor, step,
+        verbose, task_batch_size=task_batch_size,
+    )
+    # all_hiddens: (L, n_positions, V_max, K, B, D)
+
+    if layers is None:
+        _, _, config = nu.load_everything("latent", exp_name)
+        layers = list(range(config.model.num_layers))
+    layers_list = list(layers)
+
+    all_positions = token_info["positions"]
+    n_unique = token_info["n_unique_tokens"]
+
+    if positions_of_interest is None:
+        positions_of_interest = list(all_positions)
+    pos_to_idx = {p: i for i, p in enumerate(all_positions)}
+
+    # ---- divide positions into blocks ----
+    sorted_pos = sorted(p for p in positions_of_interest if p in pos_to_idx)
+    blocks = []
+    for i in range(0, len(sorted_pos), block_size):
+        blocks.append(sorted_pos[i : i + block_size])
+
+    # ---- per-position R² (for comparison) ----
+    per_pos_r2 = None
+    if show_per_position:
+        per_pos_r2 = task_vector_r2_multi(
+            all_hiddens=all_hiddens,
+            token_info=token_info,
+            layers=layers_list,
+            positions=positions_of_interest,
+        )
+
+    # ---- blocked R²: shared θ_{k,a} within each block ----
+    blocked_r2: Dict[int, list] = {}  # layer -> list of (block_center, r2)
+
+    for l_idx, l_num in enumerate(layers_list):
+        if l_idx >= all_hiddens.shape[0]:
+            continue
+        block_results = []
+
+        for block_pos in blocks:
+            # minimum V across block for balanced cells
+            V_block = min(n_unique.get(p, all_hiddens.shape[2]) for p in block_pos)
+            K = all_hiddens.shape[3]
+            B = all_hiddens.shape[4]
+            D = all_hiddens.shape[5]
+            n_t = len(block_pos)
+
+            # Gather cell means and compute per-position mean μ_t
+            # cell_means_per_t: (n_t, V, K, D)
+            cell_means_per_t = torch.zeros(n_t, V_block, K, D)
+            mu_per_t = torch.zeros(n_t, D)
+            for ti, p in enumerate(block_pos):
+                pi = pos_to_idx[p]
+                h_p = all_hiddens[l_idx, pi, :V_block, :, :, :].float()  # (V, K, B, D)
+                cell_means_per_t[ti] = h_p.mean(dim=2)  # (V, K, D)
+                mu_per_t[ti] = h_p.mean(dim=(0, 1, 2))  # (D,)
+
+            # Shared θ_{k,a} from position-demeaned cell means
+            demeaned_cell_means = cell_means_per_t - mu_per_t[:, None, None, :]
+            theta_ka = demeaned_cell_means.mean(dim=0)  # (V, K, D)
+
+            # Compute block R²
+            ss_total_block = 0.0
+            ss_resid_block = 0.0
+            for ti, p in enumerate(block_pos):
+                pi = pos_to_idx[p]
+                h_p = all_hiddens[l_idx, pi, :V_block, :, :, :].float()  # (V, K, B, D)
+                h_demeaned = h_p - mu_per_t[ti]
+                ss_total_block += (h_demeaned ** 2).sum().item()
+                resid = h_demeaned - theta_ka.unsqueeze(2)  # (V, K, B, D)
+                ss_resid_block += (resid ** 2).sum().item()
+
+            r2_block = 1.0 - ss_resid_block / (ss_total_block + 1e-10)
+            block_center = np.mean(block_pos)
+            block_results.append((block_center, r2_block, block_pos))
+
+        blocked_r2[l_num] = block_results
+
+    # ---- plot ----
+    _COLORS = [
+        "#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7",
+        "#56B4E9", "#F0E442", "#000000",
+    ]
+    _LINESTYLES = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, l_num in enumerate(sorted(blocked_r2.keys())):
+        color = _COLORS[i % len(_COLORS)]
+        ls = _LINESTYLES[i % len(_LINESTYLES)]
+
+        # per-position R² (light)
+        if show_per_position and per_pos_r2 is not None and l_num in per_pos_r2:
+            pos_r = per_pos_r2[l_num]
+            pp = sorted(pos_r.keys())
+            ax.plot(
+                pp, [pos_r[p].r2 for p in pp],
+                color=color, linestyle=ls, linewidth=1.0, alpha=0.35,
+            )
+
+        # blocked R² (bold)
+        centers = [br[0] for br in blocked_r2[l_num]]
+        r2_vals = [br[1] for br in blocked_r2[l_num]]
+        ax.plot(
+            centers, r2_vals,
+            color=color, linestyle=ls, linewidth=2.5, marker="o",
+            markersize=4, label=f"Layer {l_num}",
+        )
+
+    ax.set_xlabel("Position", fontsize=14)
+    if show_ylabel:
+        ax.set_ylabel(r"$R^2$  (blocked $\theta_{k,a}$)", fontsize=14)
+    if log_x:
+        ax.set_xscale("log")
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(fontsize=11)
+    ax.grid(axis="y", alpha=0.3)
+    ax.tick_params(labelsize=12)
+    fig.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return {
+        "all_hiddens": all_hiddens,
+        "token_info": token_info,
+        "blocked_r2": blocked_r2,
+        "per_pos_r2": per_pos_r2,
+        "fig": fig,
+    }
+
+
 def _fit_probe_r2_per_position_latent(
     hiddens_by_layer: Dict[int, torch.Tensor],
     posteriors: torch.Tensor,
@@ -256,9 +471,10 @@ def _fit_probe_r2_per_position_latent(
     layers: Sequence[int],
     positions: Sequence[int],
     validation_split: Optional[float] = None,
+    include_position_bias: bool = True,
     include_logit: bool = True,
 ) -> Dict[int, Dict[int, float]]:
-    """Fit OLS h ~ [posterior, one_hot(token), (optional) logit] per position."""
+    """Joint OLS across positions; return per-position R²."""
     n_seq = posteriors.shape[0]
     seq_perm = torch.randperm(n_seq)
     use_split = (
@@ -277,41 +493,55 @@ def _fit_probe_r2_per_position_latent(
         seq_va = seq_perm
 
     post_maj = posteriors[:, :, :n_major].float()
+    p = len(positions)
+    n_vocab = int(real_tokens.max().item()) + 1
+    use_pos_bias = include_position_bias and p > 1
     results: Dict[int, Dict[int, float]] = {}
 
     for layer in layers:
         h_layer = hiddens_by_layer[layer].float()  # (N, P, D)
+        ytr = h_layer[seq_tr].reshape(-1, h_layer.shape[-1])
+        yva = h_layer[seq_va].reshape(-1, h_layer.shape[-1])
+        x_main_tr = post_maj[seq_tr].reshape(-1, post_maj.shape[-1])
+        x_main_va = post_maj[seq_va].reshape(-1, post_maj.shape[-1])
+
+        rt_tr = real_tokens[seq_tr].reshape(-1).long()
+        rt_va = real_tokens[seq_va].reshape(-1).long()
+        x_tok_tr = torch.zeros(rt_tr.shape[0], n_vocab, dtype=torch.float32)
+        x_tok_tr.scatter_(1, rt_tr.unsqueeze(1), 1.0)
+        x_tok_va = torch.zeros(rt_va.shape[0], n_vocab, dtype=torch.float32)
+        x_tok_va.scatter_(1, rt_va.unsqueeze(1), 1.0)
+
+        xtr_parts = [x_main_tr, x_tok_tr]
+        xva_parts = [x_main_va, x_tok_va]
+        if include_logit:
+            xtr_parts.append(logits[seq_tr].reshape(-1, logits.shape[-1]).float())
+            xva_parts.append(logits[seq_va].reshape(-1, logits.shape[-1]).float())
+        if use_pos_bias:
+            pos_tr = torch.arange(p).unsqueeze(0).expand(seq_tr.shape[0], p).reshape(-1)
+            pos_va = torch.arange(p).unsqueeze(0).expand(seq_va.shape[0], p).reshape(-1)
+            x_pos_tr = torch.zeros(pos_tr.shape[0], p, dtype=torch.float32)
+            x_pos_tr.scatter_(1, pos_tr.unsqueeze(1), 1.0)
+            x_pos_va = torch.zeros(pos_va.shape[0], p, dtype=torch.float32)
+            x_pos_va.scatter_(1, pos_va.unsqueeze(1), 1.0)
+            xtr_parts.append(x_pos_tr)
+            xva_parts.append(x_pos_va)
+
+        xtr = torch.cat(xtr_parts, dim=1)
+        xva = torch.cat(xva_parts, dim=1)
+        ones = torch.ones(xtr.shape[0], 1, dtype=xtr.dtype)
+        w_aug = torch.linalg.pinv(torch.cat([xtr, ones], dim=1)) @ ytr
+        w = w_aug[:-1, :]
+        b = w_aug[-1, :]
+        pred_va = (xva @ w + b).reshape(seq_va.shape[0], p, -1)
+        yva_tensor = h_layer[seq_va]
+
         layer_results: Dict[int, float] = {}
         for p_idx, pos in enumerate(positions):
-            ytr = h_layer[seq_tr, p_idx, :]
-            yva = h_layer[seq_va, p_idx, :]
-            x_main_tr = post_maj[seq_tr, p_idx, :]
-            x_main_va = post_maj[seq_va, p_idx, :]
-
-            rt_tr = real_tokens[seq_tr, p_idx].long()
-            rt_va = real_tokens[seq_va, p_idx].long()
-            n_vocab = int(real_tokens[:, p_idx].max().item()) + 1
-            x_tok_tr = torch.zeros(rt_tr.shape[0], n_vocab, dtype=torch.float32)
-            x_tok_tr.scatter_(1, rt_tr.unsqueeze(1), 1.0)
-            x_tok_va = torch.zeros(rt_va.shape[0], n_vocab, dtype=torch.float32)
-            x_tok_va.scatter_(1, rt_va.unsqueeze(1), 1.0)
-
-            xtr_parts = [x_main_tr, x_tok_tr]
-            xva_parts = [x_main_va, x_tok_va]
-            if include_logit:
-                xtr_parts.append(logits[seq_tr, p_idx, :].float())
-                xva_parts.append(logits[seq_va, p_idx, :].float())
-
-            xtr = torch.cat(xtr_parts, dim=1)
-            xva = torch.cat(xva_parts, dim=1)
-            ones = torch.ones(xtr.shape[0], 1, dtype=xtr.dtype)
-            w_aug = torch.linalg.pinv(torch.cat([xtr, ones], dim=1)) @ ytr
-            w = w_aug[:-1, :]
-            b = w_aug[-1, :]
-            pred_va = xva @ w + b
-
-            ss_res = ((yva - pred_va) ** 2).sum().item()
-            ss_tot = ((yva - yva.mean(dim=0)) ** 2).sum().item()
+            yva_p = yva_tensor[:, p_idx, :]
+            pred_p = pred_va[:, p_idx, :]
+            ss_res = ((yva_p - pred_p) ** 2).sum().item()
+            ss_tot = ((yva_p - yva_p.mean(dim=0)) ** 2).sum().item()
             layer_results[pos] = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
         results[layer] = layer_results
@@ -327,6 +557,7 @@ def plot_probe_fit_r2_latent(
     n_minor: int = 0,
     step: Optional[int] = None,
     validation_split: Optional[float] = None,
+    include_position_bias: bool = True,
     uniform_sampling: bool = True,
     sample_mode: str = "train",
     include_logit: bool = True,
@@ -341,6 +572,8 @@ def plot_probe_fit_r2_latent(
     By default (`validation_split=None`) this reports in-sample fit R²
     (no train/val split). Set `validation_split` to a value in (0, 1)
     to report held-out validation R² instead.
+    Uses a shared fit across selected positions; with
+    `include_position_bias=True` adds one-hot position nuisance features.
     """
     import matplotlib.pyplot as plt
     from icl.latent_markov.analysis.probes import _collect_multi_layer_data
@@ -379,6 +612,7 @@ def plot_probe_fit_r2_latent(
         layers=layers,
         positions=positions,
         validation_split=validation_split,
+        include_position_bias=include_position_bias,
         include_logit=include_logit,
     )
 
@@ -419,6 +653,7 @@ def plot_probe_fit_r2_latent(
         "r2_results": r2_results,
         "positions": positions,
         "layers": layers,
+        "include_position_bias": include_position_bias,
         "include_logit": include_logit,
         "fig": fig,
     }
@@ -556,6 +791,8 @@ def plot_anova_separability_latent(
     positions_of_interest: Optional[list] = None,
     n_minor: int = 0,
     step: Optional[int] = None,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
     verbose: bool = False,
     figsize: tuple = (6, 4),
     log_x: bool = True,
@@ -586,6 +823,9 @@ def plot_anova_separability_latent(
     n_minor : int
         Capped at ``sampler.n_minor_tasks``.
     step : int, optional
+    post_layernorm : bool
+    extraction_point : str
+        ``"post_attn"`` (default) or ``"post_mlp"`` (residual stream).
     verbose : bool
     figsize : tuple
     log_x : bool
@@ -609,6 +849,8 @@ def plot_anova_separability_latent(
     all_hiddens, token_info = _get_hiddens_cached(
         exp_name, layers, batch_size, positions_of_interest, n_minor, step, verbose,
         task_batch_size=task_batch_size,
+        post_layernorm=post_layernorm,
+        extraction_point=extraction_point,
     )
 
     if layers is None:
