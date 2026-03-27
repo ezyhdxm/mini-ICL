@@ -3,11 +3,6 @@
 The functions here are pad-mode agnostic: callers supply ``task_pos``
 explicitly so the same code works for ``pad="none"``, ``"bos"``, and
 ``"mapsto"`` layouts.
-
-Padded-sequence specific wrappers (``compute_hiddens``,
-``compute_hiddens_multi``, ``compute_hiddens_token_conditioned``) that
-hardcode mapsto positions have been moved to
-``icl.linear.legacy.task_vecs_padded``.
 """
 
 import torch

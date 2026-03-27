@@ -8,6 +8,12 @@ from typing import Optional
 import icl.utils.notebook_utils as nu
 from icl.latent_markov.analysis.ood import get_latent_sampler
 from icl.utils.logger import setup_logger
+from icl.utils.orth_common import (
+    ols_r2, trial_stats, iqr_err_norm, svd_basis, make_projection_hook,
+    gen_and_cache, ORTH_COLORS, ORTH_BAR_WIDTH, ORTH_GROUP_STEP,
+    orth_bar_offsets, ORTH_RANDOM_BAND_COLOR, ORTH_RANDOM_BAND_ALPHA,
+    ORTH_RANDOM_BAND_HATCH, ORTH_REFERENCE_LINE_COLOR,
+)
 from icl.latent_markov.analysis.probes import train_linear_hidden_predictor
 
 logger = setup_logger(__name__)
@@ -115,16 +121,8 @@ def intervene_optimal_orth_direction(
     if center_task_vecs:
         W_task = W_task - W_task.mean(0, keepdim=True)
 
-    def _svd_basis(M, var_thresh=None):
-        _, S, Vt = torch.linalg.svd(M, full_matrices=False)
-        r = int((S > 1e-6 * S[0]).sum().item())
-        if var_thresh is not None and r > 0:
-            cum = torch.cumsum(S[:r] ** 2, 0)
-            r = min(r, int((cum < var_thresh * cum[-1]).sum().item()) + 1)
-        return Vt[:r].T, r
-
-    B_task, rk_task = _svd_basis(W_task)
-    B_tok, rk_tok = _svd_basis(W_tok, var_thresh=token_var_threshold)
+    B_task, rk_task = svd_basis(W_task)
+    B_tok, rk_tok = svd_basis(W_tok, var_thresh=token_var_threshold)
     Uc, Sc, _ = torch.linalg.svd(torch.cat([B_task, B_tok], 1), full_matrices=False)
     rk_prot = int((Sc > 1e-6 * Sc[0]).sum().item())
     Bp = Uc[:, :rk_prot]
@@ -279,23 +277,10 @@ def intervene_optimal_orth_direction(
     # proj = h * V_opt  (N x k projection onto the optimised subspace)
     proj_ood = h_ood @ V_cpu
 
-    def _ols_r2(X, Y):
-        """OLS R^2 on held-out 20%:  Y ~ X * W + b."""
-        N = X.shape[0]
-        nt = int(0.8 * N)
-        pm = torch.randperm(N)
-        Xa = torch.cat([X[pm[:nt]], torch.ones(nt, 1)], 1)
-        W = torch.linalg.pinv(Xa) @ Y[pm[:nt]]
-        pred = torch.cat([X[pm[nt:]], torch.ones(N - nt, 1)], 1) @ W
-        Yte = Y[pm[nt:]]
-        ss_r = ((Yte - pred) ** 2).sum().item()
-        ss_t = ((Yte - Yte.mean(0)) ** 2).sum().item()
-        return 1.0 - ss_r / ss_t if ss_t > 0 else float("nan")
-
     # R^2(bigram -> proj): can bigram stats predict the V_opt projection?
     # R^2(proj -> bigram): does V_opt projection predict bigram stats?
-    r2_bi2v = _ols_r2(bi_ood, proj_ood)
-    r2_v2bi = _ols_r2(proj_ood, bi_ood)
+    r2_bi2v = ols_r2(bi_ood, proj_ood)
+    r2_v2bi = ols_r2(proj_ood, bi_ood)
     
     # Extended feature set R^2 (enriched with unigram, entropy, position)
     # Collect enriched features on OOD data
@@ -357,8 +342,8 @@ def intervene_optimal_orth_direction(
     enrich_ood = _collect_enriched_features(sampler_ood, "minor", n_samples_probe)
     
     # Compute R^2 with enriched features
-    r2_enrich2v = _ols_r2(enrich_ood, proj_ood)
-    r2_v2enrich = _ols_r2(proj_ood, enrich_ood)
+    r2_enrich2v = ols_r2(enrich_ood, proj_ood)
+    r2_v2enrich = ols_r2(proj_ood, enrich_ood)
 
     # Baseline: R^2 for random rank-k subspace in orth complement
     U_orth_cpu = U_orth.cpu().float()
@@ -367,8 +352,8 @@ def intervene_optimal_orth_direction(
     for _ in range(N_RAND):
         Vr, _ = torch.linalg.qr(U_orth_cpu @ torch.randn(orth_dim, n_directions))
         rp = h_ood @ Vr
-        rand_bi2v.append(_ols_r2(bi_ood, rp))
-        rand_v2bi.append(_ols_r2(rp, bi_ood))
+        rand_bi2v.append(ols_r2(bi_ood, rp))
+        rand_v2bi.append(ols_r2(rp, bi_ood))
     r2_rand_bi2v = float(np.mean(rand_bi2v))
     r2_rand_v2bi = float(np.mean(rand_v2bi))
 
@@ -427,15 +412,11 @@ def intervene_optimal_orth_direction(
             s = s.to(device)
             with torch.no_grad():
                 bl = model(s)
-            def _hook(mod, inp, out, _P=P_v):
-                h = out if torch.is_tensor(out) else out[0]
-                hm = h - scale * (h @ _P)
-                return hm if torch.is_tensor(out) else (hm,) + out[1:]
             _eval_target = (
                 model.layers[layer] if extraction_point == "post_mlp"
                 else model.layers[layer].attn_block
             )
-            handle = _eval_target.register_forward_hook(_hook)
+            handle = _eval_target.register_forward_hook(make_projection_hook(P_v, scale))
             try:
                 with torch.no_grad():
                     li = model(s)
@@ -804,23 +785,9 @@ def plot_optimal_orth_direction_across_layers(
     tgt_label = "Minor" if opt_target == "minor" else "OOD"
     tgt_abbr  = "Min."  if opt_target == "minor" else "OOD"
 
-    def _gen_and_cache(sampler, mode, n):
-        """Generate sequences, run unhooked forward pass, cache logits."""
-        seqs, logits = [], []
-        for _ in range(max(1, (n + B - 1) // B)):
-            g = sampler.generate(mode=mode, task=None, num_samples=B, epochs=1)
-            s = (g[0] if isinstance(g, (tuple, list)) else g)
-            if s.dim() == 3:
-                s = s.squeeze(0)
-            s = s.to(device)
-            with torch.no_grad():
-                logits.append(model(s).cpu())
-            seqs.append(s.cpu())
-        return seqs, logits
-
-    cache_maj = _gen_and_cache(sampler_major, "major", n_samples_eval)
-    cache_ood = _gen_and_cache(sampler_ood, "minor", n_samples_eval)
-    cache_minor = _gen_and_cache(sampler_minor, "minor", n_samples_eval)
+    cache_maj = gen_and_cache(model, sampler_major, "major", n_samples_eval, B, device)
+    cache_ood = gen_and_cache(model, sampler_ood, "minor", n_samples_eval, B, device)
+    cache_minor = gen_and_cache(model, sampler_minor, "minor", n_samples_eval, B, device)
     cache_tgt = cache_minor if opt_target == "minor" else cache_ood
 
     # =====================================================================
@@ -972,15 +939,11 @@ def plot_optimal_orth_direction_across_layers(
         ld_n = 0
         for s_cpu, bl_cpu in zip(seqs, base_logits):
             s = s_cpu.to(device)
-            def _hook(mod, inp, out, _P=P):
-                h = out if torch.is_tensor(out) else out[0]
-                hm = h - scale * (h @ _P)
-                return hm if torch.is_tensor(out) else (hm,) + out[1:]
             _eval_tgt = (
                 model.layers[layer_idx] if extraction_point == "post_mlp"
                 else model.layers[layer_idx].attn_block
             )
-            handle = _eval_tgt.register_forward_hook(_hook)
+            handle = _eval_tgt.register_forward_hook(make_projection_hook(P, scale))
             try:
                 with torch.no_grad():
                     li = model(s)
@@ -1022,19 +985,6 @@ def plot_optimal_orth_direction_across_layers(
             "delta_per_batch": batch_deltas,
         }
 
-    def _ols_r2(X, Y):
-        """OLS regression R^2 on held-out 20%:  Y ~ X * W + b."""
-        N = X.shape[0]
-        nt = int(0.8 * N)
-        pm = torch.randperm(N)
-        Xa = torch.cat([X[pm[:nt]], torch.ones(nt, 1)], 1)
-        W = torch.linalg.pinv(Xa) @ Y[pm[:nt]]
-        pred = torch.cat([X[pm[nt:]], torch.ones(N - nt, 1)], 1) @ W
-        Yte = Y[pm[nt:]]
-        ss_r = ((Yte - pred) ** 2).sum().item()
-        ss_t = ((Yte - Yte.mean(0)) ** 2).sum().item()
-        return 1.0 - ss_r / ss_t if ss_t > 0 else float("nan")
-
     def _mlp_r2(X, Y, hid=64, ep=100, lr=1e-3):
         """Two-layer MLP R^2 on held-out 20%."""
         N = X.shape[0]
@@ -1073,16 +1023,8 @@ def plot_optimal_orth_direction_across_layers(
         if center_task_vecs:
             W_task = W_task - W_task.mean(0, keepdim=True)
 
-        def _svd_basis(M, var_thresh=None):
-            _, S, Vt = torch.linalg.svd(M, full_matrices=False)
-            r = int((S > 1e-6 * S[0]).sum().item())
-            if var_thresh is not None and r > 0:
-                cum = torch.cumsum(S[:r] ** 2, 0)
-                r = min(r, int((cum < var_thresh * cum[-1]).sum().item()) + 1)
-            return Vt[:r].T, r
-
-        B_task, rk_task = _svd_basis(W_task)
-        B_tok, rk_tok = _svd_basis(W_tok, var_thresh=token_var_threshold)
+        B_task, rk_task = svd_basis(W_task)
+        B_tok, rk_tok = svd_basis(W_tok, var_thresh=token_var_threshold)
         Uc, Sc, _ = torch.linalg.svd(
             torch.cat([B_task, B_tok], 1), full_matrices=False,
         )
@@ -1100,16 +1042,11 @@ def plot_optimal_orth_direction_across_layers(
         """CE loss on cached validation batch with intervention."""
         P = V_mat @ V_mat.T
 
-        def _hook(mod, inp, out, _P=P):
-            h = out if torch.is_tensor(out) else out[0]
-            return (h - scale * (h @ _P)) if torch.is_tensor(out) \
-                else (h - scale * (h @ _P),) + out[1:]
-
         _val_tgt = (
             model.layers[layer_idx] if extraction_point == "post_mlp"
             else model.layers[layer_idx].attn_block
         )
-        hnd = _val_tgt.register_forward_hook(_hook)
+        hnd = _val_tgt.register_forward_hook(make_projection_hook(P, scale))
         try:
             with torch.no_grad():
                 logits_v = model(val_seq)
@@ -1281,7 +1218,7 @@ def plot_optimal_orth_direction_across_layers(
 
         def _r2_stable(A, B):
             """Mean R² over n_rep random 80/20 splits — reduces split noise."""
-            vals = [_ols_r2(A, B) for _ in range(n_rep)]
+            vals = [ols_r2(A, B) for _ in range(n_rep)]
             return float(np.mean([v for v in vals if not np.isnan(v)] or [float("nan")]))
 
         def _X_without(name):
@@ -1419,16 +1356,16 @@ def plot_optimal_orth_direction_across_layers(
         proj_tgt = h_tgt[l] @ V_cpu
 
         # Bigram-only R² (kept for backward compatibility with plots)
-        r2_bi2v = _ols_r2(bi_tgt, proj_tgt)
-        r2_v2bi = _ols_r2(proj_tgt, bi_tgt)
+        r2_bi2v = ols_r2(bi_tgt, proj_tgt)
+        r2_v2bi = ols_r2(proj_tgt, bi_tgt)
 
         # Full enriched R² — enrich_tgt is row-aligned with h_tgt (same sequences)
-        r2_enrich2v = _ols_r2(enrich_tgt, proj_tgt)
-        r2_v2enrich = _ols_r2(proj_tgt, enrich_tgt)
+        r2_enrich2v = ols_r2(enrich_tgt, proj_tgt)
+        r2_v2enrich = ols_r2(proj_tgt, enrich_tgt)
 
         # Marginal R² per individual feature group (forward: feat_i → V_opt)
         feat_r2_marginal = {
-            name: _ols_r2(enrich_tgt[:, sl], proj_tgt)
+            name: ols_r2(enrich_tgt[:, sl], proj_tgt)
             for name, sl in feat_groups.items()
         }
 
@@ -1444,10 +1381,10 @@ def plot_optimal_orth_direction_across_layers(
                 U_orth_cpu @ torch.randn(orth_dim, n_directions),
             )
             rp = h_tgt[l] @ Vr
-            rand_bi2v.append(_ols_r2(bi_tgt, rp))
-            rand_v2bi.append(_ols_r2(rp, bi_tgt))
-            rand_enrich2v.append(_ols_r2(enrich_tgt, rp))
-            rand_v2enrich.append(_ols_r2(rp, enrich_tgt))
+            rand_bi2v.append(ols_r2(bi_tgt, rp))
+            rand_v2bi.append(ols_r2(rp, bi_tgt))
+            rand_enrich2v.append(ols_r2(enrich_tgt, rp))
+            rand_v2enrich.append(ols_r2(rp, enrich_tgt))
         r2_rand_bi2v = float(np.mean(rand_bi2v))
         r2_rand_v2bi = float(np.mean(rand_v2bi))
         r2_rand_enrich2v = float(np.mean(rand_enrich2v))
@@ -1502,15 +1439,7 @@ def plot_optimal_orth_direction_across_layers(
                 bo, io = _eval_hooked(l, Pr, cache)
                 rand_acc[key].append(io - bo)
 
-        def _rand_stats(vals):
-            arr = np.array(vals, dtype=float)
-            return {
-                "mean": float(arr.mean()),
-                "q25": float(np.percentile(arr, 25)),
-                "q75": float(np.percentile(arr, 75)),
-            }
-
-        rand_stats = {k: _rand_stats(v) for k, v in rand_acc.items()}
+        rand_stats = {k: trial_stats(v) for k, v in rand_acc.items()}
         rand_delta_tgt = rand_stats["minor" if opt_target == "minor" else "ood"]["mean"]
 
         for info in bi_explained.values():
@@ -1677,24 +1606,7 @@ def plot_optimal_orth_direction_across_layers(
     # Black error bars = IQR across eval batches (also normalized).
     # Shaded band = random same-rank subspace (OOD, normalized).
 
-    def _iqr_err_norm(key_batch, g_m):
-        """IQR error bars in normalized (%) units."""
-        lo_arr, hi_arr = [], []
-        for l in layers:
-            vals = all_results[l][key_batch]
-            if len(vals) < 2:
-                lo_arr.append(0.0); hi_arr.append(0.0); continue
-            arr = np.array(vals, dtype=float) / g_m * 100
-            mn = arr.mean()
-            lo_arr.append(abs(mn - np.percentile(arr, 25)))
-            hi_arr.append(abs(np.percentile(arr, 75) - mn))
-        return np.array(lo_arr), np.array(hi_arr)
-
-    # ColorBrewer-inspired, distinguishable in greyscale and for colour-blind readers
-    COLORS = {"maj": "#2166ac", "ood": "#d6604d", "minor": "#1a9850"}
-    bw_bar = 0.22
-    g_step = 0.24
-    MC     = {"maj": -g_step, "ood": 0.0, "minor": +g_step}
+    MC = orth_bar_offsets(has_minor=True)
 
     # Normalized deltas (% of ICL gain disrupted); fall back to raw if gains unknown
     if gain_maj is not None:
@@ -1717,19 +1629,21 @@ def plot_optimal_orth_direction_across_layers(
 
     fig_delta, ax = plt.subplots(figsize=figsize, dpi=150)
 
-    ax.axhspan(0, _rand_q75_norm, color="#b0b8c8", alpha=0.35, zorder=1,
-               hatch="///", label="Random")
-    ax.axhline(_rand_q75_norm, color="#556070", lw=1.2, ls="-", zorder=2, alpha=0.85)
+    ax.axhspan(0, _rand_q75_norm, color=ORTH_RANDOM_BAND_COLOR,
+               alpha=ORTH_RANDOM_BAND_ALPHA, zorder=1,
+               hatch=ORTH_RANDOM_BAND_HATCH, label="Random")
+    ax.axhline(_rand_q75_norm, color=ORTH_REFERENCE_LINE_COLOR, lw=1.2, ls="-",
+               zorder=2, alpha=0.85)
 
     for mode, norm_vals, (key_pb, g_m), label in [
         ("maj",   norm_maj_l,   ("delta_per_batch_major", gain_maj   or 1.0), "Maj."),
         ("ood",   norm_ood_l,   ("delta_per_batch_ood",   gain_ood   or 1.0), "OOD"),
         ("minor", norm_minor_l, ("delta_per_batch_minor", gain_minor or 1.0), "Min."),
     ]:
-        c  = COLORS[mode]
+        c  = ORTH_COLORS[mode]
         xm = x + MC[mode]
-        lo, hi = _iqr_err_norm(key_pb, g_m)
-        ax.bar(xm, norm_vals, bw_bar, color=c, linewidth=0, zorder=3, label=label)
+        lo, hi = iqr_err_norm(all_results, layers, key_pb, g_m)
+        ax.bar(xm, norm_vals, ORTH_BAR_WIDTH, color=c, linewidth=0, zorder=3, label=label)
         ax.errorbar(xm, norm_vals, yerr=[lo, hi], fmt="none",
                     ecolor="black", elinewidth=0.9, capsize=3, capthick=0.9, zorder=5)
 
@@ -1880,8 +1794,8 @@ def plot_optimal_orth_direction_across_layers(
     # -- Plot 5: Prediction-explained intervention (normalized) --
     # Bar geometry: 4 flush bars per layer, interleaved by condition
     # Order: [V_opt OOD | Pred OOD | V_opt tgt | Pred tgt] — no gaps
-    C_OOD = COLORS["ood"]
-    C_TGT = COLORS["minor"] if opt_target == "minor" else COLORS["ood"]
+    C_OOD = ORTH_COLORS["ood"]
+    C_TGT = ORTH_COLORS["minor"] if opt_target == "minor" else ORTH_COLORS["ood"]
     ALPHA_PRED = 0.42
 
     bw_p       = 0.17

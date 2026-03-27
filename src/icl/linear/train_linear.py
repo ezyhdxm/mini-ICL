@@ -6,7 +6,7 @@ from ml_collections import ConfigDict
 import hashlib
 import json
 
-from icl.linear.lr_task import *
+from icl.linear.lr_task import Task, get_task, get_task_name
 from icl.linear.lr_models import get_model
 from icl.linear.lr_optimize import get_optimizer_and_lr_schedule
 from icl.linear.lr_eval import get_bsln_preds, get_model_preds, mse

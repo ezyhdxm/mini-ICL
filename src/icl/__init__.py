@@ -9,21 +9,17 @@ from icl.utils import (
     train_model_with_plot,
     train_model,
     load_everything,
-    view_mask,
 )
 from icl.linear import (
     extract_hidden,
     extract_hidden_multi,
     get_config,
-    get_attn,
     DiscreteMMSE,
     Ridge,
 )
 
 from icl.latent_markov import (
     LatentMarkov,
-    LatentIDBayes,
-    LatentOODBayes,
 )
 
 # Define what gets imported with "from icl import *"
@@ -37,14 +33,10 @@ __all__ = [
     "train_model_with_plot",
     "train_model",
     "load_everything",
-    "view_mask",
     "extract_hidden",
     "extract_hidden_multi",
-    "get_attn",
     "DiscreteMMSE",
     "Ridge",
     "get_config",
     "LatentMarkov",
-    "LatentIDBayes",
-    "LatentOODBayes",
 ]

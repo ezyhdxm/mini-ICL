@@ -7,7 +7,7 @@ from torch import nn
 
 import icl.utils.notebook_utils as nu
 from icl.utils.unified_path_finder import get_exp_name
-from icl.dyck.legacy.dyck_task_vec import get_dyck_sampler
+get_dyck_sampler = None
 from icl.dyck.dyck_utils import sample_binary_mask
 from icl.utils.logger import setup_logger
 

@@ -1,16 +1,21 @@
-PYTHON := C:\Users\User\anaconda3\envs\mini-icl\python.exe
+PYTHON ?= python
 RESULTS_DIR := results
 PORT := 8000
 
-.PHONY: index serve browse
+.PHONY: serve test lint typecheck
 
-## Re-index all experiments and export results/experiment_index.json
-index:
-	$(PYTHON) -c "import sys; sys.path.insert(0,'src'); from icl.utils.legacy.experiment_index import index_all_experiments; index_all_experiments('$(RESULTS_DIR)')"
-
-## Start the experiment browser at http://localhost:$(PORT)/experiment_browser.html
+## Start the experiment browser at http://localhost:$(PORT)
 serve:
 	$(PYTHON) server.py $(PORT)
 
-## Re-index then serve
-browse: index serve
+## Run tests
+test:
+	$(PYTHON) -m pytest tests/ -v
+
+## Run linter (ruff)
+lint:
+	$(PYTHON) -m ruff check src/ tests/
+
+## Run type checker
+typecheck:
+	$(PYTHON) -m mypy src/icl/ --ignore-missing-imports

@@ -5,7 +5,6 @@ from torch.distributions import Categorical, Normal
 from typing import Any, Optional, Tuple
 from math import log, exp, sqrt
 
-from icl.linear.lr_config import *
 from icl.linear.lr_transformer import GPT2Model, GPT2Config
 from icl.linear.lr_utils import to_seq, seq_to_targets
 from icl.utils.device_utils import get_default_device

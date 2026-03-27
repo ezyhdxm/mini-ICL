@@ -477,6 +477,3 @@ class LatentMarkov:
     
 
 
-# ── backward-compat re-exports (moved to legacy) ────────────────────
-from icl.latent_markov.legacy.latent_bayes import LatentIDBayes, LatentOODBayes  # noqa: F401,E402
-

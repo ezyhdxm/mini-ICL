@@ -1,34 +1,27 @@
-import torch
-import torch.nn as nn  
-from collections import defaultdict
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from absl import logging
-import pickle
-import os
-import wandb
 import json
-import nvtx
-from contextlib import contextmanager, nullcontext
-import timeit
 import math
+import os
+import pickle
+import timeit
+from collections import defaultdict
+from contextlib import contextmanager, nullcontext
 
-from icl.utils.logger import setup_logger
+import nvtx
+import torch
+import torch.nn as nn
+import wandb
 
-logger = setup_logger(__name__)
-
-
-from icl.latent_markov import *
 from icl.coin.coin import Coins
 from icl.dyck.dyck import DyckPathTask
-# from icl.models.ngram_latent import *
-from .train_utils import get_attn_base, get_train_result, tabulate_model
 from icl.figures.plot import get_loss_plots
+from icl.latent_markov import LatentMarkov
 from icl.models.attention import MultiHeadAttention
-# from icl.figures.head_view import get_head_view
-# from icl.models.ngram_trigger import *
-# from icl.tasks.causal_graph import *
+from icl.utils.logger import setup_logger
 
-from .basic import get_hash
+from .basic import get_hash, canonicalize_config_for_exp
+from .train_utils import get_attn_base, get_train_result, tabulate_model
+
+logger = setup_logger(__name__)
 
 
 # use for profiling
@@ -99,12 +92,13 @@ class BaseTrainer:
         self.config = config
         self.mixed_precision = config.mixed_precision if hasattr(config, "mixed_precision") else True
         self.profile = config.profile if hasattr(config, "profile") else False
+        canonicalize_config_for_exp(config)
         self.exp_name = f"train_{get_hash(config)}"
         self.exp_dir = os.path.join(config.work_dir, self.exp_name)  
         cur_dir = os.getcwd()
         if cur_dir.endswith("notebooks"):
             self.exp_dir = os.path.join("..", self.exp_dir)
-        logging.info(f"Train Experiment\nNAME: {self.exp_name}\nCONFIG:\n{config}")
+        logger.info(f"Train Experiment\nNAME: {self.exp_name}\nCONFIG:\n{config}")
         self.MAX_SIZE = 1024
         self.log_path = os.path.join(self.exp_dir, "log.json")
         if os.path.exists(self.log_path):
@@ -337,6 +331,7 @@ def train_model(config):
 
 
 def train_model_with_plot(model, config, show=False, verbose=False):
+    canonicalize_config_for_exp(config)
     exp_name = f"train_{get_hash(config)}"
     exp_dir = os.path.join(config.work_dir, exp_name)
 

@@ -1,5 +1,4 @@
 import torch
-from icl.latent_markov import *
 from torchinfo import summary
 
 

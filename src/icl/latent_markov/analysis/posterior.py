@@ -511,8 +511,7 @@ def plot_latent_task_posterior(
     Generate random latent Markov samples and plot the Bayesian task
     posterior P(Z=k | X_{0:t}) over real-token positions.
 
-    Non-padded counterpart of the legacy ``plot_latent_task_posterior``
-    (in ``icl.latent_markov.legacy.unified_latent``).
+    Non-padded counterpart of the original ``plot_latent_task_posterior``.
 
     The posterior is always computed with the **original training prior**
     (same ``p_minor`` as was used during model training).

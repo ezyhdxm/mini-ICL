@@ -13,22 +13,17 @@ from icl.latent_markov.analysis.bayes import (
 )
 
 from icl.latent_markov.analysis.variance import (
-    get_task_variance,
-    plot_task_variance,
     get_token_conditioned_hiddens,
     plot_p1_variance,
     plot_task_vector_r2_latent,
     plot_task_vector_r2_blocked_latent,
     plot_probe_fit_r2_latent,
     plot_anova_separability_latent,
-    plot_w_variance_vs_position,
 )
 
 from icl.latent_markov.analysis.probes import (
     train_linear_hidden_predictor,
     plot_val_r2_across_layers,
-    train_linear_softmax_posterior_predictor,
-    plot_posterior_predictor_loss_vs_k,
     plot_averaging_r2_latent,
 )
 
@@ -53,12 +48,6 @@ from icl.latent_markov.analysis.directions import (
 )
 
 from icl.latent_markov.analysis.kl_divergence import (
-    compute_kl_divergence_vs_bayes,
-    plot_kl_divergence,
-    analyze_kl_divergence,
-    compute_kl_divergence_vs_dirichlet_bayes,
-    analyze_kl_divergence_dirichlet,
-    compare_bayes_predictors,
     plot_kl_model_vs_two_bayes_latent,
     plot_kl_model_vs_two_bayes_latent_across_k,
     plot_kl_model_vs_two_bayes_latent_over_steps,
@@ -67,11 +56,8 @@ from icl.latent_markov.analysis.kl_divergence import (
 
 from icl.latent_markov.analysis.ood import (
     compute_latent_ood_metrics,
-    process_latent_ood_evolve_checkpoints,
     get_latent_sampler,
     get_all_samples,
-    process_latent_ood_evolve_task_diversity,
-    process_ood_minor_metric,
 )
 
 from icl.latent_markov.analysis.interventions import (

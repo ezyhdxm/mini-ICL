@@ -702,3 +702,119 @@ def build_trajectory_tensor(
     final_task_vecs = task_vecs[-1]  # (K_id, D)  — last layer
 
     return traj, r2, final_task_vecs
+
+
+# ---------------------------------------------------------------------------
+# ICL performance evaluation (next-token accuracy & cross-entropy loss)
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def evaluate_icl_performance(
+    model: nn.Module,
+    tokenizer,
+    prompts: List[str],
+    answers: List[str],
+    batch_size: int = 8,
+    device: str = "cuda",
+    show_progress: bool = True,
+) -> dict:
+    """Evaluate ICL next-token accuracy and cross-entropy loss.
+
+    For each (prompt, answer) pair the model is given the prompt and we check
+    whether the first generated token matches the first token of the
+    ground-truth answer.  Cross-entropy loss is computed over the *first
+    answer token* only (the most informative signal for ICL evaluation).
+
+    Parameters
+    ----------
+    model : nn.Module
+        Causal LM in eval mode.
+    tokenizer
+        HuggingFace tokenizer (``padding_side="left"``).
+    prompts : list of str
+        ICL prompts ending with ``"<query_x>: "`` (no answer appended).
+    answers : list of str
+        Ground-truth answer strings corresponding to each prompt.
+    batch_size : int
+    device : str
+    show_progress : bool
+
+    Returns
+    -------
+    dict with keys:
+        ``"accuracy"``          – float, fraction of prompts where greedy
+                                  prediction matches the first answer token.
+        ``"mean_loss"``         – float, mean cross-entropy loss over all
+                                  prompts (first answer token only).
+        ``"per_sample_correct"``– list of bool, length N.
+        ``"per_sample_loss"``   – list of float, length N.
+    """
+    import torch.nn.functional as F
+
+    n = len(prompts)
+    n_batches = math.ceil(n / batch_size)
+
+    per_correct: List[bool] = []
+    per_loss: List[float] = []
+
+    for bi in range(n_batches):
+        if show_progress:
+            print(f"  eval batch {bi + 1}/{n_batches}", end="\r")
+
+        batch_prompts = prompts[bi * batch_size : (bi + 1) * batch_size]
+        batch_answers = answers[bi * batch_size : (bi + 1) * batch_size]
+        B = len(batch_prompts)
+
+        enc = tokenizer(
+            batch_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=2048,
+        )
+        input_ids = enc["input_ids"].to(device)
+        attention_mask = enc["attention_mask"].to(device)
+
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = outputs.logits  # (B, S, V)
+
+        # The last *real* token position in each sequence is the query ":"
+        # or trailing space.  The logits at this position predict the next
+        # token, i.e. the first token of the answer.
+        last_pos = attention_mask.sum(dim=1) - 1  # (B,)
+
+        for b in range(B):
+            pos = last_pos[b].item()
+            logit_vec = logits[b, pos]  # (V,)
+
+            answer_tokens = tokenizer(
+                batch_answers[b], add_special_tokens=False
+            )["input_ids"]
+            if len(answer_tokens) == 0:
+                per_correct.append(False)
+                per_loss.append(float("inf"))
+                continue
+
+            target_id = answer_tokens[0]
+            pred_id = logit_vec.argmax().item()
+
+            per_correct.append(pred_id == target_id)
+
+            loss = F.cross_entropy(
+                logit_vec.unsqueeze(0).float(),
+                torch.tensor([target_id], device=logit_vec.device),
+            )
+            per_loss.append(loss.item())
+
+    if show_progress:
+        print(f"  Done ({n} prompts evaluated)                ")
+
+    accuracy = sum(per_correct) / n if n > 0 else 0.0
+    mean_loss = sum(per_loss) / n if n > 0 else 0.0
+
+    return {
+        "accuracy": accuracy,
+        "mean_loss": mean_loss,
+        "per_sample_correct": per_correct,
+        "per_sample_loss": per_loss,
+    }

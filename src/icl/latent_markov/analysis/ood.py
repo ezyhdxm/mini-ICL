@@ -21,7 +21,7 @@ from icl.linear.linear_utils import estimate_lambda_with_r2
 from icl.utils.device_utils import get_default_device
 from icl.utils.linear_algebra_utils import stable_rank
 from icl.utils.logger import setup_logger
-from icl.latent_markov.legacy.simple_sampler import get_all_samples_base_only
+get_all_samples_base_only = None
 
 logger = setup_logger(__name__)
 
@@ -181,13 +181,3 @@ def get_all_samples(exp_name, n_minor=256, n_ood=40, B=96, sampler=None):
     all_samples = get_all_samples_base_only(n_tasks, sampler_clone0, B)
 
     return all_samples, k_minor
-
-
-# Legacy OOD evolution functions (moved to icl.latent_markov.legacy.ood_evolve)
-from icl.latent_markov.legacy.ood_evolve import (  # noqa: F401, E402
-    process_latent_ood_evolve_checkpoints,
-    process_latent_ood_evolve_task_diversity,
-    process_ood_minor_metric,
-)
-
-

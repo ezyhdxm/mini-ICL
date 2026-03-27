@@ -4,7 +4,6 @@ Requires:
 """
 from . import plot_config  # noqa: F401 - paper-friendly defaults
 
-import re
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -21,34 +20,20 @@ except Exception as e:
         "Install it with: pip install adjustText"
     ) from e
 
+from .traj_plot._helpers import (
+    _to_np,
+    _strip_b_suffix,
+    _prettify_label,
+    _rgba,
+    _pow2_time_indices,
+    _r2_to_sizes_area,
+    _project_to_plane,
+)
+
 
 # ============================================================
-# Helpers (self-contained)
+# Helpers (unique to posterior_plot)
 # ============================================================
-
-def _to_np(x):
-    """Convert torch/np/list-like to numpy (no copy unless needed)."""
-    if x is None:
-        return None
-    if hasattr(x, "detach"):
-        return x.detach().cpu().numpy()
-    return np.asarray(x)
-
-
-def _strip_b_suffix(s: str) -> str:
-    return re.sub(r"\|b\d+$", "", str(s))
-
-
-def _prettify_label(s: str) -> str:
-    s = _strip_b_suffix(str(s))
-    m = re.fullmatch(r"(item|task)[_\-]?(\d+)", s, flags=re.IGNORECASE)
-    if m:
-        idx = int(m.group(2))
-        return f"Task {idx + 1}"
-    s2 = s.replace("_", " ").strip()
-    if s2.lower() == s2 and any(c.isalpha() for c in s2):
-        s2 = s2.title()
-    return s2
 
 
 def _normalize_major_and_ood_labels(task_labels, *, default_ood="OOD"):
@@ -85,24 +70,6 @@ def _normalize_major_and_ood_labels(task_labels, *, default_ood="OOD"):
     return maj_default, flat[-1]
 
 
-def _rgba(color, a):
-    r, g, b, _ = mcolors.to_rgba(color)
-    return (r, g, b, float(np.clip(a, 0.0, 1.0)))
-
-
-def _pow2_time_indices(T, include_last=True):
-    idx = []
-    p = 1
-    while p <= T:
-        idx.append(p - 1)
-        p *= 2
-    if include_last and T > 0:
-        idx.append(T - 1)
-    idx = np.unique(np.array(idx, dtype=int))
-    idx.sort()
-    return idx
-
-
 def _refine_midpoints(indices, levels, T):
     idx = np.unique(np.array(indices, dtype=int))
     idx.sort()
@@ -126,36 +93,6 @@ def _refine_midpoints(indices, levels, T):
         idx = np.unique(np.concatenate([idx, np.array([0, T - 1], dtype=int)]))
         idx.sort()
     return idx
-
-
-def _r2_to_sizes_area(R2, *, size_min, size_max):
-    """Map R2 -> marker areas (scatter uses area in pt^2)."""
-    R2 = np.asarray(R2, dtype=float)
-    r2_min, r2_max = float(np.min(R2)), float(np.max(R2))
-    if r2_max == r2_min:
-        size_lin = np.full_like(R2, (size_min + size_max) / 2.0, dtype=float)
-    else:
-        size_lin = size_min + (R2 - r2_min) / (r2_max - r2_min) * (size_max - size_min)
-    return (size_lin ** 2).astype(float)
-
-
-def _project_to_plane(X, F):
-    """
-    Project (K,T,D) trajectories and (3,D) reference vectors into 2D using SVD on F.
-    """
-    X = np.asarray(X, dtype=float)
-    F = np.asarray(F, dtype=float)
-    if F.ndim != 2 or F.shape[0] != 3 or F.shape[1] != X.shape[-1]:
-        raise ValueError(f"final_task_vecs must be (3,D) with D={X.shape[-1]}, got {F.shape}")
-
-    F_center = F.mean(axis=0, keepdims=True)
-    F0 = F - F_center
-    _, _, Vt = np.linalg.svd(F0, full_matrices=False)
-    basis = Vt[:2].T  # (D,2)
-
-    X_proj = np.tensordot(X - F_center.reshape(1, 1, -1), basis, axes=([2], [0]))  # (K,T,2)
-    F_proj = (F - F_center) @ basis  # (3,2)
-    return X_proj, F_proj
 
 
 def _alpha_piecewise(u, a0, a_mid, a1):
@@ -356,6 +293,342 @@ def _add_pie_marker(
 
 
 # ============================================================
+# Annotation helpers (moved from main function for reuse)
+# ============================================================
+
+def _bbox_padded(bbox, pad_px: float):
+    try:
+        return bbox.padded(float(pad_px))
+    except Exception:
+        from matplotlib.transforms import Bbox
+        return Bbox.from_extents(
+            bbox.x0 - pad_px, bbox.y0 - pad_px,
+            bbox.x1 + pad_px, bbox.y1 + pad_px,
+        )
+
+
+def _prune_overlapping_texts(texts, priorities, *, renderer, pad_px=2.0):
+    """
+    Greedy: keep highest priority labels whose bboxes don't overlap.
+    Returns keep_indices (in original order). Removes the others from the axes.
+    """
+    if len(texts) <= 1:
+        return list(range(len(texts)))
+
+    priorities = np.asarray(priorities, dtype=float)
+    order = np.argsort(-priorities)  # highest first
+
+    kept_bboxes = []
+    keep = []
+
+    for i in order:
+        if texts[i] is None:
+            continue
+        bbox = texts[i].get_window_extent(renderer=renderer)
+        bbox = _bbox_padded(bbox, float(pad_px))
+
+        overlaps = any(bbox.overlaps(b) for b in kept_bboxes)
+        if not overlaps:
+            kept_bboxes.append(bbox)
+            keep.append(int(i))
+
+    keep_set = set(keep)
+    for j, txt in enumerate(texts):
+        if j not in keep_set and txt is not None:
+            try:
+                txt.remove()
+            except Exception:
+                try:
+                    txt.set_visible(False)
+                except Exception:
+                    pass
+
+    keep_sorted = sorted(keep)  # preserve original order
+    return keep_sorted
+
+
+def _annotate_posterior_trajectory(
+    ax, fig,
+    *,
+    t_ann, T, P, corner_rgbs, Pood, t_show, F_proj,
+    ood_idx, sizes_area,
+    show_final_task_vecs,
+    ood_point_style,
+    annotation_names, maj_names,
+    pie_min_radius_pt,
+    gid_prefix,
+    annotation_initial_offset_frac,
+    annotation_fontsize,
+    annotation_linespacing,
+    annotation_box_pad,
+    annotation_box_alpha,
+    annotation_box_lw,
+    adjusttext_lim,
+    annotation_min_leader_px,
+    annotation_leader_max_push_iter,
+    annotation_prune_overlaps,
+    annotation_prune_pad_px,
+    annotation_prune_use_change_score,
+    annotation_change_metric,
+    annotation_prune_keep_end,
+    annotation_prune_keep_mid,
+    annotation_prune_keep_first,
+    annotation_leader_use_bbox,
+    annotation_leader_pad_px,
+    annotation_leader_shrinkA_pt,
+    annotation_leader_shrinkB_extra_pt,
+    annotation_arrow_lw,
+    annotation_arrow_alpha,
+):
+    """Place posterior-distribution annotations on the trajectory plot using adjustText."""
+
+    def _set_gid(artist, suffix):
+        try:
+            artist.set_gid(f"{gid_prefix}:{suffix}")
+        except Exception:
+            pass
+        return artist
+
+    def _closest_point_on_bbox(bbox, x_px, y_px):
+        cx = float(np.clip(x_px, bbox.x0, bbox.x1))
+        cy = float(np.clip(y_px, bbox.y0, bbox.y1))
+        return np.array([cx, cy], dtype=float)
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    span_x = float(np.ptp(Pood[:, 0]) + 1e-9)
+    span_y = float(np.ptp(Pood[:, 1]) + 1e-9)
+
+    frac = float(annotation_initial_offset_frac)
+    dx0 = frac * span_x
+    dy0 = frac * span_y
+
+    offset_pattern = [
+        (+dx0, +dy0),
+        (+dx0, -dy0),
+        (-dx0, +dy0),
+        (-dx0, -dy0),
+        (+0.0, +dy0),
+        (+0.0, -dy0),
+        (+dx0, +0.0),
+        (-dx0, +0.0),
+        (+1.2 * dx0, +0.6 * dy0),
+        (-1.2 * dx0, -0.6 * dy0),
+    ]
+
+    def _fmt_step_label(t):
+        if t == (T - 1):
+            return f"End (Step {t + 1})"
+        if t == int((T - 1) // 2):
+            return f"Mid (Step {t + 1})"
+        return f"Step {t + 1}"
+
+    texts = []
+    anchors_xy = []
+    label_rgbs = []
+    ann_ts = t_ann.tolist()
+
+    for idx, t in enumerate(ann_ts):
+        p = P[int(t)]
+        rgb = np.clip(p @ corner_rgbs, 0.0, 1.0)
+
+        ann_n = annotation_names if annotation_names is not None else maj_names
+        text = (
+            f"{_fmt_step_label(int(t))}\n"
+            f"{ann_n[0]}: {p[0]:.2f}\n"
+            f"{ann_n[1]}: {p[1]:.2f}\n"
+            f"{ann_n[2]}: {p[2]:.2f}"
+        )
+
+        x = float(Pood[t, 0])
+        y = float(Pood[t, 1])
+        ox, oy = offset_pattern[idx % len(offset_pattern)]
+
+        txt = ax.text(
+            x + ox, y + oy,
+            text,
+            fontsize=int(annotation_fontsize),
+            linespacing=float(annotation_linespacing),
+            ha="left",
+            va="bottom",
+            color="black",
+            bbox=dict(
+                boxstyle=f"round,pad={float(annotation_box_pad)}",
+                fc=(1, 1, 1, float(annotation_box_alpha)),
+                ec=(float(rgb[0]), float(rgb[1]), float(rgb[2]), 0.70),
+                lw=float(annotation_box_lw),
+            ),
+            zorder=6.0,
+        )
+        _set_gid(txt, f"posterior_text:{t}")
+
+        texts.append(txt)
+        anchors_xy.append((x, y))
+        label_rgbs.append(rgb)
+
+    repel_x = np.asarray(Pood[t_show, 0], dtype=float)
+    repel_y = np.asarray(Pood[t_show, 1], dtype=float)
+    if show_final_task_vecs:
+        repel_x = np.concatenate([repel_x, np.asarray(F_proj[:, 0], dtype=float)])
+        repel_y = np.concatenate([repel_y, np.asarray(F_proj[:, 1], dtype=float)])
+
+    try:
+        adjust_text(
+            texts,
+            x=repel_x, y=repel_y,
+            ax=ax,
+            lim=int(adjusttext_lim),
+            ensure_inside_axes=True,
+        )
+    except TypeError:
+        adjust_text(
+            texts,
+            x=repel_x, y=repel_y,
+            ax=ax,
+            lim=int(adjusttext_lim),
+        )
+
+    # ---- Enforce minimum leader length ----
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax_win = ax.get_window_extent(renderer=renderer)
+
+    def _move_text_by_disp(txt_obj, dx_px, dy_px):
+        x_d, y_d = txt_obj.get_position()
+        x_px, y_px = ax.transData.transform((x_d, y_d))
+        new_d = ax.transData.inverted().transform((x_px + dx_px, y_px + dy_px))
+        txt_obj.set_position((float(new_d[0]), float(new_d[1])))
+
+    def _clamp_text_inside_axes(txt_obj, pad_px=2.0):
+        bbox = txt_obj.get_window_extent(renderer=renderer)
+        dx = 0.0
+        dy = 0.0
+        if bbox.x0 < ax_win.x0 + pad_px:
+            dx += (ax_win.x0 + pad_px) - bbox.x0
+        if bbox.x1 > ax_win.x1 - pad_px:
+            dx -= bbox.x1 - (ax_win.x1 - pad_px)
+        if bbox.y0 < ax_win.y0 + pad_px:
+            dy += (ax_win.y0 + pad_px) - bbox.y0
+        if bbox.y1 > ax_win.y1 - pad_px:
+            dy -= bbox.y1 - (ax_win.y1 - pad_px)
+        if dx != 0.0 or dy != 0.0:
+            _move_text_by_disp(txt_obj, dx, dy)
+
+    def _ensure_min_leader_len(txt_obj, anchor_xy_data, min_len_px, max_iter=10):
+        anchor_px = np.array(ax.transData.transform(anchor_xy_data), dtype=float)
+        for _ in range(int(max_iter)):
+            bbox = txt_obj.get_window_extent(renderer=renderer)
+            near_px = _closest_point_on_bbox(bbox, anchor_px[0], anchor_px[1])
+            dist = float(np.hypot(*(near_px - anchor_px)))
+            if dist >= float(min_len_px):
+                break
+
+            center_px = np.array([(bbox.x0 + bbox.x1) * 0.5, (bbox.y0 + bbox.y1) * 0.5], dtype=float)
+            v = center_px - anchor_px
+            n = float(np.hypot(v[0], v[1]))
+            if n < 1e-6:
+                v = np.array([1.0, 1.0], dtype=float)
+                n = float(np.hypot(v[0], v[1]))
+
+            extra = float(min_len_px) - dist
+            dx = (v[0] / n) * extra
+            dy = (v[1] / n) * extra
+            _move_text_by_disp(txt_obj, dx, dy)
+            _clamp_text_inside_axes(txt_obj, pad_px=2.0)
+
+    if annotation_min_leader_px is not None and float(annotation_min_leader_px) > 0:
+        for txt, (ax0, ay0) in zip(texts, anchors_xy):
+            _ensure_min_leader_len(
+                txt,
+                (float(ax0), float(ay0)),
+                min_len_px=float(annotation_min_leader_px),
+                max_iter=int(max(1, annotation_leader_max_push_iter)),
+            )
+
+    # ---- Prune overlapping annotation boxes ----
+    if annotation_prune_overlaps:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        if annotation_prune_use_change_score:
+            change_score = _posterior_change_score(P, metric=annotation_change_metric)
+        else:
+            change_score = np.zeros(T, dtype=float)
+
+        priorities = []
+        for t in ann_ts:
+            pr = float(change_score[int(t)])
+
+            if annotation_prune_keep_end and int(t) == (T - 1):
+                pr += 1e6
+            if annotation_prune_keep_mid and int(t) == int((T - 1) // 2):
+                pr += 5e5
+            if annotation_prune_keep_first and int(t) == 0:
+                pr += 3e5
+
+            priorities.append(pr)
+
+        keep_idx = _prune_overlapping_texts(
+            texts,
+            priorities,
+            renderer=renderer,
+            pad_px=float(annotation_prune_pad_px),
+        )
+
+        texts      = [texts[i] for i in keep_idx]
+        anchors_xy = [anchors_xy[i] for i in keep_idx]
+        label_rgbs = [label_rgbs[i] for i in keep_idx]
+        ann_ts     = [ann_ts[i] for i in keep_idx]
+
+    # ---- Draw per-label dashed leader lines ----
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    for txt, (ax0, ay0), rgb, t in zip(texts, anchors_xy, label_rgbs, ann_ts):
+        anchor_data = (float(ax0), float(ay0))
+        anchor_px = np.array(ax.transData.transform(anchor_data), dtype=float)
+
+        s_anchor = float(sizes_area[ood_idx, int(t)])
+        r_anchor_pt = float(np.sqrt(max(s_anchor, 1e-9) / np.pi))
+        if ood_point_style in ("pie", "pies"):
+            r_anchor_pt = float(max(r_anchor_pt, float(max(0.0, pie_min_radius_pt))))
+
+        if annotation_leader_use_bbox:
+            bbox = txt.get_window_extent(renderer=renderer)
+            start_px = _closest_point_on_bbox(bbox, anchor_px[0], anchor_px[1])
+
+            v = anchor_px - start_px
+            d = float(np.hypot(v[0], v[1]))
+            if d > 1e-6 and annotation_leader_pad_px is not None and float(annotation_leader_pad_px) > 0:
+                start_px = start_px + (v / d) * float(annotation_leader_pad_px)
+
+            start_data = ax.transData.inverted().transform(start_px)
+            posA = (float(start_data[0]), float(start_data[1]))
+            shrinkA = float(annotation_leader_shrinkA_pt)
+        else:
+            tx, ty = txt.get_position()
+            posA = (float(tx), float(ty))
+            shrinkA = float(annotation_leader_shrinkA_pt)
+
+        leader = FancyArrowPatch(
+            posA=posA,
+            posB=anchor_data,
+            arrowstyle="-",
+            mutation_scale=1.0,
+            linewidth=float(annotation_arrow_lw),
+            linestyle=(0, (3, 2)),
+            color=(float(rgb[0]), float(rgb[1]), float(rgb[2]), float(annotation_arrow_alpha)),
+            shrinkA=shrinkA,
+            shrinkB=float(r_anchor_pt + float(annotation_leader_shrinkB_extra_pt)),
+            zorder=5.95,
+            clip_on=False,
+        )
+        ax.add_patch(leader)
+        _set_gid(leader, f"posterior_leader:{t}")
+
+
+# ============================================================
 # Main function (OOD-only trajectory + adjustText annotations)
 # ============================================================
 
@@ -530,56 +803,6 @@ def project_with_r2_ood_posterior_colors_mpl(
 
     annotation_mode = str(annotation_mode).lower().strip()
     ood_point_style = str(ood_point_style).lower().strip()
-
-    def _bbox_padded(bbox, pad_px: float):
-        # Matplotlib has bbox.padded in newer versions; keep a fallback.
-        try:
-            return bbox.padded(float(pad_px))
-        except Exception:
-            from matplotlib.transforms import Bbox
-            return Bbox.from_extents(
-                bbox.x0 - pad_px, bbox.y0 - pad_px,
-                bbox.x1 + pad_px, bbox.y1 + pad_px,
-            )
-
-    def _prune_overlapping_texts(texts, priorities, *, renderer, pad_px=2.0):
-        """
-        Greedy: keep highest priority labels whose bboxes don't overlap.
-        Returns keep_indices (in original order). Removes the others from the axes.
-        """
-        if len(texts) <= 1:
-            return list(range(len(texts)))
-
-        priorities = np.asarray(priorities, dtype=float)
-        order = np.argsort(-priorities)  # highest first
-
-        kept_bboxes = []
-        keep = []
-
-        for i in order:
-            if texts[i] is None:
-                continue
-            bbox = texts[i].get_window_extent(renderer=renderer)
-            bbox = _bbox_padded(bbox, float(pad_px))
-
-            overlaps = any(bbox.overlaps(b) for b in kept_bboxes)
-            if not overlaps:
-                kept_bboxes.append(bbox)
-                keep.append(int(i))
-
-        keep_set = set(keep)
-        for j, txt in enumerate(texts):
-            if j not in keep_set and txt is not None:
-                try:
-                    txt.remove()
-                except Exception:
-                    try:
-                        txt.set_visible(False)
-                    except Exception:
-                        pass
-
-        keep_sorted = sorted(keep)  # preserve original order
-        return keep_sorted
 
     def _gid(suffix: str) -> str:
         return f"{gid_prefix}:{suffix}"
@@ -981,262 +1204,39 @@ def project_with_r2_ood_posterior_colors_mpl(
     # Posterior annotations using adjustText
     # ============================================================
     if annotate_posterior and t_ann.size > 0:
-        # Ensure renderer is ready (important for adjustText bboxes)
-        fig.canvas.draw()
-        renderer = fig.canvas.get_renderer()
-
-        # Deterministic initial offsets so texts don't start identical
-        span_x = float(np.ptp(Pood[:, 0]) + 1e-9)
-        span_y = float(np.ptp(Pood[:, 1]) + 1e-9)
-
-        frac = float(annotation_initial_offset_frac)
-        dx0 = frac * span_x
-        dy0 = frac * span_y
-
-        offset_pattern = [
-            (+dx0, +dy0),
-            (+dx0, -dy0),
-            (-dx0, +dy0),
-            (-dx0, -dy0),
-            (+0.0, +dy0),
-            (+0.0, -dy0),
-            (+dx0, +0.0),
-            (-dx0, +0.0),
-            (+1.2 * dx0, +0.6 * dy0),
-            (-1.2 * dx0, -0.6 * dy0),
-        ]
-
-        def _fmt_step_label(t):
-            if t == (T - 1):
-                return f"End (Step {t + 1})"
-            if t == int((T - 1) // 2):
-                return f"Mid (Step {t + 1})"
-            return f"Step {t + 1}"
-
-        texts = []
-        anchors_xy = []
-        label_rgbs = []
-        ann_ts = t_ann.tolist()
-
-        for idx, t in enumerate(ann_ts):
-            p = P[int(t)]
-            rgb = np.clip(p @ corner_rgbs, 0.0, 1.0)
-
-            ann_n = annotation_names if annotation_names is not None else maj_names
-            text = (
-                f"{_fmt_step_label(int(t))}\n"
-                f"{ann_n[0]}: {p[0]:.2f}\n"
-                f"{ann_n[1]}: {p[1]:.2f}\n"
-                f"{ann_n[2]}: {p[2]:.2f}"
-            )
-
-            x = float(Pood[t, 0])
-            y = float(Pood[t, 1])
-            ox, oy = offset_pattern[idx % len(offset_pattern)]
-
-            txt = ax.text(
-                x + ox, y + oy,
-                text,
-                fontsize=int(annotation_fontsize),
-                linespacing=float(annotation_linespacing),
-                ha="left",
-                va="bottom",
-                color="black",
-                bbox=dict(
-                    boxstyle=f"round,pad={float(annotation_box_pad)}",
-                    fc=(1, 1, 1, float(annotation_box_alpha)),
-                    ec=(float(rgb[0]), float(rgb[1]), float(rgb[2]), 0.70),
-                    lw=float(annotation_box_lw),
-                ),
-                zorder=6.0,
-            )
-            _set_gid(txt, f"posterior_text:{t}")
-
-            texts.append(txt)
-            anchors_xy.append((x, y))
-            label_rgbs.append(rgb)
-
-        # Objects/points to repel from: all shown OOD points + optional major stars
-        repel_x = np.asarray(Pood[t_show, 0], dtype=float)
-        repel_y = np.asarray(Pood[t_show, 1], dtype=float)
-        if show_final_task_vecs:
-            repel_x = np.concatenate([repel_x, np.asarray(F_proj[:, 0], dtype=float)])
-            repel_y = np.concatenate([repel_y, np.asarray(F_proj[:, 1], dtype=float)])
-
-        # Call adjustText (compatibility: some versions differ in kwargs)
-        try:
-            adjust_text(
-                texts,
-                x=repel_x, y=repel_y,
-                ax=ax,
-                lim=int(adjusttext_lim),
-                ensure_inside_axes=True,
-            )
-        except TypeError:
-            adjust_text(
-                texts,
-                x=repel_x, y=repel_y,
-                ax=ax,
-                lim=int(adjusttext_lim),
-            )
-
-        # ------------------------------------------------------------
-        # Enforce a minimum leader length (in screen pixels)
-        # by pushing the whole box away from its anchor if needed.
-        # ------------------------------------------------------------
-        fig.canvas.draw()
-        renderer = fig.canvas.get_renderer()
-        ax_win = ax.get_window_extent(renderer=renderer)
-
-        def _move_text_by_disp(txt_obj, dx_px, dy_px):
-            """Move a data-coordinate text by a display-space delta (pixels)."""
-            x_d, y_d = txt_obj.get_position()
-            x_px, y_px = ax.transData.transform((x_d, y_d))
-            new_d = ax.transData.inverted().transform((x_px + dx_px, y_px + dy_px))
-            txt_obj.set_position((float(new_d[0]), float(new_d[1])))
-
-        def _clamp_text_inside_axes(txt_obj, pad_px=2.0):
-            """Keep text bbox inside axes window in display coords."""
-            bbox = txt_obj.get_window_extent(renderer=renderer)
-            dx = 0.0
-            dy = 0.0
-            if bbox.x0 < ax_win.x0 + pad_px:
-                dx += (ax_win.x0 + pad_px) - bbox.x0
-            if bbox.x1 > ax_win.x1 - pad_px:
-                dx -= bbox.x1 - (ax_win.x1 - pad_px)
-            if bbox.y0 < ax_win.y0 + pad_px:
-                dy += (ax_win.y0 + pad_px) - bbox.y0
-            if bbox.y1 > ax_win.y1 - pad_px:
-                dy -= bbox.y1 - (ax_win.y1 - pad_px)
-            if dx != 0.0 or dy != 0.0:
-                _move_text_by_disp(txt_obj, dx, dy)
-
-        def _closest_point_on_bbox(bbox, x_px, y_px):
-            """Closest point on (or in) bbox to a point (x_px,y_px) in display coords."""
-            cx = float(np.clip(x_px, bbox.x0, bbox.x1))
-            cy = float(np.clip(y_px, bbox.y0, bbox.y1))
-            return np.array([cx, cy], dtype=float)
-
-        def _ensure_min_leader_len(txt_obj, anchor_xy_data, min_len_px, max_iter=10):
-            anchor_px = np.array(ax.transData.transform(anchor_xy_data), dtype=float)
-            for _ in range(int(max_iter)):
-                bbox = txt_obj.get_window_extent(renderer=renderer)
-                near_px = _closest_point_on_bbox(bbox, anchor_px[0], anchor_px[1])
-                dist = float(np.hypot(*(near_px - anchor_px)))
-                if dist >= float(min_len_px):
-                    break
-
-                # Direction: move box away from anchor along anchor->bbox_center
-                center_px = np.array([(bbox.x0 + bbox.x1) * 0.5, (bbox.y0 + bbox.y1) * 0.5], dtype=float)
-                v = center_px - anchor_px
-                n = float(np.hypot(v[0], v[1]))
-                if n < 1e-6:
-                    v = np.array([1.0, 1.0], dtype=float)
-                    n = float(np.hypot(v[0], v[1]))
-
-                extra = float(min_len_px) - dist
-                dx = (v[0] / n) * extra
-                dy = (v[1] / n) * extra
-                _move_text_by_disp(txt_obj, dx, dy)
-                _clamp_text_inside_axes(txt_obj, pad_px=2.0)
-
-        if annotation_min_leader_px is not None and float(annotation_min_leader_px) > 0:
-            for txt, (ax0, ay0) in zip(texts, anchors_xy):
-                _ensure_min_leader_len(
-                    txt,
-                    (float(ax0), float(ay0)),
-                    min_len_px=float(annotation_min_leader_px),
-                    max_iter=int(max(1, annotation_leader_max_push_iter)),
-                )
-
-        # ------------------------------------------------------------
-        # Prune overlapping annotation boxes (drop some labels)
-        # ------------------------------------------------------------
-        if annotation_prune_overlaps:
-            fig.canvas.draw()
-            renderer = fig.canvas.get_renderer()
-
-            # priority = keep End/Mid/Step1 + (optionally) posterior-change score
-            if annotation_prune_use_change_score:
-                change_score = _posterior_change_score(P, metric=annotation_change_metric)
-            else:
-                change_score = np.zeros(T, dtype=float)
-
-            priorities = []
-            for t in ann_ts:
-                pr = float(change_score[int(t)])
-
-                if annotation_prune_keep_end and int(t) == (T - 1):
-                    pr += 1e6
-                if annotation_prune_keep_mid and int(t) == int((T - 1) // 2):
-                    pr += 5e5
-                if annotation_prune_keep_first and int(t) == 0:
-                    pr += 3e5
-
-                priorities.append(pr)
-
-            keep_idx = _prune_overlapping_texts(
-                texts,
-                priorities,
-                renderer=renderer,
-                pad_px=float(annotation_prune_pad_px),
-            )
-
-            texts      = [texts[i] for i in keep_idx]
-            anchors_xy = [anchors_xy[i] for i in keep_idx]
-            label_rgbs = [label_rgbs[i] for i in keep_idx]
-            ann_ts     = [ann_ts[i] for i in keep_idx]
-
-        # ------------------------------------------------------------
-        # Draw per-label dashed leader lines (posterior-colored)
-        # Start from bbox edge (optional), not from text anchor.
-        # ------------------------------------------------------------
-        fig.canvas.draw()
-        renderer = fig.canvas.get_renderer()
-
-        for txt, (ax0, ay0), rgb, t in zip(texts, anchors_xy, label_rgbs, ann_ts):
-            anchor_data = (float(ax0), float(ay0))
-            anchor_px = np.array(ax.transData.transform(anchor_data), dtype=float)
-
-            # Approx marker radius in points, so leader line doesn't start inside the dot/pie
-            s_anchor = float(sizes_area[ood_idx, int(t)])
-            r_anchor_pt = float(np.sqrt(max(s_anchor, 1e-9) / np.pi))
-            if ood_point_style in ("pie", "pies"):
-                r_anchor_pt = float(max(r_anchor_pt, float(max(0.0, pie_min_radius_pt))))
-
-            if annotation_leader_use_bbox:
-                bbox = txt.get_window_extent(renderer=renderer)
-                start_px = _closest_point_on_bbox(bbox, anchor_px[0], anchor_px[1])
-
-                # add a small gap from the box edge, moving toward the anchor
-                v = anchor_px - start_px
-                d = float(np.hypot(v[0], v[1]))
-                if d > 1e-6 and annotation_leader_pad_px is not None and float(annotation_leader_pad_px) > 0:
-                    start_px = start_px + (v / d) * float(annotation_leader_pad_px)
-
-                start_data = ax.transData.inverted().transform(start_px)
-                posA = (float(start_data[0]), float(start_data[1]))
-                shrinkA = float(annotation_leader_shrinkA_pt)
-            else:
-                # start at text anchor
-                tx, ty = txt.get_position()
-                posA = (float(tx), float(ty))
-                shrinkA = float(annotation_leader_shrinkA_pt)
-
-            leader = FancyArrowPatch(
-                posA=posA,
-                posB=anchor_data,
-                arrowstyle="-",  # line only
-                mutation_scale=1.0,
-                linewidth=float(annotation_arrow_lw),
-                linestyle=(0, (3, 2)),
-                color=(float(rgb[0]), float(rgb[1]), float(rgb[2]), float(annotation_arrow_alpha)),
-                shrinkA=shrinkA,
-                shrinkB=float(r_anchor_pt + float(annotation_leader_shrinkB_extra_pt)),
-                zorder=5.95,
-                clip_on=False,
-            )
-            ax.add_patch(leader)
-            _set_gid(leader, f"posterior_leader:{t}")
+        _annotate_posterior_trajectory(
+            ax, fig,
+            t_ann=t_ann, T=T, P=P, corner_rgbs=corner_rgbs,
+            Pood=Pood, t_show=t_show, F_proj=F_proj,
+            ood_idx=ood_idx, sizes_area=sizes_area,
+            show_final_task_vecs=show_final_task_vecs,
+            ood_point_style=ood_point_style,
+            annotation_names=annotation_names,
+            maj_names=maj_names,
+            pie_min_radius_pt=pie_min_radius_pt,
+            gid_prefix=gid_prefix,
+            annotation_initial_offset_frac=annotation_initial_offset_frac,
+            annotation_fontsize=annotation_fontsize,
+            annotation_linespacing=annotation_linespacing,
+            annotation_box_pad=annotation_box_pad,
+            annotation_box_alpha=annotation_box_alpha,
+            annotation_box_lw=annotation_box_lw,
+            adjusttext_lim=adjusttext_lim,
+            annotation_min_leader_px=annotation_min_leader_px,
+            annotation_leader_max_push_iter=annotation_leader_max_push_iter,
+            annotation_prune_overlaps=annotation_prune_overlaps,
+            annotation_prune_pad_px=annotation_prune_pad_px,
+            annotation_prune_use_change_score=annotation_prune_use_change_score,
+            annotation_change_metric=annotation_change_metric,
+            annotation_prune_keep_end=annotation_prune_keep_end,
+            annotation_prune_keep_mid=annotation_prune_keep_mid,
+            annotation_prune_keep_first=annotation_prune_keep_first,
+            annotation_leader_use_bbox=annotation_leader_use_bbox,
+            annotation_leader_pad_px=annotation_leader_pad_px,
+            annotation_leader_shrinkA_pt=annotation_leader_shrinkA_pt,
+            annotation_leader_shrinkB_extra_pt=annotation_leader_shrinkB_extra_pt,
+            annotation_arrow_lw=annotation_arrow_lw,
+            annotation_arrow_alpha=annotation_arrow_alpha,
+        )
 
     return fig, ax

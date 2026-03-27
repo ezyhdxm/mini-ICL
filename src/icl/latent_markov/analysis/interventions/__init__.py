@@ -34,5 +34,7 @@ from icl.latent_markov.analysis.interventions.inject_posterior import (  # noqa:
     intervene_inject_posterior,
     intervene_averaging_injection,
     plot_inject_posterior_across_layers,
+)
+from icl.utils.inject_common import (  # noqa: F401
     plot_inject_posterior_per_position,
 )

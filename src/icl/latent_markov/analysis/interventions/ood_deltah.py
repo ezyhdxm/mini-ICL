@@ -51,9 +51,7 @@ def intervene_remove_ood_deltah_subspace(
         Number of SVD components to test in the ablation sweep.
     """
     import matplotlib.pyplot as plt
-    from icl.latent_markov.legacy.coin_latent_task_vecs import (
-        extract_hidden_multi_coin_latent,
-    )
+    raise NotImplementedError("extract_hidden_multi_coin_latent was removed with legacy code")
 
     # ---- 1. Load config & model ------------------------------------------------
     _, _, config = nu.load_everything("latent", exp_name)

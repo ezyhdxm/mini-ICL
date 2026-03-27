@@ -775,14 +775,3 @@ def plot_kl_model_vs_two_bayes_latent_transition_across_k(
         "kl_hybrid_matrix": hybrid_mat,
         "curves_by_k": curves,
     }
-
-
-# Legacy KL divergence functions (moved to icl.latent_markov.legacy.kl_divergence_legacy)
-from icl.latent_markov.legacy.kl_divergence_legacy import (  # noqa: F401, E402
-    compute_kl_divergence_vs_bayes,
-    plot_kl_divergence,
-    analyze_kl_divergence,
-    compute_kl_divergence_vs_dirichlet_bayes,
-    analyze_kl_divergence_dirichlet,
-    compare_bayes_predictors,
-)

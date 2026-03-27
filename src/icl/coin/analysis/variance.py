@@ -1,8 +1,4 @@
-"""Task-vector R², P1 variance, and ANOVA separability for the Coin task.
-
-Task variance functions have been moved to legacy:
-    ``icl.coin.legacy.task_variance_coin``
-"""
+"""Task-vector R², P1 variance, and ANOVA separability for the Coin task."""
 
 from typing import Dict, Optional, Sequence
 
@@ -591,10 +587,3 @@ def plot_anova_separability_coin(
     }
 
 
-# ---------------------------------------------------------------------------
-# Legacy re-exports (backward compatibility)
-# ---------------------------------------------------------------------------
-from icl.coin.legacy.task_variance_coin import (  # noqa: F401, E402
-    get_task_variance_coin,
-    plot_task_variance_coin,
-)

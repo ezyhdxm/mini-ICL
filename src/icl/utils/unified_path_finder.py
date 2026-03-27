@@ -268,7 +268,6 @@ def get_exp_name(
         if task_name == "linear":
             config.model.final_layernorm = final_layernorm
 
-    if task_name == "linear":
-        canonicalize_config_for_exp(config)
+    canonicalize_config_for_exp(config)
     exp_name = f"train_{get_hash(config)}"
     return exp_name

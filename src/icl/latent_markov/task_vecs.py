@@ -229,9 +229,3 @@ def compute_hiddens_onepos_all_layers_kvcache_beta(
         model.output_layer = old_head
 
     return out
-
-
-# Legacy ultra task vec extraction (moved to icl.latent_markov.legacy.ultra_task_vecs)
-from icl.latent_markov.legacy.ultra_task_vecs import (  # noqa: F401, E402
-    compute_hiddens_onepos_all_layers_ultra,
-)

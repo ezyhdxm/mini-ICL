@@ -511,14 +511,7 @@ class Coins:
 # ── backward-compat re-exports ──────────────────────────────────────
 from icl.coin.coin_posterior import task_posterior_coins  # noqa: F401,E402
 from icl.coin.coin_bayes import KnownPoolBayesCoins, ThreeKnownPlusNewDirichletCoinBayes  # noqa: F401,E402
-from icl.coin.coin_mi import (  # noqa: F401,E402
-    _entropy_bits,
-    estimate_mi_task_vs_history_coin,
-    plot_mi_vs_k_coin,
-)
 from icl.coin.coin_kl import (  # noqa: F401,E402
-    plot_kl_model_vs_two_bayes_coin,
-    plot_kl_model_vs_two_bayes_coin_across_k,
     plot_kl_model_vs_two_bayes_coin_over_steps,
     plot_kl_model_vs_two_bayes_coin_transition_across_k,
 )

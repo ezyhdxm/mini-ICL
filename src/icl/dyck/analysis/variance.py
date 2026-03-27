@@ -4,7 +4,7 @@ import torch
 from typing import Optional, Sequence
 
 import icl.utils.notebook_utils as nu
-from icl.dyck.legacy.dyck_task_vec import get_dyck_sampler
+get_dyck_sampler = None
 from icl.dyck.dyck_utils import sample_binary_mask
 from icl.utils.logger import setup_logger
 

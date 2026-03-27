@@ -6,7 +6,6 @@ Usage (from project root):
     python server.py [port]
 """
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -16,31 +15,6 @@ from pathlib import Path
 PORT      = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 ROOT      = Path(__file__).parent.resolve()
 RESULTS   = ROOT / "results"
-SRC       = ROOT / "src"
-
-
-def _load_indexer_module():
-    """Import experiment_index.py directly (bypasses icl package chain and torch)."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "experiment_index",
-        SRC / "icl" / "utils" / "legacy" / "experiment_index.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def reindex():
-    """Re-run the experiment indexer and export the JSON."""
-    try:
-        m = _load_indexer_module()
-        idx = m.ExperimentIndex(str(RESULTS / "experiment_index.db"))
-        idx.index_all_experiments(root_dir=str(RESULTS))
-        idx.export_to_json(str(RESULTS / "experiment_index.json"))
-        return True, None
-    except Exception as exc:
-        return False, str(exc)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -119,15 +93,6 @@ class Handler(SimpleHTTPRequestHandler):
             shutil.rmtree(exp_path)
         except Exception as exc:
             return self._json(500, {"ok": False, "error": f"Delete failed: {exc}"})
-
-        # ── Re-index ──
-        ok, err = reindex()
-        if not ok:
-            return self._json(200, {
-                "ok": True,
-                "deleted": str(exp_path),
-                "reindex_warning": f"Deleted OK, but re-index failed: {err}",
-            })
 
         return self._json(200, {"ok": True, "deleted": str(exp_path)})
 

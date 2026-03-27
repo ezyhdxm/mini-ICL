@@ -7,12 +7,66 @@ from typing import Sequence, Tuple, Optional
 from torch import nn
 
 import icl.utils.notebook_utils as nu
-from icl.latent_markov.legacy.coin_latent_task_vecs import extract_hidden_multi_coin_latent
 from icl.utils.linear_algebra_utils import stable_rank
 from icl.coin.coin_ood_analysis import get_new_sampler
 from icl.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+@torch.no_grad()
+def extract_hidden_multi_coin_latent(
+    model: nn.Module,
+    batch_data: torch.Tensor,
+    layers: list,
+    task_pos: torch.Tensor,
+    post_layernorm: bool = False,
+    extraction_point: str = "post_attn",
+) -> torch.Tensor:
+    """Extract hidden states at specified positions via forward hooks.
+
+    Returns shape ``(L, batch_size, n_positions, n_embd)`` where
+    ``L = len(layers)``, ``n_positions = len(task_pos)``.
+    """
+    n_layers = len(model.layers)
+    layer_set = set(layers)
+    cache = {}
+    handles = []
+
+    def _apply_next_ln(h, l):
+        if extraction_point == "post_attn":
+            mlp_block = model.layers[l].mlp
+            if hasattr(mlp_block, "ln2"):
+                return mlp_block.ln2(h)
+        elif extraction_point == "post_mlp":
+            if l + 1 < n_layers:
+                next_blk = model.layers[l + 1]
+                if hasattr(next_blk, "attn_block") and hasattr(next_blk.attn_block, "ln1"):
+                    return next_blk.attn_block.ln1(h)
+        return h
+
+    for l in layers:
+        def make_hook(layer_idx):
+            def hook_fn(module, inp, out):
+                h = out.index_select(1, task_pos).detach()
+                if post_layernorm:
+                    h = _apply_next_ln(h, layer_idx)
+                cache[layer_idx] = h
+            return hook_fn
+
+        if extraction_point == "post_mlp":
+            handle = model.layers[l].register_forward_hook(make_hook(l))
+        else:
+            handle = model.layers[l].attn_block.register_forward_hook(make_hook(l))
+        handles.append(handle)
+
+    _ = model(batch_data)
+
+    for h in handles:
+        h.remove()
+
+    result = torch.stack([cache[l] for l in layers], dim=0)  # (L, B, P, D)
+    return result
 
 
 def compute_hiddens_multi_coin(

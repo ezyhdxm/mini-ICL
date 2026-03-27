@@ -315,8 +315,6 @@ _POSTERIOR_RE_EXPORTS = {
     "task_posterior_linear_regression",
     "task_posterior_over_time_linear_regression",
     "task_posterior_with_gaussian_linear_regression",
-    "plot_kl_model_vs_two_bayes_linear",
-    "plot_kl_model_vs_two_bayes_linear_across_k",
     "plot_kl_model_vs_two_bayes_linear_over_steps",
     "plot_kl_model_vs_two_bayes_linear_transition_across_k",
 }
@@ -335,8 +333,6 @@ def __getattr__(name):
             task_posterior_linear_regression,
             task_posterior_over_time_linear_regression,
             task_posterior_with_gaussian_linear_regression,
-            plot_kl_model_vs_two_bayes_linear,
-            plot_kl_model_vs_two_bayes_linear_across_k,
             plot_kl_model_vs_two_bayes_linear_over_steps,
             plot_kl_model_vs_two_bayes_linear_transition_across_k,
         )
@@ -344,8 +340,6 @@ def __getattr__(name):
             "task_posterior_linear_regression": task_posterior_linear_regression,
             "task_posterior_over_time_linear_regression": task_posterior_over_time_linear_regression,
             "task_posterior_with_gaussian_linear_regression": task_posterior_with_gaussian_linear_regression,
-            "plot_kl_model_vs_two_bayes_linear": plot_kl_model_vs_two_bayes_linear,
-            "plot_kl_model_vs_two_bayes_linear_across_k": plot_kl_model_vs_two_bayes_linear_across_k,
             "plot_kl_model_vs_two_bayes_linear_over_steps": plot_kl_model_vs_two_bayes_linear_over_steps,
             "plot_kl_model_vs_two_bayes_linear_transition_across_k": plot_kl_model_vs_two_bayes_linear_transition_across_k,
         }

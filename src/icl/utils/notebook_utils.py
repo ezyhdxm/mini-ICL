@@ -444,38 +444,3 @@ def load_config_and_sampler(task_name, train_folder):
 # Legacy re-exports
 from icl.latent_markov.analysis.interventions.bigram import bigram_prefix_counts  # noqa: F401, E402
 
-# Legacy re-exports (moved to icl.utils.legacy.notebook_utils_legacy)
-from icl.utils.legacy.notebook_utils_legacy import (  # noqa: F401, E402
-    hash_array,
-    get_all_trans_mat,
-    extract_experiment_metadata,
-    get_config,
-    get_cos_sim_plot,
-    lighten,
-    get_pos_loss,
-    get_empirical_transition,
-    kl_div_ave,
-    compute_stationary_distributions,
-    pairwise_kl_divergence,
-    pairwise_kl_divergence_stationary,
-    get_loss_lineplot,
-    get_loss_heatmap_data,
-    get_loss_heatmap,
-    get_loss_heatmap_dual,
-    get_attn_score_lineplot,
-    kl_plot,
-    get_empirical_transition_matrix,
-    predictive_distribution_batched,
-    bayes_emp_plot,
-    bayes_emp_ood_plot,
-    view_mask,
-    compute_hiddens_data,
-    compute_bigram_r2_scores,
-)
-
-# Legacy plotly functions (moved to icl.utils.legacy.notebook_utils_plotly)
-from icl.utils.legacy.notebook_utils_plotly import (  # noqa: F401, E402
-    all_kl_plot,
-    plot_bigram_r2_scores,
-    plot_sufficient_stat,
-)

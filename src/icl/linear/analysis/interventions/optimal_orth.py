@@ -6,6 +6,20 @@ import torch
 
 import icl.utils.notebook_utils as nu
 from icl.utils.logger import setup_logger
+from icl.utils.orth_common import (
+    ols_r2,
+    trial_stats,
+    iqr_err_norm,
+    make_projection_hook,
+    ORTH_COLORS,
+    ORTH_BAR_WIDTH,
+    ORTH_GROUP_STEP,
+    orth_bar_offsets,
+    ORTH_RANDOM_BAND_COLOR,
+    ORTH_RANDOM_BAND_ALPHA,
+    ORTH_RANDOM_BAND_HATCH,
+    ORTH_REFERENCE_LINE_COLOR,
+)
 from icl.linear.analysis._helpers import _show_or_close
 from icl.linear.analysis.interventions._helpers import (
     _cleanup_model,
@@ -21,21 +35,6 @@ logger = setup_logger(__name__)
 # ---------------------------------------------------------------------------
 # Pure utilities (no model / task dependencies)
 # ---------------------------------------------------------------------------
-
-def _ols_r2(X, Y):
-    """Held-out R² (80/20 split) for OLS with intercept: Y = [X, 1] W."""
-    N = X.shape[0]
-    n_tr = int(0.8 * N)
-    perm = torch.randperm(N)
-    Xtr, Ytr = X[perm[:n_tr]], Y[perm[:n_tr]]
-    Xte, Yte = X[perm[n_tr:]], Y[perm[n_tr:]]
-    Xa = torch.cat([Xtr, torch.ones(n_tr, 1)], dim=1)
-    W = torch.linalg.pinv(Xa) @ Ytr
-    pred = torch.cat([Xte, torch.ones(N - n_tr, 1)], dim=1) @ W
-    ss_r = ((Yte - pred) ** 2).sum().item()
-    ss_t = ((Yte - Yte.mean(0)) ** 2).sum().item()
-    return 1.0 - ss_r / ss_t if ss_t > 0 else float("nan")
-
 
 def _fit_r2_mlp(X, Y, hidden_dim=64, n_epochs=200, lr=1e-3):
     """Train/test R² (80/20 split) for a two-layer MLP probe X → Y."""
@@ -450,11 +449,7 @@ def _run_intervention_eval(
         with torch.no_grad():
             preds_base = model(data, target)
 
-        # Intervention hook: h' = h - scale * h P  (= h - scale * P^T h)
-        def _hook(mod, inp, out, _P=proj_matrix):
-            h = out if torch.is_tensor(out) else out[0]
-            h_mod = h - scale * (h @ _P)
-            return h_mod if torch.is_tensor(out) else (h_mod,) + out[1:]
+        _hook = make_projection_hook(proj_matrix, scale=scale)
 
         _rie_tgt = (
             model.transformer.blocks[layer] if extraction_point == "post_mlp"
@@ -572,10 +567,7 @@ def _eval_per_major_task(
         with torch.no_grad():
             preds_base = model(data, target)
 
-        def _hook(mod, inp, out, _P=proj_matrix):
-            h = out if torch.is_tensor(out) else out[0]
-            h_mod = h - scale * (h @ _P)
-            return h_mod if torch.is_tensor(out) else (h_mod,) + out[1:]
+        _hook = make_projection_hook(proj_matrix, scale=scale)
 
         _ept_tgt = (
             model.transformer.blocks[layer] if extraction_point == "post_mlp"
@@ -789,7 +781,7 @@ def _print_intervention_summary(results):
 def _joint_probe_r2(feature_groups, Y, *, exclude_idx=None):
     """OLS R² from concatenated feature groups; drop group *exclude_idx* for partial R²."""
     parts = [g for i, g in enumerate(feature_groups) if i != exclude_idx]
-    return _ols_r2(torch.cat(parts, dim=1), Y)
+    return ols_r2(torch.cat(parts, dim=1), Y)
 
 
 def _probe_and_filter_vopt(
@@ -895,8 +887,8 @@ def _probe_and_filter_vopt(
     enriched_r2 = {}
     for i, name in enumerate(group_names):
         enriched_r2[name] = {
-            "fwd_major": _ols_r2(probe_groups_maj[i], proj_maj),
-            "fwd_ood":   _ols_r2(probe_groups_ood[i], proj_ood),
+            "fwd_major": ols_r2(probe_groups_maj[i], proj_maj),
+            "fwd_ood":   ols_r2(probe_groups_ood[i], proj_ood),
         }
 
     # ── Joint probe filtering of V_opt ──────────────────────────────
@@ -1032,17 +1024,7 @@ def _rand_orth_trials(
             )
             acc["minor"].append(rn["delta"])
 
-    def _stats(vals):
-        if not vals:
-            return {"mean": float("nan"), "q25": float("nan"), "q75": float("nan")}
-        arr = np.array(vals, dtype=float)
-        return {
-            "mean": float(arr.mean()),
-            "q25": float(np.percentile(arr, 25)),
-            "q75": float(np.percentile(arr, 75)),
-        }
-
-    return {k: _stats(v) for k, v in acc.items()}
+    return {k: trial_stats(v) for k, v in acc.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -1412,19 +1394,14 @@ def plot_optimal_orth_direction_across_layers(
     # ══════════════════════════════════════════════════════════════════════
     #  Plotting — same colours / geometry / aesthetic as coin/latent version
     # ══════════════════════════════════════════════════════════════════════
-    COLORS = {"maj": "#2166ac", "ood": "#d6604d", "minor": "#1a9850"}
-    bw_bar = 0.22
-    g_step = 0.24
+    COLORS = ORTH_COLORS
+    bw_bar = ORTH_BAR_WIDTH
 
     x = np.arange(len(layers))
     opt_source = kwargs.get("opt_source", "ood")
     has_minor = any(all_results[l].get("has_minor", False) for l in layers)
 
-    # 3-bar layout when minor exists, 2-bar otherwise
-    if has_minor:
-        MC = {"maj": -g_step, "ood": 0.0, "minor": +g_step}
-    else:
-        MC = {"maj": -g_step / 2, "ood": +g_step / 2, "minor": 0.0}
+    MC = orth_bar_offsets(has_minor)
 
     # Per-layer Δ RMSE to oracle
     delta_maj = [np.sqrt(all_results[l]["intervened_to_oracle_major"])
@@ -1454,19 +1431,6 @@ def plot_optimal_orth_direction_across_layers(
     else:
         gain_minor = None
     _fmt = lambda v: f"{v:.3f}" if v is not None else "n/a"
-
-    def _iqr_err_norm(key_batch, g_m):
-        """IQR error bars in normalized (%) units."""
-        lo_arr, hi_arr = [], []
-        for l in layers:
-            vals = all_results[l].get(key_batch, [])
-            if len(vals) < 2:
-                lo_arr.append(0.0); hi_arr.append(0.0); continue
-            arr = np.array(vals, dtype=float) / g_m * 100
-            mn = arr.mean()
-            lo_arr.append(abs(mn - np.percentile(arr, 25)))
-            hi_arr.append(abs(np.percentile(arr, 75) - mn))
-        return np.array(lo_arr), np.array(hi_arr)
 
     def _style(ax, ylabel):
         ax.set_xlabel("Layer", fontsize=9)
@@ -1505,14 +1469,14 @@ def plot_optimal_orth_direction_across_layers(
             all_results[l]["rand_stats"]["ood"]["q75"] / _g_ood * 100
             for l in layers
         )
-        ax.axhspan(0, rand_ceil, color="#b0b8c8", alpha=0.35, zorder=1,
-                   hatch="///", label="Random")
-        ax.axhline(rand_ceil, color="#556070", lw=1.2, ls="-", zorder=2, alpha=0.85)
+        ax.axhspan(0, rand_ceil, color=ORTH_RANDOM_BAND_COLOR, alpha=ORTH_RANDOM_BAND_ALPHA, zorder=1,
+                   hatch=ORTH_RANDOM_BAND_HATCH, label="Random")
+        ax.axhline(rand_ceil, color=ORTH_REFERENCE_LINE_COLOR, lw=1.2, ls="-", zorder=2, alpha=0.85)
     elif _rand_vals_raw:
         rand_ceil = max(_rand_vals_raw)
-        ax.axhspan(0, rand_ceil, color="#b0b8c8", alpha=0.35, zorder=1,
-                   hatch="///", label="Random")
-        ax.axhline(rand_ceil, color="#556070", lw=1.2, ls="-", zorder=2, alpha=0.85)
+        ax.axhspan(0, rand_ceil, color=ORTH_RANDOM_BAND_COLOR, alpha=ORTH_RANDOM_BAND_ALPHA, zorder=1,
+                   hatch=ORTH_RANDOM_BAND_HATCH, label="Random")
+        ax.axhline(rand_ceil, color=ORTH_REFERENCE_LINE_COLOR, lw=1.2, ls="-", zorder=2, alpha=0.85)
 
     bars_to_plot = [
         ("maj",   norm_maj,   "delta_per_batch_major", _g_maj,   "Maj."),
@@ -1523,7 +1487,7 @@ def plot_optimal_orth_direction_across_layers(
 
     for mode, norm_vals, key_pb, g_m, label in bars_to_plot:
         xm = x + MC[mode]
-        lo, hi = _iqr_err_norm(key_pb, g_m)
+        lo, hi = iqr_err_norm(all_results, layers, key_pb, g_m)
         ax.bar(xm, norm_vals, bw_bar, color=COLORS[mode], linewidth=0, zorder=3, label=label)
         ax.errorbar(xm, norm_vals, yerr=[lo, hi], fmt="none",
                     ecolor="black", elinewidth=0.9, capsize=3, capthick=0.9, zorder=5)

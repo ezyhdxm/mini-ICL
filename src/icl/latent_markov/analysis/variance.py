@@ -1,9 +1,5 @@
-"""
-Task-vector R², P1 variance, and ANOVA separability for the Latent Markov task
+"""Task-vector R², P1 variance, and ANOVA separability for the Latent Markov task
 on **non-padded** sequences.
-
-Task variance functions have been moved to legacy:
-    ``icl.latent_markov.legacy.task_variance_latent``
 """
 
 import gc
@@ -882,14 +878,3 @@ def plot_anova_separability_latent(
         "fig_interaction": fig_int,
         "fig_separability": fig_sep,
     }
-
-
-# ---------------------------------------------------------------------------
-# Legacy re-exports (backward compatibility)
-# ---------------------------------------------------------------------------
-from icl.latent_markov.legacy.task_variance_latent import (  # noqa: F401, E402
-    get_task_variance,
-    plot_task_variance,
-)
-
-from icl.latent_markov.legacy.w_variance_plot import plot_w_variance_vs_position  # noqa: F401, E402
