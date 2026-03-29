@@ -25,7 +25,7 @@ def plot_task_posterior(
     include_gaussian: bool = True,
     major_only: bool = False,
     max_positions: Optional[int] = None,
-    figsize: tuple = (12, 4),
+    figsize: tuple = (10, 3.5),
     title: Optional[str] = None,
     show: bool = True,
 ) -> dict:
@@ -241,7 +241,7 @@ def plot_val_r2_across_layers(
 def plot_id_ood_loss(
     k_list,
     logx: bool = True,
-    figsize: tuple = (12, 5),
+    figsize: tuple = (10, 4),
     show: bool = True,
     pad: Optional[str] = "none",
     exp_name_kwargs: Optional[dict] = None,

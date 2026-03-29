@@ -24,6 +24,11 @@ logger = setup_logger(__name__)
 DEFAULT_POSITION_BLOCKS: Tuple[Tuple[int, int], ...] = ((0, 15), (15, -1))
 DEFAULT_BLOCK_LABELS: Tuple[str, ...] = ("0-15", "15-end")
 
+_PALETTE = [
+    "#4477AA", "#EE6677", "#228833", "#CCBB44",
+    "#66CCEE", "#AA3377", "#BBBBBB",
+]
+
 
 def _ema_smooth(y: np.ndarray, alpha: float = 0.99) -> np.ndarray:
     """Exponential moving average smoothing."""
@@ -37,6 +42,124 @@ def _ema_smooth(y: np.ndarray, alpha: float = 0.99) -> np.ndarray:
     return out
 
 
+def draw_ood_r2_curves_on_ax(
+    ax,
+    results: List[Tuple[str, List[int], np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]],
+    *,
+    logx: bool = False,
+    ema_alpha: float = 0.95,
+    shadow_alpha: float = 0.1,
+    shadow_lw: float = 1.0,
+    smooth_lw: float = 1.4,
+    scatter_alpha: float = 0.25,
+    scatter_size: float = 10.0,
+    show_iqr_band: bool = True,
+    band_alpha: Optional[float] = None,
+    show_ylabel: bool = True,
+    show_legend: bool = True,
+    legend_title: Optional[str] = None,
+    ylim: Optional[Tuple[float, float]] = None,
+) -> None:
+    """Draw OOD R² curves from a pre-computed result list onto an existing Axes.
+
+    Parameters
+    ----------
+    ax :
+        Matplotlib Axes to draw on.
+    results :
+        List of ``(label, steps, values, q25, q75)`` tuples, as returned in the
+        ``'results'`` key of ``plot_maj_r2_ood_across_steps`` / the three
+        task-specific wrappers.
+    logx, ema_alpha, shadow_alpha, shadow_lw, smooth_lw, scatter_alpha, scatter_size :
+        Same meaning as in ``plot_maj_r2_ood_across_steps``.
+    show_iqr_band :
+        Shade the 25–75th-percentile band when available.
+    band_alpha :
+        Opacity for the IQR band; defaults to ``shadow_alpha``.
+    show_ylabel :
+        If True, label the y-axis ``$R^2$``.
+    show_legend :
+        If True, attach a legend to the axes.
+    legend_title :
+        Override the legend title.  Default: ``$\\log_2(n_{\\mathrm{minor}})$``.
+    ylim :
+        Optional ``(ymin, ymax)`` for the y-axis.
+    """
+    from matplotlib.colors import to_rgba
+
+    if band_alpha is None:
+        band_alpha = shadow_alpha
+
+    _leg_title = legend_title if legend_title is not None else r"$\log_2(n_{\mathrm{minor}})$"
+
+    # Reconstruct colour map from order of first label appearance in results.
+    seen: List[str] = []
+    for label, _, _, _, _ in results:
+        if label not in seen:
+            seen.append(label)
+    color_map = {lab: _PALETTE[i % len(_PALETTE)] for i, lab in enumerate(seen)}
+
+    for label, m_steps, m_values, q25, q75 in results:
+        if len(m_steps) == 0:
+            continue
+        x = np.asarray(m_steps, dtype=float)
+        y = np.asarray(m_values, dtype=float)
+        if logx:
+            mask = x > 0
+            x, y = x[mask], y[mask]
+            if q25 is not None and q75 is not None:
+                q25 = np.asarray(q25, dtype=float)[mask]
+                q75 = np.asarray(q75, dtype=float)[mask]
+        if x.size == 0:
+            continue
+        c = color_map[label]
+        if (
+            show_iqr_band
+            and q25 is not None
+            and q75 is not None
+            and np.any(np.isfinite(q25) & np.isfinite(q75))
+        ):
+            where = np.isfinite(q25) & np.isfinite(q75)
+            ax.fill_between(
+                x, q25, q75,
+                where=where,
+                facecolor=to_rgba(c, band_alpha),
+                linewidth=0,
+                zorder=0,
+                clip_on=True,
+            )
+        ax.plot(x, y, color=c, alpha=shadow_alpha, linewidth=shadow_lw, zorder=1)
+        ax.scatter(x, y, color=c, s=scatter_size, zorder=3, edgecolors="none", alpha=scatter_alpha)
+        y_s = _ema_smooth(y, alpha=ema_alpha)
+        ax.plot(x, y_s, color=c, linewidth=smooth_lw, label=label, zorder=2, solid_capstyle="round")
+
+    if logx:
+        ax.set_xscale("log")
+    ax.set_xlabel("Training step")
+    if show_ylabel:
+        ax.set_ylabel(r"$R^2$")
+    ax.tick_params(direction="in", top=True, right=True)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.4, color="gray")
+    ax.set_axisbelow(True)
+    if show_legend:
+        handles, _ = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(title=_leg_title, framealpha=0.85, edgecolor="0.8", handlelength=1.8,
+                      loc="upper right")
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+
+def _k_to_n_minor_label(k: int) -> str:
+    """Return N_minor as a string for legend labels.
+
+    k < 0  → p_minor ≈ 0, so effectively 0 minor tasks → "0"
+    k >= 0 → N_minor = 2**k
+    """
+    return "0" if k < 0 else str(2 ** k)
+
+
 def _resolve_experiments(
     task_name: str,
     experiments: Union[Sequence[int], Sequence[Union[str, Tuple[str, str]]]],
@@ -48,7 +171,7 @@ def _resolve_experiments(
         for k in experiments:
             k = int(k)
             exp_name = get_exp_name("coin", k, vocab_size=vocab_size)
-            label = str(k)
+            label = _k_to_n_minor_label(k)
             out.append((exp_name, label))
     else:
         for item in experiments:
@@ -151,7 +274,7 @@ def plot_maj_r2_ood_across_steps(
     smooth_lw: float = 1.4,
     scatter_alpha: float = 0.25,
     scatter_size: float = 10.0,
-    figsize: Tuple[float, float] = (6, 4),
+    figsize: Tuple[float, float] = (5, 3.2),
     show: bool = True,
     force_recompute: bool = False,
     ylim: Optional[Tuple[float, float]] = None,
@@ -162,6 +285,7 @@ def plot_maj_r2_ood_across_steps(
     band_alpha: Optional[float] = None,
     compute_minor_metrics: bool = False,
     extraction_point: str = "post_attn",
+    avg_over: int = 1,
 ) -> Dict[str, Any]:
     """
     Plot maj_r2_ood vs training step for multiple experiments.
@@ -289,6 +413,7 @@ def plot_maj_r2_ood_across_steps(
                 n_gpus=effective_gpus,
                 compute_minor_metrics=compute_minor_metrics,
                 extraction_point=extraction_point,
+                avg_over=avg_over,
             )
         except Exception as e:
             logger.warning(f"[plot_maj_r2_ood] {exp_name} failed: {e}")
@@ -307,16 +432,13 @@ def plot_maj_r2_ood_across_steps(
         for b in range(n_blocks):
             bl = block_labels[b] if block_labels else f"block {b}"
             for lab, m_steps, m_vals, q25, q75 in results_by_block[b]:
-                results.append((f"{lab} ({bl})", m_steps, m_vals, q25, q75))
+                label = f"{lab} ({bl})" if n_blocks > 1 else lab
+                results.append((label, m_steps, m_vals, q25, q75))
     else:
         results = results_flat
 
     _leg_title = legend_title if legend_title is not None else r"$\log_2(n_{\mathrm{minor}})$"
 
-    _PALETTE = [
-        "#4477AA", "#EE6677", "#228833", "#CCBB44",
-        "#66CCEE", "#AA3377", "#BBBBBB",
-    ]
     unique_labels = [label for (_, label) in resolved]
     exp_color_map: Dict[str, Any] = {
         lab: _PALETTE[i % len(_PALETTE)] for i, lab in enumerate(unique_labels)
@@ -381,6 +503,7 @@ def plot_maj_r2_ood_across_steps(
             ax.legend(
                 title=_leg_title, fontsize=9, title_fontsize=9,
                 framealpha=0.85, edgecolor="0.8", handlelength=1.8,
+                loc="lower right",
             )
         if show_title:
             title_parts = []
@@ -430,15 +553,23 @@ def plot_maj_r2_ood_across_steps_coin(
     k_list: Sequence[int],
     steps: Sequence[int],
     layer: int = 5,
-    n_minor: int = 64,
+    n_minor: int = 0,
     n_ood: int = 30,
     B: int = 64,
     n_gpus: Optional[int] = None,
     vocab_size: int = 8,
+    avg_over: int = 32,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Plot maj_r2_ood vs training step for multiple coin experiments (by k)."""
-    kwargs.setdefault("legend_title", r"$\log_2(n_{\mathrm{minor}})$")
+    """Plot maj_r2_ood vs training step for multiple coin experiments (by k).
+
+    ``avg_over`` (default 32) controls how many sequences per OOD task are
+    averaged before computing R².  Each group of ``avg_over`` sequences is
+    collapsed into one observation, producing ``B`` averaged observations whose
+    IQR is stored.  This reduces token and residual noise in each task-vector
+    estimate.  Set ``avg_over=1`` to recover the original per-sequence behaviour.
+    """
+    kwargs.setdefault("legend_title", r"$N_{\mathrm{minor}}$")
     return plot_maj_r2_ood_across_steps(
         task_name="coin",
         experiments=list(k_list),
@@ -449,6 +580,7 @@ def plot_maj_r2_ood_across_steps_coin(
         B=B,
         n_gpus=n_gpus,
         vocab_size=vocab_size,
+        avg_over=avg_over,
         **kwargs,
     )
 
@@ -457,18 +589,24 @@ def plot_maj_r2_ood_across_steps_linear(
     k_list: Sequence[int],
     steps: Sequence[int],
     layer: int,
-    n_minor: int = 64,
+    n_minor: int = 0,
     n_ood: int = 30,
     B: int = 64,
     n_gpus: Optional[int] = None,
     exp_name_kwargs: Optional[Dict[str, Any]] = None,
+    avg_over: int = 32,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Plot maj_r2_ood vs training step for multiple linear experiments (by k)."""
+    """Plot maj_r2_ood vs training step for multiple linear experiments (by k).
+
+    ``avg_over`` (default 32) controls how many sequences per OOD task are
+    averaged before computing R², reducing data-noise in each task-vector
+    estimate.  Set ``avg_over=1`` to recover the original per-sequence behaviour.
+    """
     if exp_name_kwargs is None:
         exp_name_kwargs = {}
     experiments = [
-        (get_exp_name("linear", k, **exp_name_kwargs), str(k))
+        (get_exp_name("linear", k, **exp_name_kwargs), _k_to_n_minor_label(k))
         for k in k_list
     ]
     return plot_maj_r2_ood_across_steps(
@@ -480,6 +618,7 @@ def plot_maj_r2_ood_across_steps_linear(
         n_ood=n_ood,
         B=B,
         n_gpus=n_gpus,
+        avg_over=avg_over,
         **kwargs,
     )
 
@@ -488,18 +627,24 @@ def plot_maj_r2_ood_across_steps_latent(
     k_list: Sequence[int],
     steps: Sequence[int],
     layer: int,
-    n_minor: int = 64,
+    n_minor: int = 0,
     n_ood: int = 30,
     B: int = 64,
     n_gpus: Optional[int] = None,
     exp_name_kwargs: Optional[Dict[str, Any]] = None,
+    avg_over: int = 32,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    """Plot maj_r2_ood vs training step for multiple latent experiments (by k)."""
+    """Plot maj_r2_ood vs training step for multiple latent experiments (by k).
+
+    ``avg_over`` (default 32) controls how many sequences per OOD task are
+    averaged before computing R², reducing token-noise in each task-vector
+    estimate.  Set ``avg_over=1`` to recover the original per-sequence behaviour.
+    """
     if exp_name_kwargs is None:
         exp_name_kwargs = {}
     experiments = [
-        (get_exp_name("latent", k, **exp_name_kwargs), str(k))
+        (get_exp_name("latent", k, **exp_name_kwargs), _k_to_n_minor_label(k))
         for k in k_list
     ]
     return plot_maj_r2_ood_across_steps(
@@ -511,5 +656,6 @@ def plot_maj_r2_ood_across_steps_latent(
         n_ood=n_ood,
         B=B,
         n_gpus=n_gpus,
+        avg_over=avg_over,
         **kwargs,
     )

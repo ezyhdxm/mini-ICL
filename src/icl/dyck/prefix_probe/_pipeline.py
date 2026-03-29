@@ -14,6 +14,7 @@ from ._train import train_prefix_probe
 
 def run_prefix_probe(
     k_value=5,
+    exp_name=None,
     layer_index=5,
     n_masks=8,
     batch_size=64,
@@ -60,7 +61,7 @@ def run_prefix_probe(
     probe, results, viz_data
     """
     model, sampler, config, exp_name = _load_model_and_sampler(
-        k_value, device=device,
+        k_value, device=device, exp_name=exp_name,
     )
     if device is None:
         device = config.device

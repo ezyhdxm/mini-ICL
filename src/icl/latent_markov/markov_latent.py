@@ -46,6 +46,7 @@ class LatentMarkov:
         
         self.alpha = config.task.alpha # Dirichlet prior for the transition matrix
         self.seed = config.seed # Seed for random number generation
+        self.major_seed = int(getattr(config.task, "major_seed", self.seed))
         
         self.n_major_tasks = config.task.n_tasks # Total number of transition matrices
         self.n_minor_tasks = config.task.n_minor_tasks if 'n_minor_tasks' in config.task else 0
@@ -61,8 +62,19 @@ class LatentMarkov:
         if self.n_major_tasks > 0:
             if self.random_stationary is False:
                 if self.bandwidth is None:
-                    self.major_trans_mat = self.dirichlet_dist.sample((self.n_major_tasks, self.num_states_order,))
+                    # Sample on CPU with a seeded generator so major_trans_mat is identical
+                    # across runs sharing the same major_seed (e.g. different k values).
+                    # Saving/restoring the CPU RNG state prevents side-effects on later calls.
+                    cpu_rng_state = torch.get_rng_state()
+                    torch.manual_seed(self.major_seed)
+                    cpu_dist = torch.distributions.Dirichlet(
+                        torch.ones(self.num_states) * self.alpha
+                    )
+                    self.major_trans_mat = cpu_dist.sample(
+                        (self.n_major_tasks, self.num_states_order)
+                    ).to(self.device)
                     self.major_trans_mat /= self.major_trans_mat.sum(dim=-1, keepdim=True)
+                    torch.set_rng_state(cpu_rng_state)
                 else:
                     self.major_trans_mat = self._sample_far_banded_trans_mats(self.n_major_tasks)
                 self.stationary = None

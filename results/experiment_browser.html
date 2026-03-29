@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Experiment Browser — mini-ICL</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #f0f2f8;
+            --card: #fff;
+            --border: #e2e6f0;
+            --text: #2d3048;
+            --muted: #7a7f9a;
+            --radius: 8px;
+            --shadow: 0 1px 4px rgba(0,0,0,.07), 0 4px 16px rgba(0,0,0,.05);
+
+            --coin:   #f59e0b; --coin-bg:   #fef3c7; --coin-text:   #92400e;
+            --dyck:   #10b981; --dyck-bg:   #d1fae5; --dyck-text:   #064e3b;
+            --latent: #8b5cf6; --latent-bg: #ede9fe; --latent-text: #4c1d95;
+            --linear: #3b82f6; --linear-bg: #dbeafe; --linear-text: #1e3a8a;
+        }
+
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; min-height: 100vh; }
+
+        /* ── HEADER ── */
+        header { background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; padding: 20px 28px; display: flex; align-items: center; gap: 16px; }
+        header h1 { font-size: 1.5em; font-weight: 700; }
+        header p  { opacity: .75; margin-top: 2px; font-size: .9em; }
+        .header-stats { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; }
+        .stat-pill { border-radius: 16px; padding: 5px 13px; font-size: .82em; font-weight: 700; white-space: nowrap; }
+        .stat-pill.coin   { background: var(--coin-bg);   color: var(--coin-text); }
+        .stat-pill.dyck   { background: var(--dyck-bg);   color: var(--dyck-text); }
+        .stat-pill.latent { background: var(--latent-bg); color: var(--latent-text); }
+        .stat-pill.linear { background: var(--linear-bg); color: var(--linear-text); }
+        .stat-pill.total  { background: rgba(255,255,255,.2); color: #fff; }
+
+        /* ── TABS ── */
+        .tab-bar { background: var(--card); border-bottom: 2px solid var(--border); display: flex; padding: 0 24px; gap: 0; }
+        .tab { padding: 13px 22px; font-weight: 600; font-size: .9em; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; color: var(--muted); transition: all .2s; white-space: nowrap; }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--text); border-bottom-color: #667eea; }
+        .tab.active.coin   { border-bottom-color: var(--coin);   color: var(--coin-text); }
+        .tab.active.dyck   { border-bottom-color: var(--dyck);   color: var(--dyck-text); }
+        .tab.active.latent { border-bottom-color: var(--latent); color: var(--latent-text); }
+        .tab.active.linear { border-bottom-color: var(--linear); color: var(--linear-text); }
+
+        /* ── PAGE ── */
+        .page { max-width: 1700px; margin: 0 auto; padding: 20px 24px; }
+
+        /* ── FILTER BAR ── */
+        .filter-bar { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 18px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+        .fg { display: flex; flex-direction: column; gap: 3px; }
+        .fg label { font-size: .72em; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+        .fg input, .fg select { padding: 6px 9px; border: 1.5px solid var(--border); border-radius: 6px; font-size: .88em; color: var(--text); background: #fff; min-width: 90px; transition: border-color .2s; }
+        .fg input:focus, .fg select:focus { outline: none; border-color: #667eea; }
+        .fg.wide { flex: 1; min-width: 180px; }
+        .fg input.wide-input { width: 100%; }
+        .btn { padding: 7px 16px; border: none; border-radius: 6px; font-size: .88em; font-weight: 600; cursor: pointer; transition: all .15s; }
+        .btn-ghost { background: transparent; color: var(--muted); border: 1.5px solid var(--border); }
+        .btn-ghost:hover { border-color: #667eea; color: #667eea; }
+
+        /* ── TOOLBAR ── */
+        .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .results-count { color: var(--muted); font-size: .85em; margin-right: auto; }
+        .view-btns button { padding: 5px 12px; border: 1.5px solid var(--border); background: #fff; font-size: .82em; font-weight: 600; cursor: pointer; color: var(--muted); }
+        .view-btns button:first-child { border-radius: 6px 0 0 6px; }
+        .view-btns button:last-child  { border-radius: 0 6px 6px 0; border-left: none; }
+        .view-btns button.active { background: #667eea; color: #fff; border-color: #667eea; }
+
+        /* ── TABLE ── */
+        .table-wrap { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; font-size: .875em; }
+        thead { position: sticky; top: 0; z-index: 5; }
+        th { padding: 10px 11px; text-align: left; font-weight: 700; color: var(--muted); font-size: .76em; text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; border-bottom: 2px solid var(--border); cursor: pointer; user-select: none; background: #f7f8fc; }
+        th:hover { color: #667eea; }
+        td { padding: 9px 11px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        tbody tr { cursor: pointer; transition: background .12s; }
+        tbody tr:hover { background: #f7f8ff; }
+        tbody tr.expanded { background: #f0f3ff; }
+        tbody tr:last-child td { border-bottom: none; }
+
+        /* ── EXPAND ROW ── */
+        .xrow td { background: #f7f8ff; padding: 0; border-bottom: 1px solid var(--border); }
+        .xinner { padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+        .xsect h4 { font-size: .73em; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 6px; font-weight: 700; }
+        .xkv { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #eef; font-size: .84em; gap: 8px; }
+        .xkv:last-child { border-bottom: none; }
+        .xkv .k { color: var(--muted); flex-shrink: 0; }
+        .xkv .v { font-family: 'Courier New', monospace; font-weight: 600; text-align: right; word-break: break-all; }
+        .xactions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+        /* ── BADGES & CELLS ── */
+        .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: .76em; font-weight: 700; }
+        .badge-coin   { background: var(--coin-bg);   color: var(--coin-text); }
+        .badge-dyck   { background: var(--dyck-bg);   color: var(--dyck-text); }
+        .badge-latent { background: var(--latent-bg); color: var(--latent-text); }
+        .badge-linear { background: var(--linear-bg); color: var(--linear-text); }
+        .exp-name { font-family: 'Courier New', monospace; font-size: .82em; color: #667eea; font-weight: 600; }
+        .copy-btn { padding: 2px 8px; border: 1px solid var(--border); background: #fff; border-radius: 4px; font-size: .74em; cursor: pointer; color: var(--muted); transition: all .12s; white-space: nowrap; }
+        .copy-btn:hover { border-color: #667eea; color: #667eea; }
+        .copy-btn.copied { border-color: #10b981; color: #10b981; }
+        .sort-icon { display: inline-block; margin-left: 3px; opacity: .35; font-size: .9em; }
+        th.sort-asc  .sort-icon,
+        th.sort-desc .sort-icon { opacity: 1; }
+
+        /* ── CARD VIEW ── */
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+        .exp-card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; border-top: 3px solid #667eea; transition: box-shadow .2s, transform .15s; cursor: pointer; }
+        .exp-card:hover { box-shadow: 0 6px 24px rgba(0,0,0,.1); transform: translateY(-2px); }
+        .exp-card.coin-card   { border-top-color: var(--coin); }
+        .exp-card.dyck-card   { border-top-color: var(--dyck); }
+        .exp-card.latent-card { border-top-color: var(--latent); }
+        .exp-card.linear-card { border-top-color: var(--linear); }
+        .card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; gap: 8px; }
+        .card-name { font-family: monospace; font-size: .8em; color: #667eea; word-break: break-all; font-weight: 600; }
+        .card-params { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        .card-kv { display: flex; justify-content: space-between; background: #f7f8fc; padding: 4px 8px; border-radius: 4px; font-size: .82em; gap: 6px; }
+        .card-kv .k { color: var(--muted); }
+        .card-kv .v { font-family: monospace; font-weight: 600; }
+        .card-foot { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); font-size: .76em; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+
+        /* ── OVERVIEW ── */
+        .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 20px; }
+        .overview-card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+        .overview-head { padding: 16px 20px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+        .overview-head h2 { font-size: 1.1em; font-weight: 700; letter-spacing: -.2px; }
+        .overview-head .cnt { margin-left: auto; font-size: .85em; color: var(--muted); font-weight: 600; background: var(--bg); padding: 3px 10px; border-radius: 10px; }
+        .overview-head.coin   { border-top: 3px solid var(--coin); }
+        .overview-head.dyck   { border-top: 3px solid var(--dyck); }
+        .overview-head.latent { border-top: 3px solid var(--latent); }
+        .overview-head.linear { border-top: 3px solid var(--linear); }
+        .overview-body { padding: 14px 20px; flex: 1; }
+        .overview-param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .overview-param { background: var(--bg); border-radius: 6px; padding: 8px 10px; }
+        .overview-param .p-label { font-size: .72em; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin-bottom: 3px; }
+        .overview-param .p-val   { font-family: 'Courier New', monospace; font-size: .88em; font-weight: 600; color: var(--text); word-break: break-word; }
+        .overview-param.wide { grid-column: span 2; }
+        .overview-footer { padding: 12px 20px; border-top: 1px solid var(--border); }
+        .btn-go { display: inline-block; padding: 7px 16px; border-radius: 6px; font-size: .85em; font-weight: 600; cursor: pointer; border: none; transition: all .15s; }
+        .btn-go.coin   { background: var(--coin-bg);   color: var(--coin-text); }
+        .btn-go.dyck   { background: var(--dyck-bg);   color: var(--dyck-text); }
+        .btn-go.latent { background: var(--latent-bg); color: var(--latent-text); }
+        .btn-go.linear { background: var(--linear-bg); color: var(--linear-text); }
+        .btn-go:hover  { filter: brightness(.92); }
+
+        /* ── EMPTY / LOADING ── */
+        .empty   { text-align: center; padding: 60px 20px; color: var(--muted); }
+        .empty-icon { font-size: 2.5em; margin-bottom: 10px; }
+        .loading { text-align: center; padding: 40px; color: var(--muted); }
+
+        /* ── MODAL ── */
+        .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; align-items: center; justify-content: center; }
+        .modal-bg.open { display: flex; }
+        .modal { background: #fff; border-radius: 12px; padding: 24px; max-width: 680px; width: 92%; max-height: 82vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+        .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+        .modal-title { font-size: 1em; font-weight: 700; font-family: monospace; word-break: break-all; }
+        .modal-close { background: none; border: none; font-size: 1.3em; cursor: pointer; color: var(--muted); }
+        .modal-close:hover { color: var(--text); }
+        .modal pre { background: #f7f8fc; padding: 14px; border-radius: 8px; font-size: .8em; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+        /* ── DELETE ── */
+        .del-btn { padding: 2px 7px; border: 1px solid #fca5a5; background: #fff5f5; border-radius: 4px; font-size: .74em; cursor: pointer; color: #dc2626; transition: all .12s; white-space: nowrap; }
+        .del-btn:hover { background: #fee2e2; border-color: #dc2626; }
+
+        /* ── CONFIRM MODAL ── */
+        .confirm-modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200; align-items: center; justify-content: center; }
+        .confirm-modal-bg.open { display: flex; }
+        .confirm-modal { background: #fff; border-radius: 12px; padding: 28px; max-width: 520px; width: 92%; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+        .confirm-modal h3 { font-size: 1.1em; font-weight: 700; color: #dc2626; margin-bottom: 10px; }
+        .confirm-modal p { color: var(--muted); font-size: .9em; margin-bottom: 8px; }
+        .confirm-path { background: #f7f8fc; border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: .8em; word-break: break-all; margin: 12px 0 20px; border-left: 3px solid #dc2626; }
+        .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+        .btn-cancel { padding: 8px 18px; border: 1.5px solid var(--border); background: #fff; border-radius: 6px; font-weight: 600; cursor: pointer; color: var(--muted); }
+        .btn-cancel:hover { border-color: var(--muted); }
+        .btn-delete { padding: 8px 18px; border: none; background: #dc2626; color: #fff; border-radius: 6px; font-weight: 600; cursor: pointer; transition: background .15s; }
+        .btn-delete:hover { background: #b91c1c; }
+        .btn-delete:disabled { background: #fca5a5; cursor: not-allowed; }
+
+        /* ── TOAST ── */
+        .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 18px; border-radius: 8px; font-size: .88em; font-weight: 600; box-shadow: 0 4px 20px rgba(0,0,0,.15); z-index: 300; opacity: 0; transform: translateY(8px); transition: all .25s; pointer-events: none; }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.success { background: #d1fae5; color: #065f46; }
+        .toast.error   { background: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>🔬 Experiment Browser</h1>
+        <p>mini-ICL results</p>
+    </div>
+    <div class="header-stats" id="headerStats"></div>
+</header>
+
+<div class="tab-bar" id="tabBar"></div>
+
+<div class="page">
+    <div class="filter-bar" id="filterBar"></div>
+    <div class="toolbar">
+        <div class="results-count" id="resultsCount"></div>
+        <div class="view-btns" id="viewBtns">
+            <button id="btnTable" class="active" onclick="setView('table')">⊞ Table</button>
+            <button id="btnCard"  onclick="setView('card')">▦ Cards</button>
+        </div>
+    </div>
+    <div id="content"><div class="loading">Loading…</div></div>
+</div>
+
+<!-- CONFIRM DELETE MODAL -->
+<div class="confirm-modal-bg" id="confirmBg">
+    <div class="confirm-modal">
+        <h3>⚠️ Delete experiment?</h3>
+        <p>This will permanently remove the entire experiment folder, including all checkpoints and cached analysis files. <strong>This cannot be undone.</strong></p>
+        <div class="confirm-path" id="confirmPath"></div>
+        <p style="font-size:.82em">The experiment index will be updated automatically.</p>
+        <div class="confirm-actions">
+            <button class="btn-cancel" onclick="closeConfirm()">Cancel</button>
+            <button class="btn-delete" id="confirmDeleteBtn" onclick="executeDelete()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- MODAL -->
+<div class="modal-bg" id="modalBg" onclick="closeModal(event)">
+    <div class="modal">
+        <div class="modal-head">
+            <div class="modal-title" id="modalTitle"></div>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <pre id="modalBody"></pre>
+    </div>
+</div>
+
+<script>
+// ── Data & state ────────────────────────────────────────────────────────────
+let allExps = [];
+let activeTab = 'overview';  // 'overview' | 'coin' | 'dyck' | 'latent' | 'linear'
+let currentView = 'table';
+let sortCol = null, sortDir = 1;
+let expandedRow = null, expandedTr = null;
+
+// ── Per-task column definitions ─────────────────────────────────────────────
+// Each col: { label, key: fn(exp)=>value, fmt?: fn(v)=>string, isName?, isPath? }
+const COMMON_END = [
+    { label: 'Layers',   key: e => e.params.model?.num_layers },
+    { label: 'Emb',      key: e => e.params.model?.emb_dim },
+    { label: 'Batch',    key: e => e.params.task?.batch_size ?? e.params.training?.batch_size },
+    { label: 'LR',       key: e => e.params.training?.learning_rate, fmt: fmtLR },
+    { label: 'WD',       key: e => e.params.training?.weight_decay,  fmt: fmtLR },
+    { label: 'Warmup',   key: e => e.params.training?.warmup_steps },
+    { label: 'Steps',    key: e => e.params.training?.num_epochs },
+];
+
+const TASK_COLS = {
+    coin: [
+        { label: 'Experiment',     key: e => e.exp_name, isName: true },
+        { label: 'n_major',        key: e => e.params.task?.n_tasks },
+        { label: 'n_minor',        key: e => e.params.task?.n_minor_tasks },
+        { label: 'p_minor',        key: e => e.params.task?.p_minor },
+        { label: 'Vocab',          key: e => e.params.task?.vocab_size },
+        { label: 'Pool type',      key: e => e.params.task?.major_pool_type },
+        { label: 'Mixed prec',     key: e => e.params.general?.mixed_precision },
+        ...COMMON_END,
+        { label: 'Size', key: e => e.size_bytes, fmt: fmtSize },
+        { label: 'Path', isPath: true }, { label: '', isDelete: true },
+    ],
+    dyck: [
+        { label: 'Experiment',  key: e => e.exp_name, isName: true },
+        { label: 'n_major',     key: e => e.params.task?.n_tasks },
+        { label: 'n_minor',     key: e => e.params.task?.n_minor_tasks },
+        { label: 'p_minor',     key: e => e.params.task?.p_minor },
+        { label: 'Vocab',       key: e => e.params.task?.vocab_size },
+        { label: 'Seq len',     key: e => e.params.task?.seq_len },
+        { label: 'α',           key: e => e.params.task?.alpha },
+        { label: 'Order',       key: e => e.params.task?.order },
+        { label: 'Dyck len',    key: e => e.params.task?.dyck_length },
+        { label: 'Repeat prob', key: e => e.params.task?.repeat_prob },
+        { label: 'Scheduler',   key: e => e.params.training?.scheduler_type },
+        { label: 'Grad clip',   key: e => e.params.training?.grad_clip_norm },
+        ...COMMON_END,
+        { label: 'Size', key: e => e.size_bytes, fmt: fmtSize },
+        { label: 'Path', isPath: true }, { label: '', isDelete: true },
+    ],
+    latent: [
+        { label: 'Experiment', key: e => e.exp_name, isName: true },
+        { label: 'n_major',    key: e => e.params.task?.n_tasks },
+        { label: 'n_minor',    key: e => e.params.task?.n_minor_tasks },
+        { label: 'p_minor',    key: e => e.params.task?.p_minor },
+        { label: 'Vocab',      key: e => e.params.task?.vocab_size },
+        { label: 'Seq len',    key: e => e.params.task?.seq_len },
+        { label: 'α',          key: e => e.params.task?.alpha },
+        { label: 'Order',      key: e => e.params.task?.order },
+        { label: 'Stationary', key: e => e.params.task?.stationary },
+        ...COMMON_END,
+        { label: 'Size', key: e => e.size_bytes, fmt: fmtSize },
+        { label: 'Path', isPath: true }, { label: '', isDelete: true },
+    ],
+    linear: [
+        { label: 'Experiment',  key: e => e.exp_name, isName: true },
+        { label: 'n_major',     key: e => e.params.task?.n_tasks },
+        { label: 'n_minor',     key: e => e.params.task?.n_minor_tasks },
+        { label: 'p_minor',     key: e => e.params.task?.p_minor },
+        { label: 'n_dims',      key: e => e.params.task?.n_dims },
+        { label: 'n_points',    key: e => e.params.task?.n_points },
+        { label: 'Noise σ',     key: e => e.params.task?.noise_scale },
+        { label: 'Schedule',    key: e => e.params.training?.scheduler_type },
+        ...COMMON_END,
+        { label: 'Size', key: e => e.size_bytes, fmt: fmtSize },
+        { label: 'Path', isPath: true }, { label: '', isDelete: true },
+    ],
+};
+
+// ── Filter definitions per task ─────────────────────────────────────────────
+const TASK_FILTERS = {
+    coin:   ['n_tasks','n_minor_tasks','p_minor','vocab_size','major_pool_type','mixed_precision','num_layers','emb_dim','learning_rate','weight_decay'],
+    dyck:   ['n_tasks','n_minor_tasks','p_minor','vocab_size','seq_len','alpha','order','dyck_length','repeat_prob','scheduler_type','grad_clip_norm','num_layers','emb_dim','learning_rate','weight_decay'],
+    latent: ['n_tasks','n_minor_tasks','p_minor','vocab_size','seq_len','alpha','order','num_layers','emb_dim','learning_rate','weight_decay'],
+    linear: ['n_tasks','n_minor_tasks','p_minor','n_dims','n_points','noise_scale','scheduler_type','num_layers','emb_dim','learning_rate','weight_decay'],
+};
+
+const FILTER_LABELS = {
+    n_tasks: 'n_major', n_minor_tasks: 'n_minor', p_minor: 'p_minor',
+    vocab_size: 'Vocab', seq_len: 'Seq len', alpha: 'α', order: 'Order',
+    dyck_length: 'Dyck len', stationary: 'Stationary', repeat_prob: 'Repeat prob',
+    major_pool_type: 'Pool type', major_means: 'Major means', mixed_precision: 'Mixed prec',
+    n_dims: 'n_dims', n_points: 'n_points', noise_scale: 'Noise σ',
+    num_layers: 'Layers', emb_dim: 'Emb dim', learning_rate: 'LR', weight_decay: 'WD',
+    scheduler_type: 'Scheduler', grad_clip_norm: 'Grad clip',
+};
+
+function getParamVal(exp, key) {
+    const t  = exp.params.task     || {};
+    const m  = exp.params.model    || {};
+    const tr = exp.params.training || {};
+    const g  = exp.params.general  || {};
+    const all = {...g, ...t, ...m, ...tr};
+    return all[key];
+}
+
+// ── Formatting ───────────────────────────────────────────────────────────────
+function fmtSize(bytes) {
+    if (bytes == null) return '—';
+    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+    if (bytes >= 1e6) return (bytes / 1e6).toFixed(0) + ' MB';
+    if (bytes >= 1e3) return (bytes / 1e3).toFixed(0) + ' KB';
+    return bytes + ' B';
+}
+
+function fmtLR(v) {
+    if (v === null || v === undefined) return '—';
+    const e = Math.floor(Math.log10(Math.abs(v)));
+    const m = v / Math.pow(10, e);
+    return Math.abs(m - 1) < 1e-9 ? `1e${e}` : `${+m.toPrecision(3)}e${e}`;
+}
+
+function fmtVal(v, fmt) {
+    if (v === null || v === undefined) return '—';
+    if (fmt) return fmt(v);
+    if (v === true  || v === 'True')  return '✓';
+    if (v === false || v === 'False') return '✗';
+    return String(v);
+}
+
+// ── Load ─────────────────────────────────────────────────────────────────────
+async function load() {
+    for (const p of ['experiment_index.json', './experiment_index.json']) {
+        try {
+            const r = await fetch(`${p}?t=${Date.now()}`);
+            if (!r.ok) continue;
+            const d = await r.json();
+            allExps = d.experiments || [];
+            init(); return;
+        } catch {}
+    }
+    document.getElementById('content').innerHTML = `
+        <div class="empty"><div class="empty-icon">⚠️</div>
+        <p>Could not load <code>experiment_index.json</code>.<br>
+           Run <code>./exp.sh serve</code> to start the local server.</p></div>`;
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+function init() {
+    const byTask = {};
+    allExps.forEach(e => { byTask[e.task_name] = (byTask[e.task_name]||0)+1; });
+
+    // Header pills
+    document.getElementById('headerStats').innerHTML =
+        Object.entries(byTask).sort().map(([t,n]) =>
+            `<div class="stat-pill ${t}">${n} ${t}</div>`
+        ).join('') + `<div class="stat-pill total">${allExps.length} total</div>`;
+
+    // Tabs
+    const tabs = [['overview','🗂 Overview'], ...Object.keys(byTask).sort().map(t=>[t, t])];
+    document.getElementById('tabBar').innerHTML = tabs.map(([id, label]) =>
+        `<div class="tab ${id==='overview'?'active':''} ${id}" id="tab-${id}" onclick="switchTab('${id}')">${label}</div>`
+    ).join('');
+
+    switchTab('overview');
+}
+
+// ── Tab switch ───────────────────────────────────────────────────────────────
+function switchTab(tab) {
+    activeTab = tab;
+    sortCol = null; sortDir = 1;
+    expandedRow = null; expandedTr = null;
+
+    document.querySelectorAll('.tab').forEach(el =>
+        el.classList.toggle('active', el.id === `tab-${tab}`)
+    );
+
+    const isOverview = tab === 'overview';
+    document.getElementById('filterBar').style.display = isOverview ? 'none' : '';
+    document.getElementById('viewBtns').style.display  = isOverview ? 'none' : '';
+    document.getElementById('resultsCount').textContent = '';
+
+    if (isOverview) { renderOverview(); return; }
+
+    buildFilters(tab);
+    applyFilters();
+}
+
+// ── Overview ─────────────────────────────────────────────────────────────────
+function renderOverview() {
+    const tasks = [...new Set(allExps.map(e => e.task_name))].sort();
+    const html = `<div class="overview-grid">${tasks.map(task => {
+        const exps = allExps.filter(e => e.task_name === task);
+        const params = overviewParams(exps, task);
+        const rows = params.map(([label, val, wide]) =>
+            `<div class="overview-param${wide?' wide':''}">
+                <div class="p-label">${label}</div>
+                <div class="p-val">${val}</div>
+            </div>`
+        ).join('');
+        return `<div class="overview-card">
+            <div class="overview-head ${task}">
+                <span class="badge badge-${task}">${task}</span>
+                <h2>${task}</h2>
+                <span class="cnt">${exps.length} runs</span>
+            </div>
+            <div class="overview-body">
+                <div class="overview-param-grid">${rows}</div>
+            </div>
+            <div class="overview-footer">
+                <button class="btn-go ${task}" onclick="switchTab('${task}')">Browse ${task} →</button>
+            </div>
+        </div>`;
+    }).join('')}</div>`;
+    document.getElementById('content').innerHTML = html;
+}
+
+// Compact formatter for overview cells: list if ≤4 values, otherwise "min – max (N)"
+function fmtOverviewNums(vals, fmtFn) {
+    if (!vals.length) return '—';
+    const sorted = [...vals].sort((a,b) => a-b);
+    if (sorted.length <= 4) return sorted.map(v => fmtFn ? fmtFn(v) : v).join(', ');
+    const lo = fmtFn ? fmtFn(sorted[0]) : sorted[0];
+    const hi = fmtFn ? fmtFn(sorted[sorted.length-1]) : sorted[sorted.length-1];
+    return `${lo} – ${hi} <span style="color:var(--muted);font-weight:400">(${sorted.length})</span>`;
+}
+
+function uniqVals(exps, fn) {
+    return [...new Set(exps.map(fn).filter(v => v != null))];
+}
+
+function overviewParams(exps, task) {
+    // Returns array of [label, html_string, wide?]
+    const rows = [
+        ['n_major',   fmtOverviewNums(uniqVals(exps, e => e.params.task?.n_tasks))],
+        ['n_minor',   fmtOverviewNums(uniqVals(exps, e => e.params.task?.n_minor_tasks))],
+        ['p_minor',   fmtOverviewNums(uniqVals(exps, e => e.params.task?.p_minor))],
+    ];
+
+    if (task === 'linear') {
+        rows.push(
+            ['n_dims',    fmtOverviewNums(uniqVals(exps, e => e.params.task?.n_dims))],
+            ['n_points',  fmtOverviewNums(uniqVals(exps, e => e.params.task?.n_points))],
+        );
+    } else {
+        rows.push(
+            ['vocab',     fmtOverviewNums(uniqVals(exps, e => e.params.task?.vocab_size))],
+            ['seq len',   fmtOverviewNums(uniqVals(exps, e => e.params.task?.seq_len))],
+        );
+        if (task !== 'coin') {
+            rows.push(
+                ['α',     fmtOverviewNums(uniqVals(exps, e => e.params.task?.alpha))],
+                ['order', fmtOverviewNums(uniqVals(exps, e => e.params.task?.order))],
+            );
+        }
+    }
+
+    const totalBytes = exps.reduce((s, e) => s + (e.size_bytes || 0), 0);
+    const minBytes   = Math.min(...exps.map(e => e.size_bytes || 0).filter(v => v > 0));
+    const maxBytes   = Math.max(...exps.map(e => e.size_bytes || 0));
+
+    rows.push(
+        ['layers',    fmtOverviewNums(uniqVals(exps, e => e.params.model?.num_layers))],
+        ['emb dim',   fmtOverviewNums(uniqVals(exps, e => e.params.model?.emb_dim))],
+        ['LR',        fmtOverviewNums(uniqVals(exps, e => e.params.training?.learning_rate), fmtLR)],
+        ['WD',        fmtOverviewNums(uniqVals(exps, e => e.params.training?.weight_decay),  fmtLR)],
+        ['steps',     fmtOverviewNums(uniqVals(exps, e => e.params.training?.num_epochs))],
+        ['disk (each)', `${fmtSize(minBytes)} – ${fmtSize(maxBytes)}`, true],
+        ['disk (total)', `<strong>${fmtSize(totalBytes)}</strong>`, true],
+    );
+    return rows;
+}
+
+// ── Filters ──────────────────────────────────────────────────────────────────
+function buildFilters(task) {
+    const keys = TASK_FILTERS[task] || [];
+    const taskExps = allExps.filter(e => e.task_name === task);
+
+    const html = `
+        <div class="fg wide">
+            <label>Search</label>
+            <input class="wide-input" type="text" id="fSearch" placeholder="Name, hash, any value…" oninput="applyFilters()">
+        </div>
+        ${keys.map(key => {
+            const vals = [...new Set(taskExps.map(e => getParamVal(e, key)).filter(v => v != null))].sort((a,b)=>a-b);
+            const useLR = key === 'learning_rate' || key === 'weight_decay';
+            return `<div class="fg">
+                <label>${FILTER_LABELS[key]||key}</label>
+                <select id="f_${key}" onchange="applyFilters()">
+                    <option value="">Any</option>
+                    ${vals.map(v => `<option value="${v}">${useLR ? fmtLR(v) : v}</option>`).join('')}
+                </select>
+            </div>`;
+        }).join('')}
+        <button class="btn btn-ghost" onclick="clearFilters()">Clear</button>
+    `;
+    document.getElementById('filterBar').innerHTML = html;
+}
+
+function getFilteredExps() {
+    const taskExps = allExps.filter(e => e.task_name === activeTab);
+    const searchEl = document.getElementById('fSearch');
+    const text = searchEl ? searchEl.value.toLowerCase() : '';
+    const keys = TASK_FILTERS[activeTab] || [];
+
+    return taskExps.filter(exp => {
+        for (const key of keys) {
+            const el = document.getElementById(`f_${key}`);
+            if (!el || !el.value) continue;
+            const val = getParamVal(exp, key);
+            if (String(val) !== el.value) return false;
+        }
+        if (text) {
+            if (!JSON.stringify(exp).toLowerCase().includes(text)) return false;
+        }
+        return true;
+    });
+}
+
+function applyFilters() {
+    let exps = getFilteredExps();
+    if (sortCol !== null) exps = sortExps(exps);
+    renderContent(exps);
+}
+
+function clearFilters() {
+    const searchEl = document.getElementById('fSearch');
+    if (searchEl) searchEl.value = '';
+    (TASK_FILTERS[activeTab]||[]).forEach(key => {
+        const el = document.getElementById(`f_${key}`);
+        if (el) el.value = '';
+    });
+    applyFilters();
+}
+
+// ── Sort ─────────────────────────────────────────────────────────────────────
+function sortExps(exps) {
+    const cols = TASK_COLS[activeTab] || [];
+    const col  = cols[sortCol];
+    if (!col || !col.key) return exps;
+    return [...exps].sort((a, b) => {
+        const va = col.key(a), vb = col.key(b);
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        return va < vb ? -sortDir : va > vb ? sortDir : 0;
+    });
+}
+
+function clickSort(idx) {
+    if (sortCol === idx) sortDir *= -1;
+    else { sortCol = idx; sortDir = 1; }
+    applyFilters();
+}
+
+// ── View switch ───────────────────────────────────────────────────────────────
+function setView(v) {
+    currentView = v;
+    expandedRow = null; expandedTr = null;
+    document.getElementById('btnTable').classList.toggle('active', v==='table');
+    document.getElementById('btnCard').classList.toggle('active',  v==='card');
+    applyFilters();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderContent(exps) {
+    document.getElementById('resultsCount').textContent =
+        `${exps.length} of ${allExps.filter(e=>e.task_name===activeTab).length} experiments`;
+
+    const c = document.getElementById('content');
+    if (!exps.length) {
+        c.innerHTML = `<div class="empty"><div class="empty-icon">🔍</div><p>No experiments match the current filters.</p></div>`;
+        return;
+    }
+    if (currentView === 'table') renderTable(c, exps);
+    else renderCards(c, exps);
+}
+
+// ── Table ─────────────────────────────────────────────────────────────────────
+function renderTable(container, exps) {
+    const cols = TASK_COLS[activeTab] || [];
+
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    const tbl  = document.createElement('table');
+
+    // Header
+    const thead = tbl.createTHead();
+    const hr = thead.insertRow();
+    cols.forEach((col, idx) => {
+        const th = document.createElement('th');
+        const isSort = sortCol === idx;
+        const icon = col.isPath ? '' : `<span class="sort-icon">${isSort?(sortDir===1?'↑':'↓'):'↕'}</span>`;
+        th.innerHTML = col.label + icon;
+        if (!col.isPath) {
+            th.onclick = () => clickSort(idx);
+            if (isSort) th.className = sortDir===1?'sort-asc':'sort-desc';
+        }
+        hr.appendChild(th);
+    });
+
+    // Body
+    const tbody = tbl.createTBody();
+    exps.forEach(exp => {
+        const row = tbody.insertRow();
+        row.onclick = () => toggleExpand(row, exp, cols);
+
+        cols.forEach((col, idx) => {
+            const td = document.createElement('td');
+            if (col.isName) {
+                td.innerHTML = `<span class="exp-name" title="${exp.exp_name}">…${exp.exp_name.slice(-14)}</span>`;
+            } else if (col.isPath) {
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.textContent = '📂';
+                btn.title = exp.exp_path;
+                btn.onclick = ev => { ev.stopPropagation(); openFolder(btn, exp.exp_path); };
+                td.appendChild(btn);
+            } else if (col.isDelete) {
+                const btn = document.createElement('button');
+                btn.className = 'del-btn';
+                btn.textContent = '🗑';
+                btn.title = 'Delete experiment';
+                btn.onclick = ev => { ev.stopPropagation(); openConfirm(exp, row); };
+                td.appendChild(btn);
+            } else {
+                const v = col.key(exp);
+                td.textContent = fmtVal(v, col.fmt);
+            }
+            row.appendChild(td);
+        });
+    });
+
+    tbl.appendChild(tbody);
+    wrap.appendChild(tbl);
+    container.innerHTML = '';
+    container.appendChild(wrap);
+}
+
+// ── Row expand ────────────────────────────────────────────────────────────────
+function toggleExpand(row, exp, cols) {
+    if (expandedTr) { expandedTr.remove(); expandedTr = null; }
+    if (expandedRow === row) { row.classList.remove('expanded'); expandedRow = null; return; }
+    if (expandedRow) expandedRow.classList.remove('expanded');
+    expandedRow = row;
+    row.classList.add('expanded');
+
+    const tr = document.createElement('tr');
+    tr.className = 'xrow';
+    const td = document.createElement('td');
+    td.colSpan = cols.length;
+
+    const cats = Object.entries(exp.params);
+    const safeHash = exp.exp_name;
+    const safePath = exp.exp_path.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+    td.innerHTML = `<div class="xinner">
+        ${cats.map(([cat, kv]) => `
+            <div class="xsect">
+                <h4>${cat}</h4>
+                ${Object.entries(kv).map(([k,v]) =>
+                    `<div class="xkv"><span class="k">${k}</span><span class="v">${JSON.stringify(v)}</span></div>`
+                ).join('')}
+            </div>`).join('')}
+        <div class="xsect">
+            <h4>Path</h4>
+            <div class="xkv"><span class="v" style="font-size:.8em">${exp.exp_path}</span></div>
+            <div class="xactions">
+                <button class="copy-btn" onclick="openFolder(this,'${safePath}')">📂 Open folder</button>
+                <button class="copy-btn" onclick="copyPath(this,'${safePath}')">⎘ Copy path</button>
+                <button class="copy-btn" onclick="openModal(${JSON.stringify(JSON.stringify(exp.params,null,2))}, '${safeHash}')">📄 Full config</button>
+            </div>
+        </div>
+    </div>`;
+
+    tr.appendChild(td);
+    row.after(tr);
+    expandedTr = tr;
+}
+
+// ── Cards ─────────────────────────────────────────────────────────────────────
+function renderCards(container, exps) {
+    const grid = document.createElement('div');
+    grid.className = 'card-grid';
+
+    exps.forEach(exp => {
+        const cols = (TASK_COLS[activeTab] || [])
+            .filter(c => !c.isName && !c.isPath && c.key);
+
+        const card = document.createElement('div');
+        card.className = `exp-card ${exp.task_name}-card`;
+        card.onclick = () => openModal(JSON.stringify(exp.params, null, 2), exp.exp_name);
+
+        const kvHtml = cols.map(col => {
+            const v = col.key(exp);
+            if (v === null || v === undefined) return '';
+            return `<div class="card-kv"><span class="k">${col.label}</span><span class="v">${fmtVal(v, col.fmt)}</span></div>`;
+        }).join('');
+
+        card.innerHTML = `
+            <div class="card-head">
+                <div class="card-name" title="${exp.exp_name}">…${exp.exp_name.slice(-22)}</div>
+                <span class="badge badge-${exp.task_name}">${exp.task_name}</span>
+            </div>
+            <div class="card-params">${kvHtml}</div>
+            <div class="card-foot">
+                <span title="${exp.exp_path}">…${exp.exp_path.slice(-48)}</span>
+                <button class="copy-btn" onclick="event.stopPropagation();copyPath(this,'${exp.exp_path.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">⎘</button>
+            </div>`;
+        grid.appendChild(card);
+    });
+
+    container.innerHTML = '';
+    container.appendChild(grid);
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function copyPath(btn, path) {
+    navigator.clipboard.writeText(path).then(() => {
+        const prev = btn.textContent;
+        btn.textContent = '✓';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500);
+    });
+}
+
+async function openFolder(btn, path) {
+    btn.textContent = '⏳';
+    try {
+        const res  = await fetch('/api/open-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        });
+        const data = await res.json();
+        if (!data.ok) showToast(`Could not open folder: ${data.error}`, 'error');
+    } catch {
+        showToast('Server not reachable — run ./exp.sh serve', 'error');
+    } finally {
+        btn.textContent = '📂';
+    }
+}
+
+function openModal(jsonStr, title) {
+    document.getElementById('modalTitle').textContent = title;
+    document.getElementById('modalBody').textContent = jsonStr;
+    document.getElementById('modalBg').classList.add('open');
+}
+
+function closeModal(e) {
+    if (!e || e.target === document.getElementById('modalBg'))
+        document.getElementById('modalBg').classList.remove('open');
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeModal(); closeConfirm(); }
+});
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+let pendingDelete = null; // { exp, row }
+
+function openConfirm(exp, row) {
+    pendingDelete = { exp, row };
+    document.getElementById('confirmPath').textContent = exp.exp_path;
+    document.getElementById('confirmDeleteBtn').disabled = false;
+    document.getElementById('confirmDeleteBtn').textContent = 'Delete';
+    document.getElementById('confirmBg').classList.add('open');
+}
+
+function closeConfirm() {
+    document.getElementById('confirmBg').classList.remove('open');
+    pendingDelete = null;
+}
+
+async function executeDelete() {
+    if (!pendingDelete) return;
+    const { exp, row } = pendingDelete;
+
+    const btn = document.getElementById('confirmDeleteBtn');
+    btn.disabled = true;
+    btn.textContent = 'Deleting…';
+
+    try {
+        const res = await fetch('/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ exp_path: exp.exp_path }),
+        });
+        const data = await res.json();
+
+        if (data.ok) {
+            // Remove from local data
+            allExps = allExps.filter(e => e.exp_name !== exp.exp_name);
+            // Remove expanded row if open
+            if (expandedTr) { expandedTr.remove(); expandedTr = null; expandedRow = null; }
+            // Remove table row with fade
+            row.style.transition = 'opacity .3s';
+            row.style.opacity = '0';
+            setTimeout(() => { row.remove(); updateCount(); }, 300);
+
+            closeConfirm();
+            showToast(data.reindex_warning
+                ? `Deleted. Warning: ${data.reindex_warning}`
+                : `Deleted ${exp.exp_name}`, data.reindex_warning ? 'error' : 'success');
+        } else {
+            closeConfirm();
+            showToast(`Error: ${data.error}`, 'error');
+        }
+    } catch (err) {
+        closeConfirm();
+        showToast(`Network error — is the server running? (${err.message})`, 'error');
+    }
+}
+
+function updateCount() {
+    const total = allExps.filter(e => e.task_name === activeTab).length;
+    const filtered = document.querySelectorAll('tbody tr:not(.xrow)').length;
+    document.getElementById('resultsCount').textContent = `${filtered} of ${total} experiments`;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, type = 'success') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `toast ${type} show`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.classList.remove('show'); }, 4000);
+}
+
+load();
+</script>
+</body>
+</html>

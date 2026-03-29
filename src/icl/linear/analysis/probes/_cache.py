@@ -4,6 +4,7 @@ import gc
 from typing import Optional
 
 import torch
+from tqdm import tqdm
 
 import icl.utils.notebook_utils as nu
 from icl.linear.linear_path_utils import load_model_task_config
@@ -45,18 +46,19 @@ def _get_linear_hiddens_cached(
         extraction_point,
     )
     if key in _linear_hiddens_cache:
-        if verbose:
-            logger.info("[linear cache] reusing cached hiddens")
+        logger.info("[linear cache] reusing cached hiddens")
         return _linear_hiddens_cache[key]
 
+    logger.info(f"[linear] loading config + model for {exp_name} …")
     _, train_task, config = load_model_task_config(exp_name)
 
     if step is None:
         step = config.training.total_steps
 
-    model, _ = nu.load_checkpoint(
+    model, actual_step = nu.load_checkpoint(
         config, step=step, exp_name=exp_name, return_actual_step=True,
     )
+    logger.info(f"[linear] model loaded (step={actual_step}, n_layer={config.model.n_layer})")
 
     device = setup_device(None)
     eval_task_pool, k_minor = _create_eval_task_pool(
@@ -76,11 +78,10 @@ def _get_linear_hiddens_cached(
     pad_mode = getattr(model, "pad", "mapsto")
     task_pos = _task_positions(pad_mode, n_points, device=device)
 
-    if verbose:
-        logger.info(
-            f"linear hiddens: layers={layers}, B={batch_size}, "
-            f"n_tasks={n_tasks}, pad={pad_mode}"
-        )
+    logger.info(
+        f"[linear] extracting hiddens: layers={layers}, B={batch_size}, "
+        f"n_tasks={n_tasks}, n_points={n_points}, pad={pad_mode}, device={device}"
+    )
 
     all_hiddens = torch.empty(
         (L, n_tasks, n_points, batch_size, n_embd),
@@ -88,7 +89,8 @@ def _get_linear_hiddens_cached(
     )
     demo_data = eval_task.sample_data(step=step)
 
-    for i in range(0, n_tasks, chunk_size):
+    n_chunks = max(1, (n_tasks + chunk_size - 1) // chunk_size)
+    for i in tqdm(range(0, n_tasks, chunk_size), total=n_chunks, desc="linear hiddens (tasks)", unit="chunk"):
         chunk_end = min(i + chunk_size, n_tasks)
         chunk_n = chunk_end - i
 

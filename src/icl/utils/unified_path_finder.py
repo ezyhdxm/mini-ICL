@@ -29,8 +29,8 @@ def unified_get_config(
         config.training.num_epochs = 40_000
         return config
     if task_name == "dyck":
-        config.training.warmup_steps = 8_000
-        config.training.num_epochs = 32_000
+        config.training.warmup_steps = 15_000
+        config.training.num_epochs = 30_000
         return config
     if task_name == "linear":
         config.training.warmup_steps = 15_000
@@ -168,6 +168,7 @@ def _get_metrics_cache_path(
     layer_indices: Sequence[int],
     position_blocks: Optional[Sequence[Union[int, Tuple[int, int]]]] = None,
     extraction_point: str = "post_attn",
+    avg_over: int = 1,
 ):
     """Generate cache file path for OOD metrics data."""
     exp_dir = _get_exp_dir(config, exp_name)
@@ -176,13 +177,14 @@ def _get_metrics_cache_path(
         key = repr(tuple(position_blocks))
         pos_suffix = "_posblocks_" + hashlib.md5(key.encode()).hexdigest()[:8]
     ep_suffix = f"_ep_{extraction_point}" if extraction_point != "post_attn" else ""
+    avg_suffix = f"_avg{avg_over}" if avg_over > 1 else ""
     cache_files = {}
     for step in steps:
         cache_files[step] = {}
         for layer_index in layer_indices:
             cache_file = (
                 f"metrics_{task_name}_kminor_{k_minor}_kood_{n_ood}_b_{B}_iqr_"
-                f"{layer_index}_{exp_name}_{step}{pos_suffix}{ep_suffix}.pkl"
+                f"{layer_index}_{exp_name}_{step}{avg_suffix}{pos_suffix}{ep_suffix}.pkl"
             )
             cache_files[step][layer_index] = os.path.join(exp_dir, cache_file)
     return cache_files
@@ -196,6 +198,7 @@ def get_exp_name(
     pad=None,
     major_pool_type: str = None,
     major_means=None,
+    major_seed: int = None,
     total_steps: Optional[int] = None,
     warmup_steps: Optional[int] = None,
     lr: Optional[float] = None,
@@ -231,6 +234,8 @@ def get_exp_name(
         config.task.major_pool_type = major_pool_type
     if major_means is not None:
         config.task.major_means = list(major_means)
+    if major_seed is not None:
+        config.task.major_seed = major_seed
     if total_steps is not None:
         if task_name == "linear":
             config.training.total_steps = total_steps

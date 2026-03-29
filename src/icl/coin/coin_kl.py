@@ -314,9 +314,10 @@ def plot_kl_model_vs_two_bayes_coin_transition_across_k(
     eps: float = 1e-12,
     show_colorbar: bool = True,
     show_ylabel: bool = True,
-    figsize: tuple = (10, 5),
+    figsize: tuple = (9, 4),
     show: bool = True,
     verbose: bool = False,
+    vocab_size: Optional[int] = None,
 ) -> dict:
     """
     Visualize the transition from exact-Bayes-like to Dirichlet-like behavior across k.
@@ -350,7 +351,7 @@ def plot_kl_model_vs_two_bayes_coin_transition_across_k(
     exp_names = {}
     all_steps = set()
     for k in k_values:
-        exp_name = get_exp_name("coin", k=k)
+        exp_name = get_exp_name("coin", k=k, vocab_size=vocab_size)
         exp_names[k] = exp_name
         try:
             out = plot_kl_model_vs_two_bayes_coin_over_steps(
@@ -455,7 +456,7 @@ def plot_kl_model_vs_two_bayes_coin_transition_across_k(
 
     if show_colorbar:
         cbar_rel = fig_rel.colorbar(mesh_rel, ax=ax_rel, pad=0.02)
-        cbar_rel.set_label(r"$\log(\mathrm{KL}_{\mathrm{exact}} / \mathrm{KL}_{\mathrm{approx}})$", fontsize=14)
+        cbar_rel.set_label(r"$\log(\mathrm{KL}_{\mathrm{exact}} / \mathrm{KL}_{\mathrm{approx}})$", fontsize=13)
         cbar_rel.ax.tick_params(labelsize=12)
     ax_rel.set_xlabel("Training Step", fontsize=11)
     if show_ylabel:
@@ -478,7 +479,7 @@ def plot_kl_model_vs_two_bayes_coin_transition_across_k(
 
     if show_colorbar:
         cbar_abs = fig_abs.colorbar(mesh_abs, ax=ax_abs, pad=0.02)
-        cbar_abs.set_label(r"$\log_{10}(\min(\mathrm{KL}_{\mathrm{exact}}, \mathrm{KL}_{\mathrm{approx}}))$", fontsize=14)
+        cbar_abs.set_label(r"$\log_{10}(\min(\mathrm{KL}_{\mathrm{exact}}, \mathrm{KL}_{\mathrm{approx}}))$", fontsize=13)
         cbar_abs.ax.tick_params(labelsize=12)
     ax_abs.set_title("Best Absolute KL", fontsize=12)
     ax_abs.set_xlabel("Training Step", fontsize=11)

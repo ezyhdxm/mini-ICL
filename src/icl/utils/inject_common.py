@@ -119,7 +119,7 @@ def plot_inject_posterior_per_position(
     result: dict,
     *,
     title: Optional[str] = None,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     show: bool = True,
 ):
     """Detailed per-position visualisation of a single-layer result.
@@ -159,7 +159,7 @@ def plot_inject_posterior_per_position(
     ax1.set_xlabel("Position", fontsize=13)
     ax1.set_ylabel(r"$\mathrm{KL}(\mathrm{output}\;\|\;\sum_k \alpha_k q_k)$", fontsize=13)
     if sup:
-        ax1.set_title(sup, fontsize=14)
+        ax1.set_title(sup, fontsize=13)
     ax1.legend(fontsize=10, loc="best")
     ax1.grid(alpha=0.3)
     plt.tight_layout()
@@ -246,9 +246,9 @@ def plot_inject_posterior_across_layers(
              label="baseline", lw=2, ms=4)
     ax1.plot(r["positions"], r["kl_injected"], "s-",
              label="posterior-injected", lw=2, ms=4)
-    ax1.set_xlabel("Position", fontsize=14)
-    ax1.set_ylabel(r"KL(output $\|$ misBayes)", fontsize=14)
-    ax1.set_title(f"Layer {last}", fontsize=14)
+    ax1.set_xlabel("Position", fontsize=13)
+    ax1.set_ylabel(r"KL(output $\|$ misBayes)", fontsize=13)
+    ax1.set_title(f"Layer {last}", fontsize=13)
     ax1.legend(fontsize=12)
     ax1.grid(alpha=0.3)
 
@@ -265,8 +265,8 @@ def plot_inject_posterior_across_layers(
                  ha="center", va="bottom", fontsize=8)
         ax2.text(x[i] + bw / 2, vi, f"{vi:.3f}",
                  ha="center", va="bottom", fontsize=8)
-    ax2.set_xlabel("Layer", fontsize=14)
-    ax2.set_ylabel(r"Mean KL(output $\|$ misBayes)", fontsize=14)
+    ax2.set_xlabel("Layer", fontsize=13)
+    ax2.set_ylabel(r"Mean KL(output $\|$ misBayes)", fontsize=13)
     ax2.set_xticks(x, [str(l) for l in layers])
     ax2.legend(fontsize=12)
     ax2.grid(axis="y", alpha=0.3)

@@ -34,7 +34,7 @@ def intervene_remove_ood_deltah_subspace(
     eval_positions: Optional[list] = None,
     analyze_component: Optional[int] = None,
     show: bool = True,
-    figsize: tuple = (14, 6),
+    figsize: tuple = (10, 4.5),
     print_summary: bool = True,
     # legacy params (ignored, kept for backward compat)
     method: str = "ablation_sweep",

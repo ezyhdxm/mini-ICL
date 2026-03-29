@@ -2069,7 +2069,7 @@
     },
     {
         "input": "moderate",
-        "output": "m\u00e4\u00dfig\n"
+        "output": "m\u00e4\u00dfig"
     },
     {
         "input": "composer",
@@ -6637,7 +6637,7 @@
     },
     {
         "input": "relay",
-        "output": "Staffel\n"
+        "output": "Staffel"
     },
     {
         "input": "summer",
@@ -6813,7 +6813,7 @@
     },
     {
         "input": "brick",
-        "output": "ziegel\n"
+        "output": "ziegel"
     },
     {
         "input": "own",

@@ -20,7 +20,7 @@ def plot_task_vector_r2_linear(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
@@ -93,9 +93,9 @@ def plot_task_vector_r2_linear(
             **_layer_style(l_num, len(pos_list)),
         )
 
-    ax.set_xlabel("Position", fontsize=14)
+    ax.set_xlabel("Position", fontsize=13)
     if show_ylabel:
-        ax.set_ylabel("Residual variance ratio", fontsize=14)
+        ax.set_ylabel("Residual variance ratio", fontsize=13)
     if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
         ax.set_xscale("symlog", linthresh=1)
     ax.set_ylim(-0.02, 1.02)
@@ -136,12 +136,19 @@ def plot_averaging_r2_linear(
     extraction_point: str = "post_attn",
     simplex: bool = True,
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
+    plots: str = "both",
 ) -> dict:
     """Task-subspace R² using averaging-based task vectors.
+
+    Parameters (plotting)
+    ---------------------
+    plots : "both" | "task" | "additive"
+        Which figure(s) to produce.  ``"task"`` = task-only R²;
+        ``"additive"`` = task + token R²; ``"both"`` (default) = both.
 
     Estimates task vectors from major tasks at late positions by
     conditional averaging, then measures the fraction of hidden-state
@@ -176,6 +183,7 @@ def plot_averaging_r2_linear(
     'fig_task', 'fig_additive'.
     """
     import matplotlib.pyplot as plt
+    from tqdm import tqdm
     from icl.utils.separability import (
         estimate_task_vectors_by_averaging,
         task_subspace_r2_at_position,
@@ -224,7 +232,8 @@ def plot_averaging_r2_linear(
     results: dict = {}
     task_vecs_by_layer: dict = {}
 
-    for l_idx, l_num in enumerate(layers):
+    eval_positions_list = [p for p in evaluation_positions if p < n_points]
+    for l_idx, l_num in tqdm(enumerate(layers), total=L, desc="averaging R² (layers)", unit="layer"):
         if l_idx >= L:
             continue
 
@@ -243,9 +252,7 @@ def plot_averaging_r2_linear(
         fixed_mean = None if per_position_mean else gm
 
         layer_results: dict = {}
-        for pos in evaluation_positions:
-            if pos >= n_points:
-                continue
+        for pos in eval_positions_list:
             h_pos = all_hiddens[l_idx, eval_start:eval_end, pos, :, :]
             x_pos = demo_data[:, pos, :]               # (B, d)
 
@@ -262,59 +269,44 @@ def plot_averaging_r2_linear(
     from icl.utils.separability import _layer_style
 
     sorted_layers = sorted(results.keys())
-
-    fig_task, ax1 = plt.subplots(figsize=figsize)
-    pos_list = []
-    for i, l_num in enumerate(sorted_layers):
-        pos_results = results[l_num]
-        pos_list = sorted(pos_results.keys())
-        vals = [pos_results[p].r2_task for p in pos_list]
-        ax1.plot(pos_list, vals, label=str(l_num),
-                 **_layer_style(l_num, len(pos_list)))
-
-    ax1.set_xlabel("Position", fontsize=14)
-    if show_ylabel:
-        ax1.set_ylabel("Task subspace $R^2$", fontsize=14)
-    if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
-        ax1.set_xscale("symlog", linthresh=1)
-    ax1.set_ylim(-0.02, 1.02)
-    ax1.tick_params(labelsize=12)
     n_layers = len(sorted_layers)
     _ncol = 2 if n_layers > 6 else 1
-    ax1.legend(title="Layer", fontsize=12, title_fontsize=12,
-               framealpha=0.9, loc="best", ncol=_ncol,
-               borderaxespad=0.3, handlelength=2.2)
-    ax1.grid(True, alpha=0.25, linewidth=0.5)
-    fig_task.tight_layout()
-    if show:
-        plt.show()
-    else:
-        plt.close(fig_task)
 
-    fig_add, ax2 = plt.subplots(figsize=figsize)
-    for i, l_num in enumerate(sorted_layers):
-        pos_results = results[l_num]
-        pos_list = sorted(pos_results.keys())
-        vals = [pos_results[p].r2_additive for p in pos_list]
-        ax2.plot(pos_list, vals, label=str(l_num),
-                 **_layer_style(l_num, len(pos_list)))
+    def _make_fig(ylabel, val_key):
+        fig, ax = plt.subplots(figsize=figsize)
+        pos_list: list = []
+        for l_num in sorted_layers:
+            pos_results = results[l_num]
+            pos_list = sorted(pos_results.keys())
+            vals = [getattr(pos_results[p], val_key) for p in pos_list]
+            ax.plot(pos_list, vals, label=str(l_num),
+                    **_layer_style(l_num, len(pos_list)))
+        ax.set_xlabel("Position", fontsize=13)
+        if show_ylabel:
+            ax.set_ylabel(ylabel, fontsize=13)
+        if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
+            ax.set_xscale("symlog", linthresh=1)
+        ax.set_ylim(-0.02, 1.02)
+        ax.tick_params(labelsize=12)
+        ax.legend(title="Layer", fontsize=12, title_fontsize=12,
+                  framealpha=0.9, loc="best", ncol=_ncol,
+                  borderaxespad=0.3, handlelength=2.2)
+        ax.grid(True, alpha=0.25, linewidth=0.5)
+        fig.tight_layout()
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+        return fig
 
-    ax2.set_xlabel("Position", fontsize=14)
-    if show_ylabel:
-        ax2.set_ylabel(r"$R^2$: $\mu_t + \theta_z + \nu_a$", fontsize=14)
-    if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
-        ax2.set_xscale("symlog", linthresh=1)
-    ax2.set_ylim(-0.02, 1.02)
-    ax2.tick_params(labelsize=12)
-    ax2.legend(title="Layer", fontsize=12, title_fontsize=12,
-               framealpha=0.9, loc="best", ncol=_ncol,
-               borderaxespad=0.3, handlelength=2.2)
-    ax2.grid(True, alpha=0.25, linewidth=0.5)
-    fig_add.tight_layout()
-    if show:
-        plt.show()
-    else:
-        plt.close(fig_add)
+    fig_task = (
+        _make_fig("Task subspace $R^2$", "r2_task")
+        if plots in ("both", "task") else None
+    )
+    fig_add = (
+        _make_fig(r"$R^2$: $\mu_t + \theta_z + \nu_a$", "r2_additive")
+        if plots in ("both", "additive") else None
+    )
 
     return {
         "all_hiddens": all_hiddens,
@@ -338,7 +330,7 @@ def plot_ancova_separability_linear(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,

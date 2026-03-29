@@ -31,7 +31,7 @@ def calculation_direction_analysis(
     fit_positions: Optional[list] = None,
     center_task_vecs: bool = False,
     show: bool = True,
-    figsize: tuple = (16, 5),
+    figsize: tuple = (10, 3.5),
     title: str = "",
 ) -> dict:
     """

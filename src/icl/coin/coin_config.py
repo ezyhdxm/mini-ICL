@@ -37,6 +37,7 @@ def get_config_coin() -> ConfigDict:
     config.task.init_task_pool = None
     config.task.pad = "none"  # Padding: True (interleave pad tokens), False or "none" (no padding)
     config.task.major_pool_type = "dirichlet"  # "dirichlet" | "disjoint" | "tilted" | "maxent" | "partition"
+    config.task.major_seed = 42  # Seed used to reproducibly draw the major task pool (dirichlet pool type only)
 
     ######################
     #     Model          #

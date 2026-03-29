@@ -28,7 +28,15 @@ Language Models" (ICLR 2024).
   landmark_to_country  : Colosseum → Italy     (836 pairs)
   product_to_company   : iPhone  → Apple       (522 pairs)
 
-Each ID task has a matched OOD task (apply deterministic g to the output).
+Two kinds of OOD tasks are supported:
+
+  OUTPUT-transform OOD  (OOD_SPEC):  prompt shows (x, g(f(x))) — model must
+      compose the ID task with a deterministic transform.
+
+  INPUT-transform OOD   (INPUT_OOD_SPEC): prompt shows (x, g(x)) — model
+      must learn "apply g to the input" purely from context.  These are
+      simpler and genuinely learnable from 20 in-context shots.
+
 Use ``make_id_tasks(task_names=[...])`` to select a subset.
 """
 
@@ -65,25 +73,110 @@ def _reverse(y: str) -> str:
     return y[::-1]
 
 
-def _len_str(y: str) -> str:
-    """Return the number of non-space characters as a string."""
-    return str(len(y.replace(" ", "")))
+def _shift_one(y: str) -> str:
+    """Shift every letter one step forward in the alphabet (Caesar +1).
+
+    Non-letter characters are left unchanged.  Wraps z→a and Z→A.
+    E.g. "actor" → "bdups", "physicist" → "qiztjdjtu".
+    """
+    result = []
+    for ch in y:
+        if ch.isalpha():
+            base = ord('A') if ch.isupper() else ord('a')
+            result.append(chr((ord(ch) - base + 1) % 26 + base))
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _leetspeak(y: str) -> str:
+    """Convert vowels to classic leet digits: a/A→4, e/E→3, i/I→1, o/O→0.
+
+    E.g. "actor" → "4ct0r", "physicist" → "phys1c1st".
+    Consonants, spaces, and 'u'/'U' are left unchanged.
+    """
+    TABLE = str.maketrans({
+        "a": "4", "A": "4",
+        "e": "3", "E": "3",
+        "i": "1", "I": "1",
+        "o": "0", "O": "0",
+    })
+    return y.translate(TABLE)
+
+
+def _first_char(y: str) -> str:
+    """Return the first character of the string.
+
+    E.g. "cat" → "c", "Einstein" → "E".
+    Single-character answer tokenises unambiguously and is trivially
+    learnable from in-context examples.
+    """
+    return y[0] if y else y
+
+
+def _capitalize(y: str) -> str:
+    """Capitalize the first letter, lowercase the rest.
+
+    E.g. "cat" → "Cat", "COLD" → "Cold".
+    The output is almost always a single BPE subword and easy to predict
+    from the pattern in context.
+    """
+    return y.capitalize()
+
+
+def _capitalize_last(y: str) -> str:
+    """Capitalize the last letter, leave the rest unchanged.
+
+    E.g. "cat" → "caT", "justice" → "justicE".
+    The answer tokenises as [word_prefix, "X"] so first-token accuracy
+    checks the prefix (e.g. " ca" for "caT"), which is still a consistent
+    and learnable signal from in-context examples.
+    """
+    if not y:
+        return y
+    return y[:-1] + y[-1].upper()
+
+
+def _double(y: str) -> str:
+    """Repeat the word twice without a space.
+
+    E.g. "cat" → "catcat", "hot" → "hothot".
+    The first BPE token of the output is the word itself, so the model
+    only needs to learn to copy the input — highly learnable from context.
+    """
+    return y + y
 
 
 # Maps OOD task name → (base_id_task, g_func, g_description)
+# g is applied to the ID-task OUTPUT: prompt shows (x, g(f(x)))
+# Note: entries for the three active ID tasks (english_to_french, antonyms,
+# product_to_company) are intentionally absent — they use INPUT_OOD_SPEC.
 OOD_SPEC: Dict[str, Tuple[str, Callable[[str], str], str]] = {
-    "past_reversed":       ("present_to_past",      _reverse,  "reversed past tense"),
-    "plural_len":          ("singular_to_plural",    _len_str,  "length of plural"),
-    "french_reversed":     ("english_to_french",     _reverse,  "reversed French"),
-    "spanish_reversed":    ("english_to_spanish",    _reverse,  "reversed Spanish"),
-    "german_reversed":     ("english_to_german",     _reverse,  "reversed German"),
-    "antonym_reversed":    ("antonyms",              _reverse,  "reversed antonym"),
-    "synonym_reversed":    ("synonyms",              _reverse,  "reversed synonym"),
-    "category_len":        ("word_to_category",      _len_str,  "length of category"),
-    "capital_reversed":    ("country_to_capital",     _reverse,  "reversed capital"),
-    "occupation_len":      ("person_to_occupation",   _len_str,  "length of occupation"),
-    "country_reversed":    ("landmark_to_country",    _reverse,  "reversed country"),
-    "company_len":         ("product_to_company",     _len_str,  "length of company"),
+    "past_reversed":       ("present_to_past",      _reverse,    "reversed past tense"),
+    "plural_leet":         ("singular_to_plural",    _leetspeak,  "leetspeak plural"),
+    "spanish_reversed":    ("english_to_spanish",    _reverse,    "reversed Spanish"),
+    "german_reversed":     ("english_to_german",     _reverse,    "reversed German"),
+    "synonym_reversed":    ("synonyms",              _reverse,    "reversed synonym"),
+    "category_leet":       ("word_to_category",      _leetspeak,  "leetspeak category"),
+    "capital_reversed":    ("country_to_capital",     _reverse,    "reversed capital"),
+    "occupation_leet":     ("person_to_occupation",   _leetspeak,  "leetspeak occupation"),
+    "country_reversed":    ("landmark_to_country",    _reverse,    "reversed country"),
+}
+
+# Maps OOD task name → (base_id_task, g_func, g_description)
+# g is applied to the INPUT x: prompt shows (x, g(x)).
+# These tasks are purely learnable from context — the model sees 20 examples
+# of "word → g(word)" and must apply the same rule to a new query.
+# No ID-task knowledge is required, so accuracy > 0 must come from ICL.
+#
+# Transforms chosen to minimise tokeniser ambiguity:
+#   _first_char → single-character answer, always one token
+#   _capitalize → same subword as input but uppercased, clean single token
+#   _double     → first BPE token of output is the input word itself
+INPUT_OOD_SPEC: Dict[str, Tuple[str, Callable[[str], str], str]] = {
+    "french_input_first":    ("english_to_french",    _first_char, "first letter of English word"),
+    "antonym_input_cap_last": ("antonyms",             _capitalize_last, "capitalize last letter of English word"),
+    "product_input_double":  ("product_to_company",   _double,     "repeat the product name twice"),
 }
 
 
@@ -102,8 +195,51 @@ class ICLTask:
     ood_name: Optional[str] = None
 
     def __post_init__(self):
+        self.pairs = [(x.strip(), y.strip()) for x, y in self.pairs]
         if len(self.pairs) < 10:
             raise ValueError(f"Task {self.name!r} needs ≥ 10 pairs, got {len(self.pairs)}")
+
+    def clean(
+        self,
+        drop_identity: bool = True,
+        single_word_only: bool = True,
+        max_per_class: Optional[int] = None,
+        seed: int = 0,
+    ) -> "ICLTask":
+        """Return a new ICLTask with bad pairs filtered out.
+
+        Parameters
+        ----------
+        drop_identity : bool
+            Drop pairs where x.lower() == y.lower() (the task maps a word to
+            itself — bad data).
+        single_word_only : bool
+            Drop pairs whose output contains whitespace.  Multi-word outputs
+            make first-token accuracy unreliable and can confuse the model.
+        max_per_class : int, optional
+            Cap the number of pairs per unique output label.  Useful when one
+            output dominates (e.g. "actor" is 40 % of person_to_occupation),
+            which biases the model to always predict the majority class.
+        seed : int
+            RNG seed used when down-sampling over-represented classes.
+        """
+        pairs = self.pairs
+        if drop_identity:
+            pairs = [(x, y) for x, y in pairs if x.lower() != y.lower()]
+        if single_word_only:
+            pairs = [(x, y) for x, y in pairs if " " not in y]
+        if max_per_class is not None:
+            rng = random.Random(seed)
+            from collections import defaultdict
+            buckets: Dict[str, list] = defaultdict(list)
+            for p in pairs:
+                buckets[p[1]].append(p)
+            pairs = []
+            for label, ps in buckets.items():
+                rng.shuffle(ps)
+                pairs.extend(ps[:max_per_class])
+        import dataclasses
+        return dataclasses.replace(self, pairs=pairs)
 
     def format_demo(self, x: str, y: str) -> str:
         return f"{x}{self.separator}{y}"
@@ -219,8 +355,18 @@ _ALL_ID_TASKS: Dict[str, List[Tuple[str, str]]] = {
 }
 
 
+# Per-task class-balance caps applied in make_id_tasks.
+# Caps prevent any single label from dominating the in-context distribution.
+_MAX_PER_CLASS: Dict[str, int] = {
+    "person_to_occupation": 50,   # "actor" was 40 % of raw data
+    "product_to_company":   29,   # Microsoft+Apple together were 45 % of raw data
+}
+
+
 def make_id_tasks(
     task_names: Optional[List[str]] = None,
+    drop_identity: bool = True,
+    single_word_only: bool = True,
 ) -> Dict[str, ICLTask]:
     """Return ID tasks, optionally filtered to a subset.
 
@@ -229,6 +375,11 @@ def make_id_tasks(
     task_names : list of str, optional
         If provided, only return these tasks.  If ``None`` (default),
         return all 12 available tasks.
+    drop_identity : bool
+        Drop pairs where input equals output (case-insensitive).
+    single_word_only : bool
+        Drop pairs with multi-word outputs.  Improves first-token accuracy
+        reliability and avoids confusing in-context demonstrations.
     """
     names = task_names if task_names is not None else list(_ALL_ID_TASKS.keys())
     out: Dict[str, ICLTask] = {}
@@ -237,14 +388,27 @@ def make_id_tasks(
             raise ValueError(
                 f"Unknown task {name!r}. Available: {sorted(_ALL_ID_TASKS)}"
             )
-        out[name] = ICLTask(name=name, pairs=_ALL_ID_TASKS[name])
+        task = ICLTask(name=name, pairs=_ALL_ID_TASKS[name])
+        out[name] = task.clean(
+            drop_identity=drop_identity,
+            single_word_only=single_word_only,
+            max_per_class=_MAX_PER_CLASS.get(name),
+        )
     return out
 
 
 def make_ood_tasks(
     task_names: Optional[List[str]] = None,
 ) -> Dict[str, ICLTask]:
-    """Return OOD tasks (one per ID task).
+    """Return OOD tasks keyed by name.
+
+    Combines two kinds of OOD tasks:
+
+    * **Output-transform** (``OOD_SPEC``): pairs are ``(x, y)`` from the
+      parent ID task; prompts show ``(x, g(y))``.
+    * **Input-transform** (``INPUT_OOD_SPEC``): pairs are pre-computed as
+      ``(x, g(x))``; prompts show the pair directly (no OOD transform
+      applied at sampling time).
 
     Parameters
     ----------
@@ -253,7 +417,8 @@ def make_ood_tasks(
         is in this list are returned.  If ``None``, all are returned.
     """
     id_tasks = make_id_tasks(task_names)
-    return {
+
+    output_ood = {
         ood_name: ICLTask(
             name=ood_name,
             pairs=id_tasks[parent_id_name].pairs,
@@ -263,6 +428,19 @@ def make_ood_tasks(
         for ood_name, (parent_id_name, g_func, g_desc) in OOD_SPEC.items()
         if parent_id_name in id_tasks
     }
+
+    input_ood = {
+        ood_name: ICLTask(
+            name=ood_name,
+            pairs=[(x, g_func(x)) for x, _y in id_tasks[parent_id_name].pairs],
+            ood_transform=None,
+            ood_name=g_desc,
+        )
+        for ood_name, (parent_id_name, g_func, g_desc) in INPUT_OOD_SPEC.items()
+        if parent_id_name in id_tasks
+    }
+
+    return {**output_ood, **input_ood}
 
 
 # ---------------------------------------------------------------------------
@@ -347,11 +525,23 @@ def build_experiment_prompts(
     ood_eval_prompts: Dict[str, List[str]] = {}
     ood_eval_answers: Dict[str, List[str]] = {}
     for ood_name, ood_task in ood_tasks.items():
-        parent_id_name = OOD_SPEC[ood_name][0]
-        _, eval_pool = splits[parent_id_name]   # reuse the same split — no re-shuffle
-        prompts, answers = ood_task.sample_prompts_with_answers(
-            eval_pool, n_eval_prompts, n_shots, seed=seed + 2, ood=True
-        )
+        if ood_name in INPUT_OOD_SPEC:
+            # Input-transform: pairs are already (x, g(x)).
+            # Build the eval pool on-the-fly by applying g to the x values of
+            # the parent task's eval pool so the same train/test split is reused.
+            parent_id_name, g_func, _ = INPUT_OOD_SPEC[ood_name]
+            _, raw_eval_pool = splits[parent_id_name]
+            eval_pool: List[Tuple[str, str]] = [(x, g_func(x)) for x, _y in raw_eval_pool]
+            prompts, answers = ood_task.sample_prompts_with_answers(
+                eval_pool, n_eval_prompts, n_shots, seed=seed + 2, ood=False
+            )
+        else:
+            # Output-transform: pairs are (x, y); sampling applies g to y at runtime.
+            parent_id_name = OOD_SPEC[ood_name][0]
+            _, eval_pool = splits[parent_id_name]   # reuse the same split — no re-shuffle
+            prompts, answers = ood_task.sample_prompts_with_answers(
+                eval_pool, n_eval_prompts, n_shots, seed=seed + 2, ood=True
+            )
         ood_eval_prompts[ood_name] = prompts
         ood_eval_answers[ood_name] = answers
 

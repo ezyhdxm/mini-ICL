@@ -12,13 +12,13 @@ from typing import Optional, Sequence, Tuple
 
 # Paper-friendly font sizes (increase from matplotlib defaults for readability)
 _PAPER_RC = {
-    "font.size": 12,
-    "axes.titlesize": 14,
-    "axes.labelsize": 14,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12,
-    "legend.fontsize": 12,
-    "legend.title_fontsize": 13,
+    "font.size": 11,
+    "axes.titlesize": 13,
+    "axes.labelsize": 13,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
+    "legend.fontsize": 10,
+    "legend.title_fontsize": 11,
 }
 
 
@@ -120,7 +120,7 @@ def _render_simplex_panels(
     mean_fmt: str = "mean KL = {:.4f}",
     vmin: float,
     vmax: float,
-    figsize: Tuple[float, float] = (10, 5),
+    figsize: Tuple[float, float] = (10, 3.8),
     wspace: float = -0.55,
     cmap: str = "magma_r",
     grid_res: int = 128,
@@ -158,28 +158,28 @@ def _render_simplex_panels(
 
         if idx == 0:
             ax.text(-0.03, -0.02, r"$\alpha_1$",
-                    ha="right", va="top", fontsize=17)
+                    ha="right", va="top", fontsize=15)
         if idx == n_panels - 1:
             ax.text(1.03, -0.02, r"$\alpha_2$",
-                    ha="left", va="top", fontsize=17)
+                    ha="left", va="top", fontsize=15)
         ax.text(0.5, _SQRT3_2 + 0.03, r"$\alpha_3$",
-                ha="center", va="bottom", fontsize=17)
-        ax.text(0.5, -0.10, title,
-                ha="center", va="top", fontsize=16)
-        ax.text(0.5, -0.22, mean_fmt.format(vals.mean()),
-                ha="center", va="top", fontsize=14, color="0.4")
+                ha="center", va="bottom", fontsize=15)
+        ax.text(0.5, -0.08, title,
+                ha="center", va="top", fontsize=14)
+        ax.text(0.5, -0.18, mean_fmt.format(vals.mean()),
+                ha="center", va="top", fontsize=12, color="0.4")
         ax.set_aspect("equal")
         ax.axis("off")
-        ax.set_xlim(-0.10, 1.10)
-        ax.set_ylim(-0.32, _SQRT3_2 + 0.10)
+        ax.set_xlim(-0.08, 1.08)
+        ax.set_ylim(-0.22, _SQRT3_2 + 0.08)
 
     cbar = fig.colorbar(
         im, ax=list(axes), orientation="horizontal",
-        fraction=0.05, pad=0.14, aspect=30,
+        fraction=0.04, pad=0.08, aspect=30,
     )
-    cbar.set_label(metric_label, fontsize=16)
-    cbar.ax.tick_params(labelsize=13)
-    fig.subplots_adjust(bottom=0.20, wspace=wspace)
+    cbar.set_label(metric_label, fontsize=14)
+    cbar.ax.tick_params(labelsize=11)
+    fig.subplots_adjust(bottom=0.12, wspace=wspace)
 
     return fig
 
@@ -193,7 +193,7 @@ def plot_simplex_panels(
     mean_fmt: str = "mean KL = {:.4f}",
     color_vmin: Optional[float] = None,
     color_vmax: Optional[float] = None,
-    figsize: Tuple[float, float] = (10, 5),
+    figsize: Tuple[float, float] = (10, 3.8),
     wspace: float = -0.15,
     cmap: str = "magma_r",
     grid_res: int = 128,
@@ -226,6 +226,209 @@ def plot_simplex_panels(
     )
 
 
+def _draw_single_simplex_panel(
+    ax,
+    bary_x: np.ndarray,
+    bary_y: np.ndarray,
+    vals: np.ndarray,
+    vmin: float,
+    vmax: float,
+    title: str,
+    mean_fmt: str,
+    *,
+    cmap: str = "magma_r",
+    grid_res: int = 128,
+    smooth_sigma: float = 2.0,
+    show_alpha1: bool = True,
+    show_alpha2: bool = True,
+    show_alpha3: bool = True,
+    title_x: float = 0.5,
+    title_ha: str = "center",
+):
+    """Draw a single simplex heatmap panel onto *ax* and return the imshow artist."""
+    xi, yi, Zi, _ = _bin_and_smooth(
+        bary_x, bary_y, vals, grid_res=grid_res, sigma=smooth_sigma,
+    )
+    im = ax.imshow(
+        Zi, extent=[xi[0], xi[-1], yi[0], yi[-1]],
+        origin="lower", aspect="equal",
+        cmap=cmap, vmin=vmin, vmax=vmax,
+        interpolation="bilinear", rasterized=True,
+    )
+    tri_x = [0, 1, 0.5, 0]
+    tri_y = [0, 0, _SQRT3_2, 0]
+    ax.plot(tri_x, tri_y, "k-", lw=1.2)
+
+    if show_alpha1:
+        ax.text(-0.03, -0.02, r"$\alpha_1$", ha="right", va="top", fontsize=11)
+    if show_alpha2:
+        ax.text(1.03, -0.02, r"$\alpha_2$", ha="left",  va="top", fontsize=11)
+    if show_alpha3:
+        ax.text(0.5, _SQRT3_2 + 0.03, r"$\alpha_3$", ha="center", va="bottom", fontsize=11)
+
+    ax.text(title_x, -0.08, title, ha=title_ha, va="top", fontsize=11)
+    ax.text(title_x, -0.17, mean_fmt.format(vals.mean()), ha=title_ha, va="top", fontsize=9, color="0.4")
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_xlim(-0.08, 1.08)
+    ax.set_ylim(-0.22, _SQRT3_2 + 0.08)
+    return im
+
+
+def _render_simplex_combined_fig(
+    panels,
+    title_left: str,
+    title_right: str,
+    figsize: Tuple[float, float],
+    cmap: str,
+    grid_res: int,
+    smooth_sigma: float,
+    kl_vmin: float,
+    kl_vmax: float,
+    rmse_vmin: float,
+    rmse_vmax: float,
+) -> plt.Figure:
+    """Shared renderer for injection-simplex combined figures.
+
+    Parameters
+    ----------
+    panels : list of (result_dict, vmin, vmax, key_left, key_right, mean_fmt)
+    title_left / title_right : column labels for the left and right triangle panels.
+    """
+    from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+    import matplotlib.colors as mcolors
+
+    fig = plt.figure(figsize=figsize)
+
+    # Panels occupy [0.01, 0.82]; the remaining 0.18 is split between the
+    # alpha-corner-label spillover and the dual-sided colorbar.
+    outer = GridSpec(
+        1, 3, figure=fig,
+        left=0.01, right=0.82,
+        wspace=0.08,
+    )
+
+    last_ax_right = None
+    for col_idx, (result, vmin, vmax, key_left, key_right, mean_fmt) in enumerate(panels):
+        bary_x, bary_y = _bary_to_cart(result["alphas"])
+        data_left  = result[key_left]
+        data_right = result[key_right]
+
+        # Negative wspace pulls the paired triangles close together.
+        inner = GridSpecFromSubplotSpec(
+            1, 2, subplot_spec=outer[col_idx],
+            wspace=-0.18,
+        )
+        ax_left  = fig.add_subplot(inner[0])
+        ax_right = fig.add_subplot(inner[1])
+        last_ax_right = ax_right
+
+        # α₁ label only on far-left panel; α₂ only on far-right panel.
+        show_a1 = (col_idx == 0)
+        show_a2 = (col_idx == 2)
+
+        _draw_single_simplex_panel(
+            ax_left, bary_x, bary_y, data_left, vmin, vmax,
+            title_left, mean_fmt, cmap=cmap, grid_res=grid_res, smooth_sigma=smooth_sigma,
+            show_alpha1=show_a1, show_alpha2=False, show_alpha3=True,
+            title_x=0.5, title_ha="center",
+        )
+        _draw_single_simplex_panel(
+            ax_right, bary_x, bary_y, data_right, vmin, vmax,
+            title_right, mean_fmt, cmap=cmap, grid_res=grid_res, smooth_sigma=smooth_sigma,
+            show_alpha1=False, show_alpha2=show_a2, show_alpha3=True,
+            title_x=0.5, title_ha="center",
+        )
+
+    # ── Single dual-sided colorbar, matched to axes height ────────────────────
+    # Force layout so get_position() returns the final figure-coordinate bounds.
+    fig.canvas.draw()
+    pos = last_ax_right.get_position()
+
+    n_ticks = 8
+    tick_pos  = np.linspace(0.0, 1.0, n_ticks)
+    kl_vals   = np.linspace(kl_vmin,   kl_vmax,   n_ticks)
+    rmse_vals = np.linspace(rmse_vmin, rmse_vmax, n_ticks)
+
+    cb_ax = fig.add_axes([0.87, pos.y0, 0.020, pos.height])
+    norm  = mcolors.Normalize(vmin=0.0, vmax=1.0)
+    sm    = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar  = fig.colorbar(sm, cax=cb_ax)
+
+    cbar.set_ticks(tick_pos)
+    cbar.set_ticklabels([f"{v:.1f}" for v in kl_vals], fontsize=9)
+    cbar.ax.yaxis.set_ticks_position("left")
+    cbar.ax.yaxis.set_label_position("left")
+    cbar.set_label("KL divergence", fontsize=10, labelpad=8)
+
+    ax_rmse_twin = cbar.ax.twinx()
+    ax_rmse_twin.set_ylim(0.0, 1.0)
+    ax_rmse_twin.set_yticks(tick_pos)
+    ax_rmse_twin.set_yticklabels([f"{int(v)}" for v in rmse_vals], fontsize=9)
+    ax_rmse_twin.set_ylabel("RMSE", fontsize=10, labelpad=8)
+
+    return fig
+
+
+def render_injection_simplex_combined(
+    coin_result: dict,
+    linear_result: dict,
+    latent_result: dict,
+    *,
+    kl_vmin: float = 0.0,
+    kl_vmax: float = 0.7,
+    rmse_vmin: float = 0.0,
+    rmse_vmax: float = 7.0,
+    title_base: str = "Unsteered",
+    title_inj: str = "Steered",
+    figsize: Tuple[float, float] = (12, 3.8),
+    cmap: str = "magma_r",
+    grid_res: int = 128,
+    smooth_sigma: float = 2.0,
+) -> plt.Figure:
+    """6-panel figure: [Unsteered | Steered] for E1, E2, E3."""
+    panels = [
+        (coin_result,   kl_vmin,   kl_vmax,   "kl_baseline",   "kl_injected",   "mean KL = {:.4f}"),
+        (linear_result, rmse_vmin, rmse_vmax,  "rmse_baseline", "rmse_injected", "mean RMSE = {:.4f}"),
+        (latent_result, kl_vmin,   kl_vmax,   "kl_baseline",   "kl_injected",   "mean KL = {:.4f}"),
+    ]
+    return _render_simplex_combined_fig(
+        panels, title_base, title_inj,
+        figsize, cmap, grid_res, smooth_sigma,
+        kl_vmin, kl_vmax, rmse_vmin, rmse_vmax,
+    )
+
+
+def render_mode_task_comparison_combined(
+    coin_result: dict,
+    linear_result: dict,
+    latent_result: dict,
+    *,
+    kl_vmin: float = 0.0,
+    kl_vmax: float = 0.7,
+    rmse_vmin: float = 0.0,
+    rmse_vmax: float = 7.0,
+    title_inj: str = "Steered",
+    title_mode: str = r"Mode task $k^\star$",
+    figsize: Tuple[float, float] = (12, 3.8),
+    cmap: str = "magma_r",
+    grid_res: int = 128,
+    smooth_sigma: float = 2.0,
+) -> plt.Figure:
+    """6-panel figure: [Steered | Mode task k*] for E1, E2, E3."""
+    panels = [
+        (coin_result,   kl_vmin,   kl_vmax,   "kl_injected",   "kl_mode",   "mean KL = {:.4f}"),
+        (linear_result, rmse_vmin, rmse_vmax,  "rmse_injected", "rmse_mode", "mean RMSE = {:.4f}"),
+        (latent_result, kl_vmin,   kl_vmax,   "kl_injected",   "kl_mode",   "mean KL = {:.4f}"),
+    ]
+    return _render_simplex_combined_fig(
+        panels, title_inj, title_mode,
+        figsize, cmap, grid_res, smooth_sigma,
+        kl_vmin, kl_vmax, rmse_vmin, rmse_vmax,
+    )
+
+
 def plot_simplex_panel_pairs(
     alphas: np.ndarray,
     data_base: np.ndarray,
@@ -239,7 +442,7 @@ def plot_simplex_panel_pairs(
     mean_fmt: str = "mean KL = {:.4f}",
     color_vmin: Optional[float] = None,
     color_vmax: Optional[float] = None,
-    figsize: Tuple[float, float] = (10, 5),
+    figsize: Tuple[float, float] = (10, 3.8),
     wspace: float = -0.55,
     cmap: str = "magma_r",
     grid_res: int = 128,

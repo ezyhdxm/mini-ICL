@@ -25,7 +25,7 @@ def plot_task_vector_geometry(
     task_batch_size: int = 8,
     task_colors: tuple = ("#0072B2", "#E69F00", "#009E73"),
     marker_every: int = 5,
-    figsize: tuple = (8, 12),
+    figsize: tuple = (7, 10),
     show: bool = True,
 ) -> dict:
     """Compare task vectors estimated at each position.

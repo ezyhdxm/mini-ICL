@@ -778,17 +778,19 @@ def evaluate_icl_performance(
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
         logits = outputs.logits  # (B, S, V)
 
-        # The last *real* token position in each sequence is the query ":"
-        # or trailing space.  The logits at this position predict the next
-        # token, i.e. the first token of the answer.
-        last_pos = attention_mask.sum(dim=1) - 1  # (B,)
+        # With left-padding the last real token is always at the absolute last
+        # position (seq_len - 1) for every sequence in the batch.
+        # Using attention_mask.sum()-1 would give real_len-1, which is wrong.
+        last_pos = input_ids.shape[1] - 1  # scalar, same for all sequences
 
         for b in range(B):
-            pos = last_pos[b].item()
-            logit_vec = logits[b, pos]  # (V,)
+            logit_vec = logits[b, last_pos]  # (V,)
 
+            # Tokenize with a leading space to match the model's context:
+            # prompts end with "<query_x>: " so the model predicts " answer"
+            # (space fused into the subword), not "answer" in isolation.
             answer_tokens = tokenizer(
-                batch_answers[b], add_special_tokens=False
+                " " + batch_answers[b], add_special_tokens=False
             )["input_ids"]
             if len(answer_tokens) == 0:
                 per_correct.append(False)

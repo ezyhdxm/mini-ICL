@@ -149,7 +149,7 @@ def _layer_style(layer_num, n_positions=50):
 
 def plot_task_vector_r2(
     results: Dict[int, Dict[int, TaskVectorR2Result]],
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
@@ -177,9 +177,9 @@ def plot_task_vector_r2(
         ax.plot(pos_list, vals, label=str(l_num),
                 **_layer_style(l_num, len(pos_list)))
 
-    ax.set_xlabel("Position", fontsize=14)
+    ax.set_xlabel("Position", fontsize=13)
     if show_ylabel:
-        ax.set_ylabel("Residual variance ratio", fontsize=14)
+        ax.set_ylabel("Residual variance ratio", fontsize=13)
     if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
         ax.set_xscale("symlog", linthresh=1)
     ax.set_ylim(-0.02, 1.02)
@@ -196,6 +196,37 @@ def plot_task_vector_r2(
         plt.close(fig)
 
     return fig
+
+
+def plot_task_vector_r2_on_ax(
+    ax,
+    results: Dict[int, Dict[int, TaskVectorR2Result]],
+    *,
+    log_x: bool = True,
+    show_ylabel: bool = True,
+):
+    """Draw residual variance ratio (1 − R²) on an existing *ax*."""
+    layers = sorted(results.keys())
+    pos_list: list = []
+    for l_num in layers:
+        pos_results = results[l_num]
+        pos_list = sorted(pos_results.keys())
+        if not pos_list:
+            continue
+        vals = [1.0 - pos_results[p].r2 for p in pos_list]
+        ax.plot(pos_list, vals, label=str(l_num),
+                **_layer_style(l_num, len(pos_list)))
+
+    ax.set_xlabel("Position")
+    if show_ylabel:
+        ax.set_ylabel("Residual variance ratio")
+    if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
+        ax.set_xscale("symlog", linthresh=1)
+    ax.set_ylim(-0.02, 1.02)
+    _ncol = 2 if len(layers) > 6 else 1
+    ax.legend(title="Layer", framealpha=0.9, loc="best", ncol=_ncol,
+              borderaxespad=0.3, handlelength=2.2)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
 
 
 def print_task_vector_r2_summary(

@@ -12,6 +12,7 @@ from icl.utils.separability._task_vector_r2 import (  # noqa: F401
     task_vector_r2_multi,
     _layer_style,
     plot_task_vector_r2,
+    plot_task_vector_r2_on_ax,
     print_task_vector_r2_summary,
 )
 from icl.utils.separability._anova import (  # noqa: F401
@@ -45,4 +46,11 @@ from icl.utils.separability._averaging_r2 import (  # noqa: F401
     AveragingR2Result,
     _simplex_project_coeffs,
     task_subspace_r2_at_position,
+    plot_averaging_r2_on_ax,
+)
+from icl.utils.separability._beta_alpha_traj import (  # noqa: F401
+    plot_beta_alpha_on_ax,
+)
+from icl.utils.separability._kl_transition import (  # noqa: F401
+    plot_kl_transition_on_ax,
 )

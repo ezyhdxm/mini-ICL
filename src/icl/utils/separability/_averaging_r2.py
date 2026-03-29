@@ -1,7 +1,7 @@
 """Averaging-based R² and simplex-constrained task-subspace projection."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 
@@ -22,6 +22,39 @@ class AveragingR2Result:
 
     layer_num: Optional[int] = None
     position: Optional[int] = None
+
+
+def plot_averaging_r2_on_ax(
+    ax,
+    results: Dict[int, Dict[int, "AveragingR2Result"]],
+    *,
+    log_x: bool = False,
+    show_ylabel: bool = True,
+):
+    """Draw additive R² (task + token) on an existing *ax*."""
+    from icl.utils.separability._task_vector_r2 import _layer_style
+
+    layers = sorted(results.keys())
+    pos_list: list = []
+    for l_num in layers:
+        pos_results = results[l_num]
+        pos_list = sorted(pos_results.keys())
+        if not pos_list:
+            continue
+        vals = [pos_results[p].r2_additive for p in pos_list]
+        ax.plot(pos_list, vals, label=str(l_num),
+                **_layer_style(l_num, len(pos_list)))
+
+    ax.set_xlabel("Position")
+    if show_ylabel:
+        ax.set_ylabel(r"$R^2$: $\mu_t + \theta_z + \nu_a$")
+    if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
+        ax.set_xscale("symlog", linthresh=1)
+    ax.set_ylim(-0.02, 1.02)
+    _ncol = 2 if len(layers) > 6 else 1
+    ax.legend(title="Layer", framealpha=0.9, loc="best", ncol=_ncol,
+              borderaxespad=0.3, handlelength=2.2)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
 
 
 def _simplex_project_coeffs(
@@ -64,7 +97,7 @@ def _simplex_project_coeffs(
     beta_unconstrained = sol[:, :K]  # (N, K)
 
     beta_np = beta_unconstrained.detach().cpu().numpy()
-    beta_proj = np.stack([_project_onto_simplex_np(b) for b in beta_np])
+    beta_proj = _project_onto_simplex_np(beta_np)  # single vectorised call over all N samples
     beta_simplex = torch.from_numpy(beta_proj).to(dtype=Theta.dtype, device=Theta.device)
 
     h_hat = beta_simplex @ Theta  # (N, D)

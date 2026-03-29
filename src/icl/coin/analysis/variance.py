@@ -74,7 +74,7 @@ def plot_task_vector_r2_coin(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
@@ -277,7 +277,7 @@ def plot_probe_fit_r2_coin(
     sample_mode: str = "train",
     extraction_point: str = "post_attn",
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
@@ -344,9 +344,9 @@ def plot_probe_fit_r2_coin(
             linewidth=2.2,
         )
 
-    ax.set_xlabel("Position", fontsize=14)
+    ax.set_xlabel("Position", fontsize=13)
     if show_ylabel:
-        ax.set_ylabel("Probe-fit $R^2$", fontsize=14)
+        ax.set_ylabel("Probe-fit $R^2$", fontsize=13)
     if log_x and len(positions) > 1 and min(positions) >= 0:
         ax.set_xscale("symlog", linthresh=1)
     ax.set_ylim(None, 1.02)
@@ -468,7 +468,7 @@ def plot_p1_variance_coin(
     if log_x:
         ax.set_xscale('log')
     ax.tick_params(labelsize=14)
-    ax.legend(fontsize=14)
+    ax.legend(fontsize=13)
     ax.grid(True, alpha=0.3)
 
     if title:
@@ -504,7 +504,7 @@ def plot_anova_separability_coin(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,

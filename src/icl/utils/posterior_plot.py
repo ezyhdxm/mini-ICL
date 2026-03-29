@@ -642,7 +642,7 @@ def project_with_r2_ood_posterior_colors_mpl(
 
     # Axis / figure
     ax=None,
-    figsize=(9, 7),
+    figsize=(7, 5.5),
     dpi=150,
     clear_ax=False,
     cleanup_previous=True,

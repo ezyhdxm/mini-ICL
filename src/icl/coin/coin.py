@@ -217,6 +217,7 @@ class Coins:
         self.p_minor = float(getattr(config.task, "p_minor", 1e-12))
         self.major_pool_type = str(getattr(config.task, "major_pool_type", "disjoint"))
         self.major_means = getattr(config.task, "major_means", None)
+        self.major_seed = int(getattr(config.task, "major_seed", self.seed))
 
         # Pre-sample major/minor pools (optional)
         self.major_p = self._maybe_sample_task_pool(self.n_major_tasks, pool_name="major")
@@ -306,8 +307,19 @@ class Coins:
                 )
             if self.major_pool_type == "disjoint" and n_tasks == 3:
                 return self._sample_disjoint_uniform_pool(n_tasks, eps_outside=0.005)
-            # "dirichlet" or any other value, or disjoint with n_tasks != 3
-            return self._dirichlet().sample((n_tasks,))  # (n_tasks, K)
+            # "dirichlet" or any other value, or disjoint with n_tasks != 3.
+            # Sample on CPU with a seeded generator so major_p is identical across
+            # runs that share the same config.seed (e.g. different k values), then
+            # move to the target device.  Saving/restoring the CPU RNG state ensures
+            # no side-effects on subsequent random calls (batch generation, etc.).
+            cpu_rng_state = torch.get_rng_state()
+            torch.manual_seed(self.major_seed)
+            cpu_dist = torch.distributions.Dirichlet(
+                torch.full((self.num_states,), self.alpha)
+            )
+            samples = cpu_dist.sample((n_tasks,)).to(self.device)
+            torch.set_rng_state(cpu_rng_state)
+            return samples
 
         # Minor/other: always sample from Dirichlet
         return self._dirichlet().sample((n_tasks,))  # (n_tasks, K)

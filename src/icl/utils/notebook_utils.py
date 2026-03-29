@@ -19,13 +19,22 @@ from icl.models import Transformer
 #################
 
 def load_model(checkpoint_dir, config, step=None):
-    device = config.device
-    
+    requested_device = config.device
+    # Fall back to CPU if the requested device (e.g. "cuda") is unavailable.
+    device = requested_device
+    if str(device).startswith("cuda") and not torch.cuda.is_available():
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            f"load_model: config.device={requested_device!r} but CUDA is unavailable; "
+            "loading on CPU instead."
+        )
+        device = "cpu"
+
     # Extract step number from each filename
     def extract_step(path):
         match = re.search(r"model_final_(\d+)\.pt", path)
         return int(match.group(1)) if match else -1
-    
+
     if step is not None:
         model_path = os.path.join(checkpoint_dir, f"model_{step}.pt")
     else:
@@ -36,7 +45,7 @@ def load_model(checkpoint_dir, config, step=None):
 
         paths = sorted(files, key=extract_step)
         model_path = paths[-1]
-        
+
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
     model = Transformer(config)
     model.load_state_dict(checkpoint['model'])
@@ -171,6 +180,8 @@ def load_checkpoint(config,
         raise ValueError(f"No checkpoints found in {checkpoint_dir}")
     
     device = config.device
+    if str(device).startswith("cuda") and not torch.cuda.is_available():
+        device = "cpu"
     
     # Determine which checkpoint to load
     if step is None or step == "latest":
@@ -408,6 +419,10 @@ def load_everything(task_name, train_folder, get_log=False):
     config_path = os.path.join(path_prefix, train_folder, "config.json")
     sampler_path = os.path.join(path_prefix, train_folder, "sampler.pkl")
     config = load_config(config_path)
+    # Normalise config.device so downstream code (e.g. tensor.to(config.device))
+    # does not fail when the experiment was trained on CUDA but CUDA is unavailable now.
+    if str(getattr(config, "device", "cpu")).startswith("cuda") and not torch.cuda.is_available():
+        config.device = "cpu"
     model = load_model(checkpoint_dir, config)
     sampler = load_sampler(sampler_path)
     if get_log:

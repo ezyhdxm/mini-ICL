@@ -20,7 +20,7 @@ def plot_coin_task_posterior(
     uniform_prior: bool = True,
     major_only: bool = False,
     max_positions: Optional[int] = None,
-    figsize: tuple = (12, 4),
+    figsize: tuple = (10, 3.5),
     title: Optional[str] = None,
 ) -> dict:
     """
@@ -182,7 +182,7 @@ def plot_id_ood_loss_coin(
     k_list: Sequence[int],
     vocab_size: int = 8,
     logx: bool = True,
-    figsize: tuple = (12, 5),
+    figsize: tuple = (10, 4),
     show: bool = True,
 ) -> dict:
     """

@@ -218,7 +218,7 @@ def intervene_remove_task_subspace(
 def plot_intervention_remove_task_across_layers(
     exp_name: str,
     layers: Optional[list] = None,
-    figsize: tuple = (14, 6),
+    figsize: tuple = (10, 4.5),
     show: bool = True,
     save_path: Optional[str] = None,
     title: Optional[str] = None,

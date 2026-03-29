@@ -20,6 +20,7 @@ def unified_train(
     pad = None,
     major_pool_type: str = None,
     major_means = None,
+    major_seed: int = None,
     total_steps: int = None,
     num_epochs: int = None,
     warmup_steps: int = None,
@@ -63,6 +64,8 @@ def unified_train(
             config.task.major_pool_type = major_pool_type
         if major_means is not None:
             config.task.major_means = list(major_means)
+        if major_seed is not None:
+            config.task.major_seed = major_seed
         if num_epochs is not None:
             if task_name == "linear":
                 config.training.total_steps = num_epochs
@@ -132,14 +135,24 @@ def _to_cpu(obj):
     return obj
 
 
+_worker_device: Optional[str] = None
+
+
+def _init_worker(gpu_queue):
+    """Initializer for each worker process: claim a fixed GPU from the queue."""
+    global _worker_device
+    _worker_device = gpu_queue.get()
+    if _worker_device.startswith("cuda"):
+        torch.cuda.set_device(_worker_device)
+
+
 def _unified_train_worker(args):
     """Picklable worker for ProcessPoolExecutor: run one unified_train on a given device."""
-    task_name, k, device, kwargs = args
+    task_name, k, kwargs = args
     verbose = kwargs.pop("_parallel_verbose", False)
+    device = _worker_device
     if verbose:
-        import sys
         print(f"[unified_train_parallel] Training k={k} ({task_name}) on {device} ...", flush=True)
-        sys.stdout.flush()
     result = unified_train(task_name, k, device=device, **kwargs)
     return _to_cpu(result)
 
@@ -153,8 +166,8 @@ def unified_train_parallel(
 ) -> list:
     """Run multiple k experiments in parallel across GPUs.
 
-    Each k is run in a separate process with config.device = f"cuda:{i % n_gpus}".
-    With 2 GPUs and k_list=[0, 1, 2, 3], k=0 and k=2 use cuda:0, k=1 and k=3 use cuda:1.
+    Each worker process is bound to a fixed GPU via an initializer, so
+    tasks never contend for the same device regardless of completion order.
 
     Parameters
     ----------
@@ -173,6 +186,11 @@ def unified_train_parallel(
     -------
     list
         Results from unified_train for each k, in the same order as k_list.
+
+    Raises
+    ------
+    RuntimeError
+        If any experiment fails (collects all errors and raises once).
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -190,8 +208,8 @@ def unified_train_parallel(
         return f"cuda:{i % n_available}" if use_gpu else "cpu"
 
     args_list = [
-        (task_name, k, _device(i), worker_kwargs)
-        for i, k in enumerate(k_list)
+        (task_name, k, {**worker_kwargs})
+        for k in k_list
     ]
 
     if n_workers == 1:
@@ -204,17 +222,26 @@ def unified_train_parallel(
 
     if verbose:
         print(
-            f"[unified_train_parallel] Starting parallel training for {task_name} k_list={k_list} (n_workers={n_workers})",
+            f"[unified_train_parallel] Starting parallel training for {task_name} "
+            f"k_list={k_list} (n_workers={n_workers})",
             flush=True,
         )
-        for i, (_, k, dev, _) in enumerate(args_list):
-            print(f"[unified_train_parallel] Submitted k={k} on {dev}", flush=True)
 
     import multiprocessing as mp
     ctx = mp.get_context("spawn")
 
+    gpu_queue = ctx.Queue()
+    for i in range(n_workers):
+        gpu_queue.put(_device(i))
+
     results = [None] * len(k_list)
-    with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
+    errors = []
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=ctx,
+        initializer=_init_worker,
+        initargs=(gpu_queue,),
+    ) as ex:
         future_to_idx = {ex.submit(_unified_train_worker, args): i for i, args in enumerate(args_list)}
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
@@ -225,5 +252,10 @@ def unified_train_parallel(
                     print(f"[unified_train_parallel] Completed k={k}", flush=True)
             except Exception as e:
                 logger.exception("unified_train_parallel failed for k=%s: %s", k, e)
-                results[idx] = e
+                errors.append((k, e))
+
+    if errors:
+        msg = "; ".join(f"k={k}: {e}" for k, e in errors)
+        raise RuntimeError(f"unified_train_parallel: {len(errors)} experiment(s) failed — {msg}")
+
     return results

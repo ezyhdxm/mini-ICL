@@ -4,14 +4,14 @@ from ml_collections import ConfigDict
 
 
 def canonicalize_config_for_exp(config: ConfigDict) -> None:
+    """Canonicalize config in-place for experiment identity (hashing).
+
+    Device is an infrastructure detail, not an experimental parameter:
+    experiments trained on cuda should be identifiable from a cpu-only
+    machine. We therefore fix device to the constant "cuda" before hashing
+    so that exp_name is the same regardless of runtime GPU availability.
     """
-    Canonicalize config.device in place for experiment identity (hashing/saving).
-    Any cuda device (e.g. "cuda", "cuda:0") becomes "cuda" so exp_name does not
-    depend on the runtime GPU index.
-    """
-    device = config.get("device", "")
-    if isinstance(device, str) and device.startswith("cuda"):
-        config.device = "cuda"
+    config.device = "cuda"
 
 
 def get_config_hash_for_exp(config: ConfigDict) -> str:

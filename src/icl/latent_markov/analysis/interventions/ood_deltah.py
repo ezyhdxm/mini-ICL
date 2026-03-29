@@ -38,7 +38,7 @@ def intervene_remove_ood_deltah_subspace(
     eval_positions: Optional[list] = None,
     token_var_threshold: float = 0.9,
     show: bool = True,
-    figsize: tuple = (14, 6),
+    figsize: tuple = (10, 4.5),
     print_summary: bool = True,
 ) -> dict:
     """SVD ablation sweep on OOD Δh after projecting out task + token subspaces.

@@ -13,7 +13,7 @@ logger = setup_logger(__name__)
 def plot_id_ood_loss_dyck(
     k_list,
     logx: bool = True,
-    figsize: tuple = (12, 5),
+    figsize: tuple = (10, 4),
     start_step: Optional[float] = None,
     show: bool = True,
 ) -> dict:

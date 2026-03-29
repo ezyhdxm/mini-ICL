@@ -403,7 +403,7 @@ def plot_inject_task_vector_across_layers(
     _show_or_close(fig_hm, show)
 
     # ---- 2. MSE to injected vs original task  +  Task-ID accuracy ----
-    fig_mse, (ax_m1, ax_m2) = plt.subplots(1, 2, figsize=(16, 5))
+    fig_mse, (ax_m1, ax_m2) = plt.subplots(1, 2, figsize=(12, 4))
     bw = 0.3
 
     mse_hlines = [

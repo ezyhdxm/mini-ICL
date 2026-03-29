@@ -33,7 +33,7 @@ def get_loss_plots(config, train_results, folder="loss_plots", show=False, verbo
     baseline = log["baseline"] if "baseline" in log else []
 
     # === Plot Loss ===
-    fig_loss, ax_loss = plt.subplots(1, 2, figsize=(12, 6))  # linear and log scale
+    fig_loss, ax_loss = plt.subplots(1, 2, figsize=(10, 4))  # linear and log scale
 
     range_vec = range(1, config.training.num_epochs + 1)
     train_losses_smoothed = moving_average(train_losses)
@@ -60,7 +60,7 @@ def get_loss_plots(config, train_results, folder="loss_plots", show=False, verbo
 
     print(loss_path)
 
-    plt.savefig(loss_path)
+    plt.savefig(loss_path, bbox_inches="tight")
 
     if verbose:
         print("Loss plot saved at", loss_path)
@@ -87,7 +87,7 @@ def get_loss_plots(config, train_results, folder="loss_plots", show=False, verbo
 
         acc_path = os.path.join(folder, f"accuracy_{datetime.now().strftime('%Y%m%d_%H%M')}.png")
         plt.tight_layout()
-        plt.savefig(acc_path)
+        plt.savefig(acc_path, bbox_inches="tight")
         if verbose:
             print("Accuracy plot saved at", acc_path)
         if show: plt.show()
@@ -123,7 +123,7 @@ def plot_attn_scores(train_results, config, folder="loss_plots", show=False, log
     
     curr_time = datetime.now().strftime("%Y%m%d_%H%M")
     image_path = os.path.join(folder, f"attn_scores_{curr_time}.png")
-    plt.savefig(image_path)
+    plt.savefig(image_path, bbox_inches="tight")
     if show:
         plt.show()
     plt.close()

@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from typing import Sequence, Tuple, Optional
 from torch import nn
+from tqdm import tqdm
 
 import icl.utils.notebook_utils as nu
 from icl.utils.linear_algebra_utils import stable_rank
@@ -275,8 +276,15 @@ def compute_hiddens_token_conditioned_coin(
     # ------------------------------------------------------------------
     # Step 3-4: fix token, batch tasks, extract hidden → CPU
     # ------------------------------------------------------------------
-    for pos_idx_idx, pos_idx in enumerate(positions_of_interest):
+    pos_bar = tqdm(
+        enumerate(positions_of_interest),
+        total=len(positions_of_interest),
+        desc="coin/latent hiddens (positions)",
+        unit="pos",
+    )
+    for pos_idx_idx, pos_idx in pos_bar:
         unique_tokens = unique_tokens_by_position[pos_idx]
+        pos_bar.set_postfix(pos=pos_idx, n_tokens=len(unique_tokens))
 
         if pos_idx >= seq_len:
             continue

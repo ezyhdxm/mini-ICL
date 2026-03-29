@@ -11,7 +11,7 @@ def plot_dyck_task_posterior_padded(
     dyck_mask: Optional[torch.Tensor] = None,
     uniform_prior: bool = True,
     max_positions: Optional[int] = None,
-    figsize: tuple = (12, 4),
+    figsize: tuple = (10, 3.5),
     title: Optional[str] = None,
 ) -> dict:
     """
@@ -137,7 +137,7 @@ def plot_dyck_task_posterior(
     dyck_mask: Optional[torch.Tensor] = None,
     uniform_prior: bool = True,
     max_positions: Optional[int] = None,
-    figsize: tuple = (12, 4),
+    figsize: tuple = (10, 3.5),
     title: Optional[str] = None,
 ) -> dict:
     """

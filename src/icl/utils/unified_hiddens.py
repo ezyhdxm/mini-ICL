@@ -326,9 +326,12 @@ def _compute_hiddens_at_real_tokens(
 
     task_pos = torch.arange(seq_len - 1, device=device)
 
+    # Allocate on CPU: all callers immediately call .cpu() on the return value,
+    # so keeping this on GPU wastes VRAM proportional to n_tasks*B*T*D (can be
+    # tens of GB when avg_over is large).
     all_hiddens = torch.empty(
         (n_layers, n_tasks, seq_len - 1, B, n_embd),
-        device=device,
+        device="cpu",
     )
 
     _ep = extraction_point
@@ -371,7 +374,7 @@ def _compute_hiddens_at_real_tokens(
         return cache
 
     if return_data:
-        data_collector = torch.empty((n_tasks, B, seq_len), device=device)
+        data_collector = torch.empty((n_tasks, B, seq_len), device="cpu")
 
     if task_batch_size is None:
         task_batch_size = n_tasks
@@ -395,18 +398,18 @@ def _compute_hiddens_at_real_tokens(
             chunk_data.append(demo_data)
 
             if return_data:
-                data_collector[i] = demo_data
+                data_collector[i] = demo_data.cpu()
 
         if chunk_size == 1:
             cache = run_and_extract(chunk_data[0])
             for l in range(n_layers):
-                all_hiddens[l, chunk_start] = cache[l].permute(1, 0, 2)
+                all_hiddens[l, chunk_start] = cache[l].permute(1, 0, 2).cpu()
         else:
             big_batch = torch.cat(chunk_data, dim=0)
             cache = run_and_extract(big_batch)
             for l in range(n_layers):
                 reshaped = cache[l].view(chunk_size, B, seq_len - 1, n_embd)
-                all_hiddens[l, chunk_start:chunk_end] = reshaped.permute(0, 2, 1, 3)
+                all_hiddens[l, chunk_start:chunk_end] = reshaped.permute(0, 2, 1, 3).cpu()
             del big_batch
         del chunk_data, cache
 

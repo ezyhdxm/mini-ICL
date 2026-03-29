@@ -166,7 +166,7 @@ def anova_separability_multi(
 
 def plot_anova_separability(
     results: Dict[int, Dict[int, ANOVAResult]],
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = True,
     show: bool = True,
     show_ylabel: bool = True,
@@ -219,9 +219,9 @@ def plot_anova_separability(
         eta2_int = [pos_results[p].eta2_interaction for p in pos_list]
         ax1.plot(pos_list, eta2_int, label=f"Layer {l_num}", **_style(i))
 
-    ax1.set_xlabel("Position", fontsize=14)
+    ax1.set_xlabel("Position", fontsize=13)
     if show_ylabel:
-        ax1.set_ylabel("$\\eta^2_{\\mathrm{interaction}}$", fontsize=14)
+        ax1.set_ylabel("$\\eta^2_{\\mathrm{interaction}}$", fontsize=13)
     if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
         ax1.set_xscale("symlog", linthresh=1)
     ax1.set_ylim(-0.02, None)
@@ -245,9 +245,9 @@ def plot_anova_separability(
         sep_r2 = [pos_results[p].separability_r2 for p in pos_list]
         ax2.plot(pos_list, sep_r2, label=f"Layer {l_num}", **_style(i))
 
-    ax2.set_xlabel("Position", fontsize=14)
+    ax2.set_xlabel("Position", fontsize=13)
     if show_ylabel:
-        ax2.set_ylabel("Separability $R^2$", fontsize=14)
+        ax2.set_ylabel("Separability $R^2$", fontsize=13)
     if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
         ax2.set_xscale("symlog", linthresh=1)
     ax2.set_ylim(None, 1.00)

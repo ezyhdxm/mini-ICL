@@ -200,18 +200,19 @@ def project_onto_cellmeans(
 
 
 def _project_onto_simplex_np(v: np.ndarray) -> np.ndarray:
-    """Project each row of v onto the probability simplex."""
-    if v.ndim == 1:
+    """Project each row of v onto the probability simplex (fully vectorised)."""
+    squeeze = v.ndim == 1
+    if squeeze:
         v = v[np.newaxis, :]
     n = v.shape[1]
-    u = np.sort(v, axis=1)[:, ::-1]
+    u = np.sort(v, axis=1)[:, ::-1]          # sort descending, (batch, K)
     cssv = np.cumsum(u, axis=1) - 1.0
-    rho = np.zeros(v.shape[0], dtype=int)
-    for i in range(v.shape[0]):
-        conds = u[i] - cssv[i] / np.arange(1, n + 1) > 0
-        rho[i] = np.where(conds)[0][-1]
+    # rho[i] = last index j where u[i,j] - cssv[i,j]/(j+1) > 0
+    conds = u - cssv / np.arange(1, n + 1)   # broadcast (batch, K)
+    rho = (conds > 0).sum(axis=1) - 1        # (batch,) — fully vectorised
     theta = cssv[np.arange(v.shape[0]), rho] / (rho + 1.0)
-    return np.maximum(v - theta[:, np.newaxis], 0.0)
+    result = np.maximum(v - theta[:, np.newaxis], 0.0)
+    return result[0] if squeeze else result
 
 
 def estimate_lambda_with_r2(

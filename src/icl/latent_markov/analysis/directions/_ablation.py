@@ -26,7 +26,7 @@ def head_ablation_experiment(
     n_batches: int = 8,
     step: Optional[int] = None,
     show: bool = True,
-    figsize: tuple = (14, 6),
+    figsize: tuple = (10, 4.5),
     n_minor: int = 256,
     n_ood: int = 40,
     save_path: Optional[str] = None,

@@ -5,6 +5,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+from tqdm import tqdm
+
 import numpy as np
 import torch
 
@@ -64,7 +66,8 @@ def _compute_ood_and_minor_metrics(
     r2_min = float(r2_minor_final.mean())
     ood_var = (lambdas_ood_final - lambdas_ood_final.mean(dim=0, keepdim=True)).norm(dim=-1).mean().item()
     minor_var = (lambdas_minor_final - lambdas_minor_final.mean(dim=0, keepdim=True)).norm(dim=-1).mean().item()
-    return r2_ood, r2_min, ood_var, minor_var
+    # r2_ood_final shape: (n_ood,) — per-OOD-task R² values, useful for IQR
+    return r2_ood, r2_min, ood_var, minor_var, r2_ood_final
 
 
 def _get_minor_task_vecs_at_positions(
@@ -92,6 +95,15 @@ def _get_minor_final_task_vecs(task_vecs_over_all_time, k_minor: int):
     return _get_minor_task_vecs_at_positions(task_vecs_over_all_time, k_minor, position=-1)
     
 
+def _ood_task_iqr(r2_vals: torch.Tensor) -> Dict[str, float]:
+    """Return q25/q75 dict computed over per-OOD-task R² values."""
+    v = r2_vals.float()
+    return {
+        "q25": float(v.quantile(0.25)),
+        "q75": float(v.quantile(0.75)),
+    }
+
+
 def _compute_metrics(
     hiddens: torch.Tensor,
     k_minor: int,
@@ -102,7 +114,7 @@ def _compute_metrics(
     task_vecs_over_all_time = hiddens.mean(dim=-2) - task_mean
     maj_final_task_vecs = (hiddens[:3].mean(dim=-2) - task_mean)[:, -1]
 
-    maj_r2_ood, maj_r2_min, maj_ood_var, maj_minor_var = _compute_ood_and_minor_metrics(
+    maj_r2_ood, _, maj_ood_var, _, r2_ood_vals = _compute_ood_and_minor_metrics(
         maj_final_task_vecs,
         task_vecs_over_all_time,
         k_minor,
@@ -110,38 +122,48 @@ def _compute_metrics(
 
     metrics_dict: Dict[str, Any] = {
         "maj_r2_ood": maj_r2_ood,
-        "maj_r2_min": maj_r2_min,
+        "maj_r2_min": 0.0,       # minor tasks not used (n_minor=0)
         "maj_ood_var": maj_ood_var,
-        "maj_minor_var": maj_minor_var,
+        "maj_minor_var": 0.0,    # minor tasks not used (n_minor=0)
+        # IQR over OOD tasks (meaningful even with B=1)
+        "maj_r2_ood_iqr": _ood_task_iqr(r2_ood_vals),
     }
 
-    if compute_minor_metrics:
-        min_final_task_vecs = _get_minor_final_task_vecs(
-            task_vecs_over_all_time,
-            k_minor,
-        )
-        min_r2_ood, min_r2_min, min_ood_var, min_minor_var = _compute_ood_and_minor_metrics(
-            min_final_task_vecs,
-            task_vecs_over_all_time,
-            k_minor,
-            is_zero_mean=False,
-        )
-        metrics_dict["min_r2_ood"] = min_r2_ood
-        metrics_dict["min_r2_min"] = min_r2_min
-        metrics_dict["min_ood_var"] = min_ood_var
-        metrics_dict["min_minor_var"] = min_minor_var
+    # Minor-reference metrics (compute_minor_metrics=False by default; skipped
+    # entirely when k_minor==0).
+    # if compute_minor_metrics and k_minor > 0:
+    #     min_final_task_vecs = _get_minor_final_task_vecs(task_vecs_over_all_time, k_minor)
+    #     min_r2_ood, min_r2_min, min_ood_var, min_minor_var, _ = _compute_ood_and_minor_metrics(
+    #         min_final_task_vecs, task_vecs_over_all_time, k_minor, is_zero_mean=False)
+    #     metrics_dict["min_r2_ood"] = min_r2_ood
+    #     metrics_dict["min_r2_min"] = min_r2_min
+    #     metrics_dict["min_ood_var"] = min_ood_var
+    #     metrics_dict["min_minor_var"] = min_minor_var
 
     if position_blocks is not None:
         maj_r2_ood_by_block: List[float] = []
+        maj_r2_ood_by_block_iqr: List[Dict[str, float]] = []
         for pos in position_blocks:
-            r2_ood, _, _, _ = _compute_ood_and_minor_metrics(
-                maj_final_task_vecs,
+            # Build the reference subspace from the SAME positions as the
+            # evaluation block, not always from position -1.  For tasks like
+            # latent Markov where the chain mixes by the last token, the
+            # final-position hidden state carries little task identity, making
+            # the last-position subspace a poor reference for everything.
+            if isinstance(pos, tuple):
+                start, end = pos
+                maj_ref_vecs = task_vecs_over_all_time[:3, start:end].mean(dim=1)
+            else:
+                maj_ref_vecs = task_vecs_over_all_time[:3, pos]
+            r2_ood, _, _, _, r2_ood_vals_blk = _compute_ood_and_minor_metrics(
+                maj_ref_vecs,
                 task_vecs_over_all_time,
                 k_minor,
                 position=pos,
             )
             maj_r2_ood_by_block.append(r2_ood)
+            maj_r2_ood_by_block_iqr.append(_ood_task_iqr(r2_ood_vals_blk))
         metrics_dict["maj_r2_ood_by_block"] = maj_r2_ood_by_block
+        metrics_dict["maj_r2_ood_by_block_iqr"] = maj_r2_ood_by_block_iqr
 
     return metrics_dict
 
@@ -377,8 +399,14 @@ def _run_step_coin_or_latent(
     compute_minor_metrics: bool = False,
     extraction_point: str = "post_attn",
     precomputed_data=None,
+    avg_over: int = 1,
 ):
     """Run a single step for coin/latent: load model → forward → metrics.
+
+    When ``avg_over > 1``, the forward pass uses ``B * avg_over`` sequences per
+    task and then averages every ``avg_over`` consecutive sequences into one
+    observation.  This reduces token-noise in each task vector estimate while
+    preserving ``B`` independent observations for IQR computation.
 
     Returns dict mapping layer → metrics_dict, or None on failure.
     """
@@ -387,14 +415,28 @@ def _run_step_coin_or_latent(
             config, step=step, exp_name=exp_name, return_actual_step=True
         )
 
+        B_total = B * avg_over
+        # Scale task_batch_size so that sequences_per_pass ≈ n_tasks * B
+        # (the same order as the default avg_over=1 case).
+        # e.g. avg_over=32, B=32: auto_task_bs = max(1, 32//32) = 1 task per pass.
+        n_tasks_approx = sampler_clone.n_major_tasks + sampler_clone.n_minor_tasks
+        auto_task_bs = max(1, n_tasks_approx * B // B_total)
+
         hiddens = _compute_hiddens_at_real_tokens(
-            config, model, sampler_clone, B,
+            config, model, sampler_clone, B_total,
             extraction_point=extraction_point,
             precomputed_data=precomputed_data,
-        ).cpu()
+            task_batch_size=auto_task_bs,
+        ).cpu()  # (n_layers, n_tasks, T, B_total, D)
+
+        if avg_over > 1:
+            n_l, n_t, T_h, _, D = hiddens.shape
+            hiddens = hiddens.reshape(n_l, n_t, T_h, B, avg_over, D).mean(dim=4)
+            # → (n_layers, n_tasks, T, B, D)
 
         del model
         step_metrics: Dict[int, Dict] = {}
+        B_actual = hiddens.shape[-2]
         for L in layer_indices:
             h_L = hiddens[L].to(torch.float32)
             metrics_dict = _compute_metrics(
@@ -402,7 +444,11 @@ def _run_step_coin_or_latent(
                 position_blocks=position_blocks,
                 compute_minor_metrics=compute_minor_metrics,
             )
-            _merge_maj_r2_iqr_into_metrics(metrics_dict, h_L, k_minor, position_blocks)
+            # With B=1 the B-based IQR is degenerate (q25==q75==mean).
+            # _compute_metrics already stores OOD-task IQR, so skip the
+            # B-based merge in that case.
+            if B_actual > 1:
+                _merge_maj_r2_iqr_into_metrics(metrics_dict, h_L, k_minor, position_blocks)
             with open(cache_paths[step][L], "wb") as f:
                 pickle.dump(metrics_dict, f)
             step_metrics[L] = metrics_dict
@@ -426,6 +472,7 @@ def _run_step_linear(
     position_blocks,
     compute_minor_metrics: bool = False,
     extraction_point: str = "post_attn",
+    avg_over: int = 1,
 ):
     """Run a single linear step on one device and return per-layer metrics."""
     try:
@@ -434,11 +481,14 @@ def _run_step_linear(
             exp_name,
             n_minor,
             n_ood,
-            B,
+            B * avg_over,
             step=step,
             device=device,
             extraction_point=extraction_point,
         )
+        if avg_over > 1:
+            n_l, n_t, T_h, _, D = hiddens.shape
+            hiddens = hiddens.reshape(n_l, n_t, T_h, B, avg_over, D).mean(dim=4)
         step_metrics = _compute_step_metrics_and_cache(
             hiddens,
             layer_indices,
@@ -459,7 +509,7 @@ def process_ood_minor_metric(
     task_name: str,
     exp_name: str,
     steps: Sequence[int],
-    n_minor: int = 64,
+    n_minor: int = 0,
     n_ood: int = 30,
     B: int = 64,
     force_recompute: bool = False,
@@ -468,6 +518,7 @@ def process_ood_minor_metric(
     n_gpus: int = 1,
     compute_minor_metrics: bool = False,
     extraction_point: str = "post_attn",
+    avg_over: int = 1,
 ):
     """Compute OOD / minor R² metrics across training steps.
 
@@ -486,6 +537,14 @@ def process_ood_minor_metric(
         If True, also compute ``min_r2_ood``, ``min_r2_min``, and related
         variances using the **minor** reference vectors (extra ``estimate_lambda``
         solve + SVD over minor tasks).  Default False skips that work.
+    avg_over : int
+        Number of sequences to average per task before computing R².  Each
+        group of ``avg_over`` consecutive sequences is averaged into a single
+        hidden-state observation, producing ``B`` clean observations whose IQR
+        is stored.  ``avg_over > 1`` reduces token and residual noise in each
+        OOD task-vector estimate at the cost of ``avg_over`` × more sequences
+        per checkpoint.  Cache files are keyed on ``avg_over`` so old results
+        are never silently reused.  Default 1 (original behaviour).
     """
     # ── Setup: load config + sampler (no model) ──────────────────────────────
     if task_name == "linear":
@@ -532,6 +591,7 @@ def process_ood_minor_metric(
         layer_indices,
         position_blocks=position_blocks,
         extraction_point=extraction_point,
+        avg_over=avg_over,
     )
 
     # ── Storage dicts ─────────────────────────────────────────────────────────
@@ -601,7 +661,13 @@ def process_ood_minor_metric(
                 gpu_samplers.append(sc)
 
             results_lock = threading.Lock()
-            _precomputed = pregenerate_task_sequences(sampler_clone, B)
+            _precomputed = pregenerate_task_sequences(sampler_clone, B * avg_over)
+
+            pbar = tqdm(
+                total=len(uncached_steps),
+                desc=f"ood steps ({task_name})",
+                unit="ckpt",
+            )
 
             def _gpu_worker(gpu_id: int, my_steps: List[int]):
                 """Process all assigned steps on one GPU sequentially."""
@@ -615,6 +681,7 @@ def process_ood_minor_metric(
                         compute_minor_metrics,
                         extraction_point=extraction_point,
                         precomputed_data=_precomputed,
+                        avg_over=avg_over,
                     )
                     if step_metrics is not None:
                         with results_lock:
@@ -622,6 +689,8 @@ def process_ood_minor_metric(
                                 _store_metrics(L, step, step_metrics[L],
                                                *_cache_args)
                         local_ok.append(step)
+                    pbar.update(1)
+                    pbar.set_postfix(step=step, gpu=gpu_id)
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 return local_ok
@@ -651,6 +720,8 @@ def process_ood_minor_metric(
                     f"\nInterrupted. Processed {len(processed_steps)} "
                     f"checkpoints so far."
                 )
+            finally:
+                pbar.close()
 
             del gpu_configs, gpu_samplers
         else:
@@ -659,16 +730,23 @@ def process_ood_minor_metric(
                 config.device = device
                 sampler_clone.to(device)
 
-            _precomputed = pregenerate_task_sequences(sampler_clone, B)
+            _precomputed = pregenerate_task_sequences(sampler_clone, B * avg_over)
 
+            logger.info(
+                f"[{task_name}/{exp_name}] {len(uncached_steps)} uncached steps "
+                f"({len(processed_steps)} already cached)"
+            )
             try:
-                for step in uncached_steps:
+                pbar = tqdm(uncached_steps, desc=f"ood steps ({task_name})", unit="ckpt")
+                for step in pbar:
+                    pbar.set_postfix(step=step)
                     step_metrics = _run_step_coin_or_latent(
                         task_name, exp_name, step, config, sampler_clone, B,
                         layer_indices, k_minor, cache_paths, position_blocks,
                         compute_minor_metrics,
                         extraction_point=extraction_point,
                         precomputed_data=_precomputed,
+                        avg_over=avg_over,
                     )
                     if step_metrics is not None:
                         for L in layer_indices:
@@ -706,6 +784,7 @@ def process_ood_minor_metric(
                     position_blocks,
                     compute_minor_metrics,
                     extraction_point=extraction_point,
+                    avg_over=avg_over,
                 )
                 if step_metrics is not None:
                     with results_lock:
@@ -742,13 +821,22 @@ def process_ood_minor_metric(
 
     # ── OTHER / fallback: existing _get_hiddens path ──────────────────────────
     else:
+        logger.info(
+            f"[{task_name}/{exp_name}] {len(uncached_steps)} uncached steps "
+            f"({len(processed_steps)} already cached) — linear/CPU path"
+        )
         try:
-            for step in uncached_steps:
+            pbar = tqdm(uncached_steps, desc=f"ood steps ({task_name})", unit="ckpt")
+            for step in pbar:
+                pbar.set_postfix(step=step)
                 hiddens, _ = _get_hiddens(
-                    task_name, exp_name, n_minor, n_ood, B,
+                    task_name, exp_name, n_minor, n_ood, B * avg_over,
                     step=step, device=device,
                     extraction_point=extraction_point,
                 )
+                if avg_over > 1:
+                    n_l, n_t, T_h, _, D = hiddens.shape
+                    hiddens = hiddens.reshape(n_l, n_t, T_h, B, avg_over, D).mean(dim=4)
                 _compute_and_cache_metrics(
                     hiddens, layer_indices, k_minor, step, cache_paths,
                     position_blocks, *_cache_args,

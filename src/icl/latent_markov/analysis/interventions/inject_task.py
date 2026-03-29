@@ -364,7 +364,7 @@ def plot_inject_task_vector_across_layers(
         plt.close(fig_hm)
 
     # ---- 2. KL to injected vs original task  +  Task-ID accuracy ----
-    fig_kl, (ax_kl1, ax_kl2) = plt.subplots(1, 2, figsize=(16, 5))
+    fig_kl, (ax_kl1, ax_kl2) = plt.subplots(1, 2, figsize=(12, 4))
     x = np.arange(len(layers))
     bw = 0.3
 

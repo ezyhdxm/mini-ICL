@@ -1,5 +1,6 @@
 """KL divergence plots for linear regression analysis."""
 
+import logging
 import os
 import pickle
 from typing import Optional
@@ -8,7 +9,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+logger = logging.getLogger(__name__)
+
 import icl.utils.notebook_utils as nu
+
+
+def _pickle_load_cpu(f):
+    """Load a pickle file, remapping any CUDA tensors to CPU."""
+    import io
+
+    class _CPUUnpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if module == "torch.storage" and name == "_load_from_bytes":
+                return lambda b: torch.load(io.BytesIO(b), map_location="cpu")
+            return super().find_class(module, name)
+
+    return _CPUUnpickler(f).load()
 from icl.linear.analysis.posterior._compute import (
     _gauss_kl_surrogate,
     _get_linear_kl_over_steps_cache_path,
@@ -70,7 +86,7 @@ def plot_kl_model_vs_two_bayes_linear_over_steps(
     cached = None
     if use_cache and not force_recompute and os.path.exists(cache_path):
         with open(cache_path, "rb") as f:
-            cached = pickle.load(f)
+            cached = _pickle_load_cpu(f)
         if verbose:
             print(f"[cache] loaded KL-over-steps from {cache_path}")
 
@@ -245,7 +261,7 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
     show_ylabel: bool = True,
     use_cache: bool = True,
     force_recompute: bool = False,
-    figsize: tuple = (10, 5),
+    figsize: tuple = (9, 4),
     show: bool = True,
     verbose: bool = False,
 ) -> dict:
@@ -306,8 +322,7 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
             }
             all_steps.update(steps_k.tolist())
         except Exception as e:
-            if verbose:
-                print(f"[warn] k={k} failed: {e}")
+            logger.warning(f"k={k} ({exp_names[k]}): {e}")
 
     ks = sorted(curves.keys())
     if len(ks) == 0:
@@ -383,7 +398,7 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
     mesh_rel.set_facecolor(rel_facecolors.reshape(-1, 4))
     if show_colorbar:
         cbar_rel = fig_rel.colorbar(mesh_rel, ax=ax_rel, pad=0.02)
-        cbar_rel.set_label(r"$\log(\mathrm{KL}_{\mathrm{exact}} / \mathrm{KL}_{\mathrm{approx}})$", fontsize=14)
+        cbar_rel.set_label(r"$\log(\mathrm{KL}_{\mathrm{exact}} / \mathrm{KL}_{\mathrm{approx}})$", fontsize=13)
         cbar_rel.ax.tick_params(labelsize=12)
     ax_rel.set_xlabel("Training Step", fontsize=11)
     if show_ylabel:
@@ -405,7 +420,7 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
     )
     if show_colorbar:
         cbar_abs = fig_abs.colorbar(mesh_abs, ax=ax_abs, pad=0.02)
-        cbar_abs.set_label(r"$\log_{10}(\min(\mathrm{KL}_{\mathrm{exact}}, \mathrm{KL}_{\mathrm{approx}}))$", fontsize=14)
+        cbar_abs.set_label(r"$\log_{10}(\min(\mathrm{KL}_{\mathrm{exact}}, \mathrm{KL}_{\mathrm{approx}}))$", fontsize=13)
         cbar_abs.ax.tick_params(labelsize=12)
     ax_abs.set_title("Best Absolute KL", fontsize=12)
     ax_abs.set_xlabel("Training Step", fontsize=11)

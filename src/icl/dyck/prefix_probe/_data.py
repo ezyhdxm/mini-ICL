@@ -10,9 +10,17 @@ from icl.utils.unified_interface import get_exp_name
 from icl.dyck.dyck_utils import sample_binary_mask
 
 
-def _load_model_and_sampler(k_value, device=None):
-    """Load the trained Dyck model, sampler, and config for a given k."""
-    exp_name = get_exp_name("dyck", k_value)
+def _load_model_and_sampler(k_value, device=None, exp_name=None):
+    """Load the trained Dyck model, sampler, and config for a given k.
+
+    Parameters
+    ----------
+    exp_name : str, optional
+        Override the experiment name / hash.  When omitted the name is
+        derived from the default config for ``k_value``.
+    """
+    if exp_name is None:
+        exp_name = get_exp_name("dyck", k_value)
     _, sampler_orig, config = nu.load_everything("dyck", exp_name)
     if device is not None:
         config.device = device

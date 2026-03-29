@@ -215,6 +215,7 @@ def _draw_legend_cosmetics_refs(
     gid_prefix,
     # legend
     major_colors, major_linestyle, major_legend_prefix,
+    maj_names=None,
     idx_ood, ood_base_color, ood_legend_label,
     idx_minor, minor_base_color, minor_linestyle,
     show_legend,
@@ -232,6 +233,10 @@ def _draw_legend_cosmetics_refs(
     # --- Legend handles ---
     handles = []
     for i in range(3):
+        if maj_names is not None and i < len(maj_names):
+            label = str(maj_names[i])
+        else:
+            label = f"{major_legend_prefix}{i + 1}"
         handles.append(
             Line2D(
                 [0],
@@ -239,7 +244,7 @@ def _draw_legend_cosmetics_refs(
                 color=_rgba(major_colors[i], 0.95),
                 lw=2.4,
                 linestyle=major_linestyle,
-                label=f"{major_legend_prefix}{i + 1}",
+                label=label,
             )
         )
 

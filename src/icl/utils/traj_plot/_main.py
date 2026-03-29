@@ -31,7 +31,7 @@ def project_with_r2_trajectories_group_colors_mpl(
 
     # --- axis reuse behavior ---
     ax=None,
-    figsize=(9, 7),
+    figsize=(7, 5.5),
     dpi=150,
     clear_ax=False,
     cleanup_previous=True,
@@ -251,6 +251,7 @@ def project_with_r2_trajectories_group_colors_mpl(
     idx_minor = data["idx_minor"]
     orig_task_idx      = data["orig_task_idx"]
     major_base_to_color = data["major_base_to_color"]
+    maj_names           = data.get("maj_names", None)
 
     # ============================================================
     # 2. Project to 2D plane
@@ -369,6 +370,7 @@ def project_with_r2_trajectories_group_colors_mpl(
         gid_prefix=gid_prefix,
         major_colors=major_colors, major_linestyle=major_linestyle,
         major_legend_prefix=major_legend_prefix,
+        maj_names=maj_names,
         idx_ood=idx_ood, ood_base_color=ood_base_color, ood_legend_label=ood_legend_label,
         idx_minor=idx_minor, minor_base_color=minor_base_color, minor_linestyle=minor_linestyle,
         show_legend=show_legend,

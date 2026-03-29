@@ -337,7 +337,7 @@ def plot_id_ood_loss(
     k_list,
     vocab_size: Optional[int] = None,
     logx: bool = True,
-    figsize: tuple = (12, 5),
+    figsize: tuple = (10, 4),
     show: bool = True,
 ) -> dict:
     """
@@ -503,7 +503,7 @@ def plot_latent_task_posterior(
     n_plots: int = 3,
     major_only: bool = False,
     max_positions: Optional[int] = None,
-    figsize: tuple = (12, 4),
+    figsize: tuple = (10, 3.5),
     title: Optional[str] = None,
     show: bool = True,
 ) -> dict:

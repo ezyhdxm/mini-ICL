@@ -25,7 +25,7 @@ def traj_projection_plot_coin(
     use_mean: bool = True,
     step: Optional[int] = None,
     show_legend: bool = True,
-    figsize: tuple = (9, 7),
+    figsize: tuple = (7, 5.5),
     show: bool = True,
     title: str = "",
     **kwargs,

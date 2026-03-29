@@ -6,18 +6,21 @@ import torch
 import json
 
 def get_path_to_exp_dir(exp_name):
+    """Return the path to a linear experiment directory.
+
+    Searches several candidate roots so the function works regardless of
+    whether the caller's working directory is the project root, the
+    ``notebooks/`` folder, or any other location.
     """
-    Get the path to an experiment's directory.
-    
-    Args:
-        exp_name: Name of the experiment
-    
-    Returns:
-        Path to the experiment directory
-    """
-    work_dir = os.path.join("..", "results", "linear")
-    exp_dir = os.path.join(work_dir, exp_name)
-    return exp_dir
+    candidates = [
+        os.path.join("results", "linear", exp_name),
+        os.path.join("..", "results", "linear", exp_name),
+    ]
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    # Fall back to the first candidate; callers will get a clear error.
+    return candidates[0]
 
 
 def load_model_task_config(exp_name):
@@ -37,12 +40,14 @@ def load_model_task_config(exp_name):
     with open(config_path, "r") as f: config_dict = json.load(f)
     
     config = ConfigDict(config_dict)
+    # Fall back to CPU when the configured device (e.g. cuda) is unavailable.
+    device = config.device if (str(config.device) == "cpu" or torch.cuda.is_available()) else "cpu"
     checkpoint_path = os.path.join(exp_dir, "checkpoint.pt")
-    checkpoint = torch.load(checkpoint_path, map_location=config.device, weights_only=True)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     data_type = torch.float
     model = get_model(**config["model"], dtype=data_type)
     model.load_state_dict(checkpoint["model"])
-    train_task = get_task(**config["task"], device=config.device)
+    train_task = get_task(**config["task"], device=device)
     return model, train_task, config
 
 def get_checkpoint_files(exp_name):

@@ -91,7 +91,7 @@ def intervene_remove_bigram_subspace(
     extraction_point: str = "post_attn",
     probe_method: str = "ols",
     show: bool = True,
-    figsize: tuple = (14, 6),
+    figsize: tuple = (10, 4.5),
     print_summary: bool = True,
 ) -> dict:
     """

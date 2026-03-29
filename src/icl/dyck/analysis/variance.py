@@ -448,7 +448,7 @@ def plot_p1_variance_dyck(
         ax.set_xticks(positions)
         ax.set_xticklabels([str(int(p)) for p in positions])
     ax.tick_params(labelsize=14)
-    ax.legend(fontsize=14)
+    ax.legend(fontsize=13)
     ax.grid(True, alpha=0.3)
 
     if title:
@@ -568,7 +568,7 @@ def plot_task_vector_r2_dyck(
     n_minor: int = 0,
     n_ood: int = 0,
     verbose: bool = False,
-    figsize: tuple = (6, 4),
+    figsize: tuple = (5, 3.2),
     log_x: bool = False,
     show: bool = True,
     show_ylabel: bool = True,
@@ -651,9 +651,9 @@ def plot_task_vector_r2_dyck(
             **_layer_style(li, len(positions)),
         )
 
-    ax.set_xlabel("Dyck position", fontsize=14)
+    ax.set_xlabel("Dyck position", fontsize=13)
     if show_ylabel:
-        ax.set_ylabel("Residual variance ratio", fontsize=14)
+        ax.set_ylabel("Residual variance ratio", fontsize=13)
     if log_x and len(positions) > 1:
         ax.set_xscale("symlog", linthresh=1)
     from matplotlib.ticker import MaxNLocator

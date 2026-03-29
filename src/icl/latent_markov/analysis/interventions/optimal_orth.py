@@ -596,7 +596,7 @@ def plot_optimal_orth_direction_across_layers(
     n_rand_int: int = 5,
     val_patience: int = 0,
     show_ylabel: bool = True,
-    figsize: tuple = (14, 6),
+    figsize: tuple = (10, 4.5),
     show: bool = True,
     save_path: Optional[str] = None,
     title: Optional[str] = None,
@@ -1727,7 +1727,7 @@ def plot_optimal_orth_direction_across_layers(
 
     # -- Plot 2: Validation loss history --
     cmap = plt.cm.tab10
-    fig_loss, ax_loss = plt.subplots(figsize=(10, 5))
+    fig_loss, ax_loss = plt.subplots(figsize=(8, 4))
     for i, l in enumerate(layers):
         vh = all_results[l]["val_history"]
         steps_v = [s for s, _ in vh]
@@ -1774,7 +1774,7 @@ def plot_optimal_orth_direction_across_layers(
         plt.close(fig_r2_fwd)
 
     # -- Plot 4: Per-token logit change --
-    fig_logit, ax_ld = plt.subplots(figsize=(10, 5))
+    fig_logit, ax_ld = plt.subplots(figsize=(8, 4))
     x_tok = np.arange(V)
     bw_tok = 0.8 / len(layers)
     for idx, l in enumerate(layers):
