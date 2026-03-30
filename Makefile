@@ -4,7 +4,7 @@ FIGS_DIR := paper_figs
 PORT := 8000
 K_LIST ?= 0 1 2 3 4 5 6 7 8 9
 RECOMPUTE ?= 0
-COIN_VOCAB_SIZE ?= 16
+COIN_VOCAB_SIZE ?= 6
 COIN_INJS_LAYER ?= 3
 
 .PHONY: train train-test train-latent train-coin train-linear index serve browse test lint typecheck help figs

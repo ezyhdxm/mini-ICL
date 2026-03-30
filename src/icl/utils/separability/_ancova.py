@@ -985,6 +985,46 @@ def plot_ancova_separability(
     return fig1, fig2
 
 
+def plot_ancova_interaction_on_ax(
+    ax,
+    results: Dict[int, Dict[int, ANCOVAResult]],
+    *,
+    log_x: bool = False,
+    show_ylabel: bool = True,
+):
+    """Draw η²_interaction vs position on an existing *ax* (ANCOVA version).
+
+    η²_interaction = separability_gap / r2_full, matching the semantics of
+    :func:`plot_anova_interaction_on_ax` so both can be tiled in a single figure.
+    """
+    from icl.utils.separability._task_vector_r2 import _layer_style
+
+    def _eta2(res: ANCOVAResult) -> float:
+        return res.separability_gap / res.r2_full if res.r2_full > 0 else 0.0
+
+    layers = sorted(results.keys())
+    pos_list: list = []
+    for l_num in layers:
+        pos_results = results[l_num]
+        pos_list = sorted(pos_results.keys())
+        if not pos_list:
+            continue
+        eta2_int = [_eta2(pos_results[p]) for p in pos_list]
+        ax.plot(pos_list, eta2_int, label=str(l_num),
+                **_layer_style(l_num, len(pos_list)))
+
+    ax.set_xlabel("Position")
+    if show_ylabel:
+        ax.set_ylabel(r"$\eta^2_{\mathrm{interaction}}$")
+    if log_x and len(pos_list) > 1 and min(pos_list) >= 0:
+        ax.set_xscale("symlog", linthresh=1)
+    ax.set_ylim(-0.02, None)
+    _ncol = 2 if len(layers) > 6 else 1
+    ax.legend(title="Layer", framealpha=0.9, loc="best", ncol=_ncol,
+              borderaxespad=0.3, handlelength=2.2)
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+
+
 def print_ancova_summary(
     results: Dict[int, Dict[int, ANCOVAResult]],
     positions: Optional[Sequence[int]] = None,

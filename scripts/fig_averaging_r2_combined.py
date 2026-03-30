@@ -40,7 +40,7 @@ if not torch.cuda.is_available():
     )
 
 
-def _compute_coin(layers, vocab_size: int = 16):
+def _compute_coin(layers, vocab_size: int = 6):
     from icl.coin.analysis.probes._plots import plot_averaging_r2_coin
     exp_name = get_exp_name("coin", -1, vocab_size=vocab_size)
     out = plot_averaging_r2_coin(
@@ -119,7 +119,7 @@ def _log_last10_r2(label: str, r2: dict) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Generate combined averaging R² figure (E1/E2/E3).")
-    p.add_argument("--coin-vocab-size", type=int, default=16, metavar="V",
+    p.add_argument("--coin-vocab-size", type=int, default=6, metavar="V",
                    help="Vocabulary size for E1 Coins experiments (default: 16)")
     return p.parse_args()
 

@@ -20,6 +20,7 @@ from icl.utils.separability._anova import (  # noqa: F401
     anova_separability,
     anova_separability_multi,
     plot_anova_separability,
+    plot_anova_interaction_on_ax,
     print_anova_summary,
 )
 from icl.utils.separability._ancova import (  # noqa: F401
@@ -31,6 +32,7 @@ from icl.utils.separability._ancova import (  # noqa: F401
     mlp_ancova_separability_joint_from_hiddens,
     ancova_separability_from_hiddens,
     plot_ancova_separability,
+    plot_ancova_interaction_on_ax,
     print_ancova_summary,
 )
 from icl.utils.separability._task_token_vectors import (  # noqa: F401

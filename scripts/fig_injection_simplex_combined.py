@@ -37,7 +37,7 @@ from icl.utils.unified_interface import get_exp_name
 apply_paper_style()
 
 
-def _compute_coin(vocab_size: int = 16, layer: int = 3):
+def _compute_coin(vocab_size: int = 6, layer: int = 3):
     from icl.coin.analysis.interventions import intervene_averaging_injection_coin
     exp_name = get_exp_name("coin", -1, vocab_size=vocab_size)
     return intervene_averaging_injection_coin(
@@ -109,7 +109,7 @@ def _compute_latent():
 
 def parse_args():
     p = argparse.ArgumentParser(description="Generate combined injection-simplex figure (E1/E2/E3).")
-    p.add_argument("--coin-vocab-size", type=int, default=16, metavar="V",
+    p.add_argument("--coin-vocab-size", type=int, default=6, metavar="V",
                    help="Vocabulary size for E1 Coins experiments (default: 16)")
     p.add_argument("--coin-layer", type=int, default=3,
                    help="Layer index for E1 Coins steering (default: 3)")

@@ -1,14 +1,13 @@
 """
 Standard ICL task definitions for real-LLM subspace experiments.
 
-Twelve ID tasks spanning morphology, translation, semantic, classification,
-and factual categories.  Hand-curated pairs are used where they are larger;
-otherwise data comes from Todd et al. (2024) "Function Vectors in Large
-Language Models" (ICLR 2024).
+All twelve tasks now use data from Todd et al. (2024) "Function Vectors in
+Large Language Models" (ICLR 2024) except word_to_category (hand-curated).
 
-  ─── Morphology (hand-curated) ────────────────────────────────────────────
-  present_to_past    : walk     → walked       (519 pairs)
-  singular_to_plural : cat      → cats         (337 pairs)
+  ─── Morphology (Todd et al.) ─────────────────────────────────────────────
+  present_to_past    : walk     → walked       (293 pairs, ~287 after clean)
+  singular_to_plural : cat      → cats         (205 pairs, ~193 after clean)
+                       ⚠ Use n_support_pairs ≤ 100 in build_experiment_prompts.
 
   ─── Translation (Todd et al.) ────────────────────────────────────────────
   english_to_french  : cat      → chat         (4 698 pairs)
@@ -54,14 +53,12 @@ from icl.real_llm._external_data import (
     ENGLISH_TO_SPANISH as _EXT_ENGLISH_TO_SPANISH,
     LANDMARK_TO_COUNTRY as _EXT_LANDMARK_TO_COUNTRY,
     PERSON_TO_OCCUPATION as _EXT_PERSON_TO_OCCUPATION,
+    PRESENT_TO_PAST as _EXT_PRESENT_TO_PAST,
     PRODUCT_TO_COMPANY as _EXT_PRODUCT_TO_COMPANY,
+    SINGULAR_TO_PLURAL as _EXT_SINGULAR_TO_PLURAL,
     SYNONYMS as _EXT_SYNONYMS,
 )
-from icl.real_llm._task_vocab import (
-    _PRESENT_TO_PAST,
-    _SINGULAR_TO_PLURAL,
-    _WORD_TO_CATEGORY,
-)
+from icl.real_llm._task_vocab import _WORD_TO_CATEGORY
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +149,6 @@ def _double(y: str) -> str:
 # Note: entries for the three active ID tasks (english_to_french, antonyms,
 # product_to_company) are intentionally absent — they use INPUT_OOD_SPEC.
 OOD_SPEC: Dict[str, Tuple[str, Callable[[str], str], str]] = {
-    "past_reversed":       ("present_to_past",      _reverse,    "reversed past tense"),
     "plural_leet":         ("singular_to_plural",    _leetspeak,  "leetspeak plural"),
     "spanish_reversed":    ("english_to_spanish",    _reverse,    "reversed Spanish"),
     "german_reversed":     ("english_to_german",     _reverse,    "reversed German"),
@@ -177,6 +173,7 @@ INPUT_OOD_SPEC: Dict[str, Tuple[str, Callable[[str], str], str]] = {
     "french_input_first":    ("english_to_french",    _first_char, "first letter of English word"),
     "antonym_input_cap_last": ("antonyms",             _capitalize_last, "capitalize last letter of English word"),
     "product_input_double":  ("product_to_company",   _double,     "repeat the product name twice"),
+    "past_input_double":     ("present_to_past",      _double,     "repeat the input verb twice"),
 }
 
 
@@ -335,9 +332,9 @@ class ICLTask:
 # ---------------------------------------------------------------------------
 
 _ALL_ID_TASKS: Dict[str, List[Tuple[str, str]]] = {
-    # Morphology (hand-curated, larger than Todd et al.)
-    "present_to_past":      _PRESENT_TO_PAST,
-    "singular_to_plural":   _SINGULAR_TO_PLURAL,
+    # Morphology (Todd et al.)
+    "present_to_past":      _EXT_PRESENT_TO_PAST,
+    "singular_to_plural":   _EXT_SINGULAR_TO_PLURAL,
     # Translation (Todd et al.)
     "english_to_french":    _EXT_ENGLISH_TO_FRENCH,
     "english_to_spanish":   _EXT_ENGLISH_TO_SPANISH,

@@ -60,7 +60,7 @@ def _save_path(coin_layer: int, linear_layer: int, latent_layer: int) -> Path:
     return PROJECT_ROOT / "paper_figs" / name
 
 
-def _compute_coin(layer: int, vocab_size: int = 16, avg_over: int = 128):
+def _compute_coin(layer: int, vocab_size: int = 6, avg_over: int = 128):
     return plot_maj_r2_ood_across_steps_coin(
         k_list=[-1, 0, 2, 4, 10],
         steps=_STEPS_COIN,
@@ -108,7 +108,7 @@ def parse_args():
     p.add_argument("--coin-layer",      type=int, default=4,  help="Layer index for E1 (Coins) [default: 4]")
     p.add_argument("--linear-layer",    type=int, default=10, help="Layer index for E2 (Linear) [default: 10]")
     p.add_argument("--latent-layer",    type=int, default=4,  help="Layer index for E3 (Latent) [default: 4]")
-    p.add_argument("--coin-vocab-size", type=int, default=16, metavar="V",
+    p.add_argument("--coin-vocab-size", type=int, default=6, metavar="V",
                    help="Vocabulary size for E1 Coins experiments (default: 16)")
     p.add_argument("--avg-over", type=int, default=128, metavar="A",
                    help="Sequences averaged per OOD task before R² for all experiments (default: 128; use 1 for no averaging)")

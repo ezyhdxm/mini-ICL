@@ -49,6 +49,12 @@ _REGISTRY: Dict[str, str] = {
     "person_to_occupation": "person-occupation.json",
     "landmark_to_country":  "landmark-country.json",
     "product_to_company":   "product-company.json",
+    # Morphology — augmented with WordNet lemmas (lemminflect, Brown freq ≥ 2).
+    # present_to_past:   ~435 pairs after clean() (191 irregular + 250 regular).
+    # singular_to_plural: ~341 pairs after clean() (78 irregular + 263 regular,
+    #   includes -man/-men, -is/-es, -um/-a, -us/-i, -f/-ves patterns).
+    "present_to_past":      "present-past.json",
+    "singular_to_plural":   "singular-plural.json",
 }
 
 # Pre-load all datasets at import time (they're small JSON files).
@@ -63,3 +69,5 @@ COUNTRY_TO_CAPITAL:   List[Tuple[str, str]] = _ALL["country_to_capital"]
 PERSON_TO_OCCUPATION: List[Tuple[str, str]] = _ALL["person_to_occupation"]
 LANDMARK_TO_COUNTRY:  List[Tuple[str, str]] = _ALL["landmark_to_country"]
 PRODUCT_TO_COMPANY:   List[Tuple[str, str]] = _ALL["product_to_company"]
+PRESENT_TO_PAST:      List[Tuple[str, str]] = _ALL["present_to_past"]
+SINGULAR_TO_PLURAL:   List[Tuple[str, str]] = _ALL["singular_to_plural"]

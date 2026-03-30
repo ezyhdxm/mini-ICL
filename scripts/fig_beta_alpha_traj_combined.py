@@ -35,8 +35,8 @@ from icl.utils.unified_interface import get_exp_name
 apply_paper_style()
 
 _TASK_IDS = [0]
-_PLOT_POSITIONS = list(range(40))
-_ESTIM_POSITIONS = list(range(30, 40))
+_PLOT_POSITIONS = list(range(60))
+_ESTIM_POSITIONS = list(range(40, 60))
 _PIDX = np.array(_PLOT_POSITIONS)
 
 
@@ -46,7 +46,7 @@ def _save_path(coin_layer: int, linear_layer: int, latent_layer: int, simplex: b
     return PROJECT_ROOT / "paper_figs" / name
 
 
-def _compute_coin(layer: int, simplex: bool, vocab_size: int = 16):
+def _compute_coin(layer: int, simplex: bool, vocab_size: int = 6):
     from icl.coin.analysis import traj_averaging_projection_plot_coin
     exp_name = get_exp_name("coin", -1, vocab_size=vocab_size)
     out = traj_averaging_projection_plot_coin(
@@ -133,7 +133,7 @@ def parse_args():
                    help="Layer index for E3 Latent (default: 3)")
     p.add_argument("--simplex", action=argparse.BooleanOptionalAction, default=True,
                    help="Use simplex projection for beta coefficients (default: --simplex)")
-    p.add_argument("--coin-vocab-size", type=int, default=16, metavar="V",
+    p.add_argument("--coin-vocab-size", type=int, default=6, metavar="V",
                    help="Vocabulary size for E1 Coins experiments (default: 16)")
     return p.parse_args()
 

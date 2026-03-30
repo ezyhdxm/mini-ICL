@@ -1,0 +1,1366 @@
+[
+  {
+    "input": "act",
+    "output": "acts"
+  },
+  {
+    "input": "action",
+    "output": "actions"
+  },
+  {
+    "input": "addition",
+    "output": "additions"
+  },
+  {
+    "input": "age",
+    "output": "ages"
+  },
+  {
+    "input": "aid",
+    "output": "aids"
+  },
+  {
+    "input": "air",
+    "output": "airs"
+  },
+  {
+    "input": "alumnus",
+    "output": "alumni"
+  },
+  {
+    "input": "america",
+    "output": "americas"
+  },
+  {
+    "input": "amount",
+    "output": "amounts"
+  },
+  {
+    "input": "analysis",
+    "output": "analyses"
+  },
+  {
+    "input": "answer",
+    "output": "answers"
+  },
+  {
+    "input": "apex",
+    "output": "apices"
+  },
+  {
+    "input": "appendix",
+    "output": "appendices"
+  },
+  {
+    "input": "area",
+    "output": "areas"
+  },
+  {
+    "input": "army",
+    "output": "armies"
+  },
+  {
+    "input": "art",
+    "output": "arts"
+  },
+  {
+    "input": "attention",
+    "output": "attentions"
+  },
+  {
+    "input": "axis",
+    "output": "axes"
+  },
+  {
+    "input": "bacterium",
+    "output": "bacteria"
+  },
+  {
+    "input": "basis",
+    "output": "bases"
+  },
+  {
+    "input": "beginning",
+    "output": "beginnings"
+  },
+  {
+    "input": "bill",
+    "output": "bills"
+  },
+  {
+    "input": "board",
+    "output": "boards"
+  },
+  {
+    "input": "boatman",
+    "output": "boatmen"
+  },
+  {
+    "input": "body",
+    "output": "bodies"
+  },
+  {
+    "input": "book",
+    "output": "books"
+  },
+  {
+    "input": "bowman",
+    "output": "bowmen"
+  },
+  {
+    "input": "boy",
+    "output": "boys"
+  },
+  {
+    "input": "brown",
+    "output": "browns"
+  },
+  {
+    "input": "building",
+    "output": "buildings"
+  },
+  {
+    "input": "business",
+    "output": "businesses"
+  },
+  {
+    "input": "businessman",
+    "output": "businessmen"
+  },
+  {
+    "input": "cactus",
+    "output": "cacti"
+  },
+  {
+    "input": "calf",
+    "output": "calves"
+  },
+  {
+    "input": "call",
+    "output": "calls"
+  },
+  {
+    "input": "car",
+    "output": "cars"
+  },
+  {
+    "input": "care",
+    "output": "cares"
+  },
+  {
+    "input": "case",
+    "output": "cases"
+  },
+  {
+    "input": "cent",
+    "output": "cents"
+  },
+  {
+    "input": "center",
+    "output": "centers"
+  },
+  {
+    "input": "century",
+    "output": "centuries"
+  },
+  {
+    "input": "chairman",
+    "output": "chairmen"
+  },
+  {
+    "input": "change",
+    "output": "changes"
+  },
+  {
+    "input": "child",
+    "output": "children"
+  },
+  {
+    "input": "church",
+    "output": "churches"
+  },
+  {
+    "input": "city",
+    "output": "cities"
+  },
+  {
+    "input": "class",
+    "output": "classes"
+  },
+  {
+    "input": "clergyman",
+    "output": "clergymen"
+  },
+  {
+    "input": "club",
+    "output": "clubs"
+  },
+  {
+    "input": "college",
+    "output": "colleges"
+  },
+  {
+    "input": "color",
+    "output": "colors"
+  },
+  {
+    "input": "committee",
+    "output": "committees"
+  },
+  {
+    "input": "community",
+    "output": "communities"
+  },
+  {
+    "input": "company",
+    "output": "companies"
+  },
+  {
+    "input": "congress",
+    "output": "congresses"
+  },
+  {
+    "input": "control",
+    "output": "controls"
+  },
+  {
+    "input": "cost",
+    "output": "costs"
+  },
+  {
+    "input": "councilman",
+    "output": "councilmen"
+  },
+  {
+    "input": "country",
+    "output": "countries"
+  },
+  {
+    "input": "county",
+    "output": "counties"
+  },
+  {
+    "input": "course",
+    "output": "courses"
+  },
+  {
+    "input": "court",
+    "output": "courts"
+  },
+  {
+    "input": "craftsman",
+    "output": "craftsmen"
+  },
+  {
+    "input": "crisis",
+    "output": "crises"
+  },
+  {
+    "input": "criterion",
+    "output": "criteria"
+  },
+  {
+    "input": "datum",
+    "output": "data"
+  },
+  {
+    "input": "day",
+    "output": "days"
+  },
+  {
+    "input": "days",
+    "output": "dayses"
+  },
+  {
+    "input": "deal",
+    "output": "deals"
+  },
+  {
+    "input": "death",
+    "output": "deaths"
+  },
+  {
+    "input": "defense",
+    "output": "defenses"
+  },
+  {
+    "input": "department",
+    "output": "departments"
+  },
+  {
+    "input": "development",
+    "output": "developments"
+  },
+  {
+    "input": "diagnosis",
+    "output": "diagnoses"
+  },
+  {
+    "input": "difference",
+    "output": "differences"
+  },
+  {
+    "input": "direction",
+    "output": "directions"
+  },
+  {
+    "input": "district",
+    "output": "districts"
+  },
+  {
+    "input": "door",
+    "output": "doors"
+  },
+  {
+    "input": "doorman",
+    "output": "doormen"
+  },
+  {
+    "input": "earth",
+    "output": "earths"
+  },
+  {
+    "input": "east",
+    "output": "easts"
+  },
+  {
+    "input": "education",
+    "output": "educations"
+  },
+  {
+    "input": "effect",
+    "output": "effects"
+  },
+  {
+    "input": "effort",
+    "output": "efforts"
+  },
+  {
+    "input": "elf",
+    "output": "elves"
+  },
+  {
+    "input": "emphasis",
+    "output": "emphases"
+  },
+  {
+    "input": "end",
+    "output": "ends"
+  },
+  {
+    "input": "english",
+    "output": "englishes"
+  },
+  {
+    "input": "equilibrium",
+    "output": "equilibria"
+  },
+  {
+    "input": "equipment",
+    "output": "equipments"
+  },
+  {
+    "input": "evening",
+    "output": "evenings"
+  },
+  {
+    "input": "evidence",
+    "output": "evidences"
+  },
+  {
+    "input": "example",
+    "output": "examples"
+  },
+  {
+    "input": "experience",
+    "output": "experiences"
+  },
+  {
+    "input": "face",
+    "output": "faces"
+  },
+  {
+    "input": "fact",
+    "output": "facts"
+  },
+  {
+    "input": "fall",
+    "output": "falls"
+  },
+  {
+    "input": "family",
+    "output": "families"
+  },
+  {
+    "input": "father",
+    "output": "fathers"
+  },
+  {
+    "input": "feeling",
+    "output": "feelings"
+  },
+  {
+    "input": "field",
+    "output": "fields"
+  },
+  {
+    "input": "figure",
+    "output": "figures"
+  },
+  {
+    "input": "fire",
+    "output": "fires"
+  },
+  {
+    "input": "fisherman",
+    "output": "fishermen"
+  },
+  {
+    "input": "floor",
+    "output": "floors"
+  },
+  {
+    "input": "food",
+    "output": "foods"
+  },
+  {
+    "input": "foot",
+    "output": "feet"
+  },
+  {
+    "input": "force",
+    "output": "forces"
+  },
+  {
+    "input": "foreman",
+    "output": "foremen"
+  },
+  {
+    "input": "form",
+    "output": "forms"
+  },
+  {
+    "input": "freshman",
+    "output": "freshmen"
+  },
+  {
+    "input": "friend",
+    "output": "friends"
+  },
+  {
+    "input": "front",
+    "output": "fronts"
+  },
+  {
+    "input": "fungus",
+    "output": "fungi"
+  },
+  {
+    "input": "future",
+    "output": "futures"
+  },
+  {
+    "input": "gentleman",
+    "output": "gentlemen"
+  },
+  {
+    "input": "genus",
+    "output": "genera"
+  },
+  {
+    "input": "girl",
+    "output": "girls"
+  },
+  {
+    "input": "god",
+    "output": "gods"
+  },
+  {
+    "input": "goose",
+    "output": "geese"
+  },
+  {
+    "input": "government",
+    "output": "governments"
+  },
+  {
+    "input": "ground",
+    "output": "grounds"
+  },
+  {
+    "input": "group",
+    "output": "groups"
+  },
+  {
+    "input": "growth",
+    "output": "growths"
+  },
+  {
+    "input": "gunman",
+    "output": "gunmen"
+  },
+  {
+    "input": "hair",
+    "output": "hairs"
+  },
+  {
+    "input": "half",
+    "output": "halves"
+  },
+  {
+    "input": "hall",
+    "output": "halls"
+  },
+  {
+    "input": "hand",
+    "output": "hands"
+  },
+  {
+    "input": "head",
+    "output": "heads"
+  },
+  {
+    "input": "heart",
+    "output": "hearts"
+  },
+  {
+    "input": "help",
+    "output": "helps"
+  },
+  {
+    "input": "history",
+    "output": "histories"
+  },
+  {
+    "input": "home",
+    "output": "homes"
+  },
+  {
+    "input": "hope",
+    "output": "hopes"
+  },
+  {
+    "input": "hour",
+    "output": "hours"
+  },
+  {
+    "input": "house",
+    "output": "houses"
+  },
+  {
+    "input": "hypothesis",
+    "output": "hypotheses"
+  },
+  {
+    "input": "idea",
+    "output": "ideas"
+  },
+  {
+    "input": "increase",
+    "output": "increases"
+  },
+  {
+    "input": "index",
+    "output": "indices"
+  },
+  {
+    "input": "individual",
+    "output": "individuals"
+  },
+  {
+    "input": "industry",
+    "output": "industries"
+  },
+  {
+    "input": "infantryman",
+    "output": "infantrymen"
+  },
+  {
+    "input": "information",
+    "output": "informations"
+  },
+  {
+    "input": "interest",
+    "output": "interests"
+  },
+  {
+    "input": "island",
+    "output": "islands"
+  },
+  {
+    "input": "issue",
+    "output": "issues"
+  },
+  {
+    "input": "job",
+    "output": "jobs"
+  },
+  {
+    "input": "john",
+    "output": "johns"
+  },
+  {
+    "input": "kind",
+    "output": "kinds"
+  },
+  {
+    "input": "knife",
+    "output": "knives"
+  },
+  {
+    "input": "knowledge",
+    "output": "knowledges"
+  },
+  {
+    "input": "labor",
+    "output": "labors"
+  },
+  {
+    "input": "land",
+    "output": "lands"
+  },
+  {
+    "input": "law",
+    "output": "laws"
+  },
+  {
+    "input": "layman",
+    "output": "laymen"
+  },
+  {
+    "input": "leaf",
+    "output": "leaves"
+  },
+  {
+    "input": "letter",
+    "output": "letters"
+  },
+  {
+    "input": "level",
+    "output": "levels"
+  },
+  {
+    "input": "life",
+    "output": "lives"
+  },
+  {
+    "input": "light",
+    "output": "lights"
+  },
+  {
+    "input": "line",
+    "output": "lines"
+  },
+  {
+    "input": "list",
+    "output": "lists"
+  },
+  {
+    "input": "literature",
+    "output": "literatures"
+  },
+  {
+    "input": "loaf",
+    "output": "loaves"
+  },
+  {
+    "input": "louse",
+    "output": "lice"
+  },
+  {
+    "input": "love",
+    "output": "loves"
+  },
+  {
+    "input": "madman",
+    "output": "madmen"
+  },
+  {
+    "input": "man",
+    "output": "men"
+  },
+  {
+    "input": "market",
+    "output": "markets"
+  },
+  {
+    "input": "marksman",
+    "output": "marksmen"
+  },
+  {
+    "input": "material",
+    "output": "materials"
+  },
+  {
+    "input": "matrix",
+    "output": "matrices"
+  },
+  {
+    "input": "matter",
+    "output": "matters"
+  },
+  {
+    "input": "medium",
+    "output": "media"
+  },
+  {
+    "input": "meeting",
+    "output": "meetings"
+  },
+  {
+    "input": "member",
+    "output": "members"
+  },
+  {
+    "input": "metamorphosis",
+    "output": "metamorphoses"
+  },
+  {
+    "input": "method",
+    "output": "methods"
+  },
+  {
+    "input": "midshipman",
+    "output": "midshipmen"
+  },
+  {
+    "input": "mind",
+    "output": "minds"
+  },
+  {
+    "input": "minuteman",
+    "output": "minutemen"
+  },
+  {
+    "input": "miss",
+    "output": "misses"
+  },
+  {
+    "input": "moment",
+    "output": "moments"
+  },
+  {
+    "input": "momentum",
+    "output": "momenta"
+  },
+  {
+    "input": "money",
+    "output": "moneys"
+  },
+  {
+    "input": "morning",
+    "output": "mornings"
+  },
+  {
+    "input": "mother",
+    "output": "mothers"
+  },
+  {
+    "input": "mouse",
+    "output": "mice"
+  },
+  {
+    "input": "name",
+    "output": "names"
+  },
+  {
+    "input": "nation",
+    "output": "nations"
+  },
+  {
+    "input": "nature",
+    "output": "natures"
+  },
+  {
+    "input": "need",
+    "output": "needs"
+  },
+  {
+    "input": "nemesis",
+    "output": "nemeses"
+  },
+  {
+    "input": "newspaperman",
+    "output": "newspapermen"
+  },
+  {
+    "input": "night",
+    "output": "nights"
+  },
+  {
+    "input": "nobleman",
+    "output": "noblemen"
+  },
+  {
+    "input": "nucleus",
+    "output": "nuclei"
+  },
+  {
+    "input": "number",
+    "output": "numbers"
+  },
+  {
+    "input": "office",
+    "output": "offices"
+  },
+  {
+    "input": "order",
+    "output": "orders"
+  },
+  {
+    "input": "ox",
+    "output": "oxen"
+  },
+  {
+    "input": "paper",
+    "output": "papers"
+  },
+  {
+    "input": "paralysis",
+    "output": "paralyses"
+  },
+  {
+    "input": "part",
+    "output": "parts"
+  },
+  {
+    "input": "party",
+    "output": "parties"
+  },
+  {
+    "input": "past",
+    "output": "pasts"
+  },
+  {
+    "input": "patrolman",
+    "output": "patrolmen"
+  },
+  {
+    "input": "period",
+    "output": "periods"
+  },
+  {
+    "input": "person",
+    "output": "persons"
+  },
+  {
+    "input": "phenomenon",
+    "output": "phenomena"
+  },
+  {
+    "input": "picture",
+    "output": "pictures"
+  },
+  {
+    "input": "place",
+    "output": "places"
+  },
+  {
+    "input": "plan",
+    "output": "plans"
+  },
+  {
+    "input": "play",
+    "output": "plays"
+  },
+  {
+    "input": "point",
+    "output": "points"
+  },
+  {
+    "input": "policeman",
+    "output": "policemen"
+  },
+  {
+    "input": "policy",
+    "output": "policies"
+  },
+  {
+    "input": "population",
+    "output": "populations"
+  },
+  {
+    "input": "position",
+    "output": "positions"
+  },
+  {
+    "input": "postman",
+    "output": "postmen"
+  },
+  {
+    "input": "power",
+    "output": "powers"
+  },
+  {
+    "input": "president",
+    "output": "presidents"
+  },
+  {
+    "input": "pressure",
+    "output": "pressures"
+  },
+  {
+    "input": "problem",
+    "output": "problems"
+  },
+  {
+    "input": "process",
+    "output": "processes"
+  },
+  {
+    "input": "production",
+    "output": "productions"
+  },
+  {
+    "input": "prognosis",
+    "output": "prognoses"
+  },
+  {
+    "input": "program",
+    "output": "programs"
+  },
+  {
+    "input": "property",
+    "output": "properties"
+  },
+  {
+    "input": "public",
+    "output": "publics"
+  },
+  {
+    "input": "purpose",
+    "output": "purposes"
+  },
+  {
+    "input": "quantum",
+    "output": "quanta"
+  },
+  {
+    "input": "question",
+    "output": "questions"
+  },
+  {
+    "input": "radius",
+    "output": "radii"
+  },
+  {
+    "input": "range",
+    "output": "ranges"
+  },
+  {
+    "input": "rate",
+    "output": "rates"
+  },
+  {
+    "input": "reading",
+    "output": "readings"
+  },
+  {
+    "input": "reason",
+    "output": "reasons"
+  },
+  {
+    "input": "record",
+    "output": "records"
+  },
+  {
+    "input": "report",
+    "output": "reports"
+  },
+  {
+    "input": "rest",
+    "output": "rests"
+  },
+  {
+    "input": "result",
+    "output": "results"
+  },
+  {
+    "input": "return",
+    "output": "returns"
+  },
+  {
+    "input": "rifleman",
+    "output": "riflemen"
+  },
+  {
+    "input": "right",
+    "output": "rights"
+  },
+  {
+    "input": "river",
+    "output": "rivers"
+  },
+  {
+    "input": "road",
+    "output": "roads"
+  },
+  {
+    "input": "room",
+    "output": "rooms"
+  },
+  {
+    "input": "run",
+    "output": "runs"
+  },
+  {
+    "input": "salesman",
+    "output": "salesmen"
+  },
+  {
+    "input": "sandman",
+    "output": "sandmen"
+  },
+  {
+    "input": "scarf",
+    "output": "scarves"
+  },
+  {
+    "input": "school",
+    "output": "schools"
+  },
+  {
+    "input": "seaman",
+    "output": "seamen"
+  },
+  {
+    "input": "secretary",
+    "output": "secretaries"
+  },
+  {
+    "input": "section",
+    "output": "sections"
+  },
+  {
+    "input": "self",
+    "output": "selves"
+  },
+  {
+    "input": "sense",
+    "output": "senses"
+  },
+  {
+    "input": "service",
+    "output": "services"
+  },
+  {
+    "input": "shelf",
+    "output": "shelves"
+  },
+  {
+    "input": "show",
+    "output": "shows"
+  },
+  {
+    "input": "showman",
+    "output": "showmen"
+  },
+  {
+    "input": "side",
+    "output": "sides"
+  },
+  {
+    "input": "situation",
+    "output": "situations"
+  },
+  {
+    "input": "size",
+    "output": "sizes"
+  },
+  {
+    "input": "society",
+    "output": "societies"
+  },
+  {
+    "input": "son",
+    "output": "sons"
+  },
+  {
+    "input": "sort",
+    "output": "sorts"
+  },
+  {
+    "input": "sound",
+    "output": "sounds"
+  },
+  {
+    "input": "space",
+    "output": "spaces"
+  },
+  {
+    "input": "spirit",
+    "output": "spirits"
+  },
+  {
+    "input": "spokesman",
+    "output": "spokesmen"
+  },
+  {
+    "input": "sportsman",
+    "output": "sportsmen"
+  },
+  {
+    "input": "square",
+    "output": "squares"
+  },
+  {
+    "input": "stage",
+    "output": "stages"
+  },
+  {
+    "input": "stand",
+    "output": "stands"
+  },
+  {
+    "input": "start",
+    "output": "starts"
+  },
+  {
+    "input": "state",
+    "output": "states"
+  },
+  {
+    "input": "statement",
+    "output": "statements"
+  },
+  {
+    "input": "statesman",
+    "output": "statesmen"
+  },
+  {
+    "input": "stimulus",
+    "output": "stimuli"
+  },
+  {
+    "input": "stock",
+    "output": "stocks"
+  },
+  {
+    "input": "story",
+    "output": "stories"
+  },
+  {
+    "input": "stratum",
+    "output": "strata"
+  },
+  {
+    "input": "street",
+    "output": "streets"
+  },
+  {
+    "input": "strength",
+    "output": "strengths"
+  },
+  {
+    "input": "study",
+    "output": "studies"
+  },
+  {
+    "input": "subject",
+    "output": "subjects"
+  },
+  {
+    "input": "summer",
+    "output": "summers"
+  },
+  {
+    "input": "support",
+    "output": "supports"
+  },
+  {
+    "input": "surface",
+    "output": "surfaces"
+  },
+  {
+    "input": "syllabus",
+    "output": "syllabi"
+  },
+  {
+    "input": "synthesis",
+    "output": "syntheses"
+  },
+  {
+    "input": "system",
+    "output": "systems"
+  },
+  {
+    "input": "table",
+    "output": "tables"
+  },
+  {
+    "input": "talk",
+    "output": "talks"
+  },
+  {
+    "input": "tax",
+    "output": "taxes"
+  },
+  {
+    "input": "temperature",
+    "output": "temperatures"
+  },
+  {
+    "input": "terminus",
+    "output": "termini"
+  },
+  {
+    "input": "thesis",
+    "output": "theses"
+  },
+  {
+    "input": "thief",
+    "output": "thieves"
+  },
+  {
+    "input": "thing",
+    "output": "things"
+  },
+  {
+    "input": "thinking",
+    "output": "thinkings"
+  },
+  {
+    "input": "time",
+    "output": "times"
+  },
+  {
+    "input": "times",
+    "output": "timeses"
+  },
+  {
+    "input": "today",
+    "output": "todays"
+  },
+  {
+    "input": "tooth",
+    "output": "teeth"
+  },
+  {
+    "input": "top",
+    "output": "tops"
+  },
+  {
+    "input": "total",
+    "output": "totals"
+  },
+  {
+    "input": "town",
+    "output": "towns"
+  },
+  {
+    "input": "trade",
+    "output": "trades"
+  },
+  {
+    "input": "training",
+    "output": "trainings"
+  },
+  {
+    "input": "trial",
+    "output": "trials"
+  },
+  {
+    "input": "trouble",
+    "output": "troubles"
+  },
+  {
+    "input": "turn",
+    "output": "turns"
+  },
+  {
+    "input": "type",
+    "output": "types"
+  },
+  {
+    "input": "union",
+    "output": "unions"
+  },
+  {
+    "input": "university",
+    "output": "universities"
+  },
+  {
+    "input": "use",
+    "output": "uses"
+  },
+  {
+    "input": "value",
+    "output": "values"
+  },
+  {
+    "input": "vertex",
+    "output": "vertices"
+  },
+  {
+    "input": "view",
+    "output": "views"
+  },
+  {
+    "input": "voice",
+    "output": "voices"
+  },
+  {
+    "input": "volume",
+    "output": "volumes"
+  },
+  {
+    "input": "vortex",
+    "output": "vortices"
+  },
+  {
+    "input": "wall",
+    "output": "walls"
+  },
+  {
+    "input": "war",
+    "output": "wars"
+  },
+  {
+    "input": "washington",
+    "output": "washingtons"
+  },
+  {
+    "input": "water",
+    "output": "waters"
+  },
+  {
+    "input": "way",
+    "output": "ways"
+  },
+  {
+    "input": "week",
+    "output": "weeks"
+  },
+  {
+    "input": "wife",
+    "output": "wives"
+  },
+  {
+    "input": "wolf",
+    "output": "wolves"
+  },
+  {
+    "input": "woman",
+    "output": "women"
+  },
+  {
+    "input": "word",
+    "output": "words"
+  },
+  {
+    "input": "work",
+    "output": "works"
+  },
+  {
+    "input": "world",
+    "output": "worlds"
+  },
+  {
+    "input": "year",
+    "output": "years"
+  },
+  {
+    "input": "york",
+    "output": "yorks"
+  }
+]

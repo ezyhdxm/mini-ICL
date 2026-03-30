@@ -72,7 +72,7 @@ def _extract_id_ood(data: dict, k: int) -> dict:
     )
 
 
-def _load_coin(k_list, vocab_size: int = 16) -> dict:
+def _load_coin(k_list, vocab_size: int = 6) -> dict:
     from icl.utils.unified_interface import get_exp_name
     results = {}
     for k in k_list:
@@ -202,7 +202,7 @@ def parse_args() -> argparse.Namespace:
         help="Maximum k value (inclusive).  k ranges from 0 to K (default: 10).",
     )
     p.add_argument(
-        "--coin-vocab-size", type=int, default=16, metavar="V",
+        "--coin-vocab-size", type=int, default=6, metavar="V",
         help="Vocabulary size for E1 Coins experiments (default: 16).",
     )
     p.add_argument(

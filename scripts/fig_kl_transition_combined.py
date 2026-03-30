@@ -32,7 +32,7 @@ from icl.utils.separability import plot_kl_transition_on_ax
 apply_paper_style()
 
 
-def _compute_coin(vocab_size: int = 16):
+def _compute_coin(vocab_size: int = 6):
     from icl.coin.coin import plot_kl_model_vs_two_bayes_coin_transition_across_k
     return plot_kl_model_vs_two_bayes_coin_transition_across_k(
         k_values=range(11),
@@ -79,7 +79,7 @@ def _compute_latent():
 
 def parse_args():
     p = argparse.ArgumentParser(description="Generate combined KL-transition heatmap figure (E1/E2/E3).")
-    p.add_argument("--coin-vocab-size", type=int, default=16, metavar="V",
+    p.add_argument("--coin-vocab-size", type=int, default=6, metavar="V",
                    help="Vocabulary size for E1 Coins experiments (default: 16)")
     return p.parse_args()
 

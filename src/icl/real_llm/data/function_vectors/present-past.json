@@ -1,0 +1,1766 @@
+[
+  {
+    "input": "accept",
+    "output": "accepted"
+  },
+  {
+    "input": "accomplish",
+    "output": "accomplished"
+  },
+  {
+    "input": "achieve",
+    "output": "achieved"
+  },
+  {
+    "input": "acquire",
+    "output": "acquired"
+  },
+  {
+    "input": "add",
+    "output": "added"
+  },
+  {
+    "input": "address",
+    "output": "addressed"
+  },
+  {
+    "input": "admit",
+    "output": "admitted"
+  },
+  {
+    "input": "affect",
+    "output": "affected"
+  },
+  {
+    "input": "afford",
+    "output": "afforded"
+  },
+  {
+    "input": "agree",
+    "output": "agreed"
+  },
+  {
+    "input": "aim",
+    "output": "aimed"
+  },
+  {
+    "input": "allow",
+    "output": "allowed"
+  },
+  {
+    "input": "appear",
+    "output": "appeared"
+  },
+  {
+    "input": "apply",
+    "output": "applied"
+  },
+  {
+    "input": "appreciate",
+    "output": "appreciated"
+  },
+  {
+    "input": "argue",
+    "output": "argued"
+  },
+  {
+    "input": "arise",
+    "output": "arose"
+  },
+  {
+    "input": "arrive",
+    "output": "arrived"
+  },
+  {
+    "input": "ask",
+    "output": "asked"
+  },
+  {
+    "input": "assist",
+    "output": "assisted"
+  },
+  {
+    "input": "associate",
+    "output": "associated"
+  },
+  {
+    "input": "assume",
+    "output": "assumed"
+  },
+  {
+    "input": "assure",
+    "output": "assured"
+  },
+  {
+    "input": "attend",
+    "output": "attended"
+  },
+  {
+    "input": "avoid",
+    "output": "avoided"
+  },
+  {
+    "input": "awake",
+    "output": "awoke"
+  },
+  {
+    "input": "balance",
+    "output": "balanced"
+  },
+  {
+    "input": "bear",
+    "output": "bore"
+  },
+  {
+    "input": "become",
+    "output": "became"
+  },
+  {
+    "input": "befall",
+    "output": "befell"
+  },
+  {
+    "input": "begin",
+    "output": "began"
+  },
+  {
+    "input": "behold",
+    "output": "beheld"
+  },
+  {
+    "input": "believe",
+    "output": "believed"
+  },
+  {
+    "input": "belong",
+    "output": "belonged"
+  },
+  {
+    "input": "bend",
+    "output": "bent"
+  },
+  {
+    "input": "bid",
+    "output": "bade"
+  },
+  {
+    "input": "bind",
+    "output": "bound"
+  },
+  {
+    "input": "bite",
+    "output": "bit"
+  },
+  {
+    "input": "blame",
+    "output": "blamed"
+  },
+  {
+    "input": "bleed",
+    "output": "bled"
+  },
+  {
+    "input": "blow",
+    "output": "blew"
+  },
+  {
+    "input": "bore",
+    "output": "bored"
+  },
+  {
+    "input": "bother",
+    "output": "bothered"
+  },
+  {
+    "input": "break",
+    "output": "broke"
+  },
+  {
+    "input": "breed",
+    "output": "bred"
+  },
+  {
+    "input": "bring",
+    "output": "brought"
+  },
+  {
+    "input": "build",
+    "output": "built"
+  },
+  {
+    "input": "buy",
+    "output": "bought"
+  },
+  {
+    "input": "call",
+    "output": "called"
+  },
+  {
+    "input": "care",
+    "output": "cared"
+  },
+  {
+    "input": "carry",
+    "output": "carried"
+  },
+  {
+    "input": "catch",
+    "output": "caught"
+  },
+  {
+    "input": "challenge",
+    "output": "challenged"
+  },
+  {
+    "input": "change",
+    "output": "changed"
+  },
+  {
+    "input": "charge",
+    "output": "charged"
+  },
+  {
+    "input": "check",
+    "output": "checked"
+  },
+  {
+    "input": "choose",
+    "output": "chose"
+  },
+  {
+    "input": "clean",
+    "output": "cleaned"
+  },
+  {
+    "input": "cling",
+    "output": "clung"
+  },
+  {
+    "input": "come",
+    "output": "came"
+  },
+  {
+    "input": "command",
+    "output": "commanded"
+  },
+  {
+    "input": "compare",
+    "output": "compared"
+  },
+  {
+    "input": "compete",
+    "output": "competed"
+  },
+  {
+    "input": "complete",
+    "output": "completed"
+  },
+  {
+    "input": "consider",
+    "output": "considered"
+  },
+  {
+    "input": "constitute",
+    "output": "constituted"
+  },
+  {
+    "input": "contain",
+    "output": "contained"
+  },
+  {
+    "input": "continue",
+    "output": "continued"
+  },
+  {
+    "input": "contribute",
+    "output": "contributed"
+  },
+  {
+    "input": "control",
+    "output": "controlled"
+  },
+  {
+    "input": "correct",
+    "output": "corrected"
+  },
+  {
+    "input": "count",
+    "output": "counted"
+  },
+  {
+    "input": "cover",
+    "output": "covered"
+  },
+  {
+    "input": "create",
+    "output": "created"
+  },
+  {
+    "input": "creep",
+    "output": "crept"
+  },
+  {
+    "input": "cross",
+    "output": "crossed"
+  },
+  {
+    "input": "cure",
+    "output": "cured"
+  },
+  {
+    "input": "deal",
+    "output": "dealt"
+  },
+  {
+    "input": "decide",
+    "output": "decided"
+  },
+  {
+    "input": "defend",
+    "output": "defended"
+  },
+  {
+    "input": "define",
+    "output": "defined"
+  },
+  {
+    "input": "demonstrate",
+    "output": "demonstrated"
+  },
+  {
+    "input": "deny",
+    "output": "denied"
+  },
+  {
+    "input": "depend",
+    "output": "depended"
+  },
+  {
+    "input": "describe",
+    "output": "described"
+  },
+  {
+    "input": "design",
+    "output": "designed"
+  },
+  {
+    "input": "destroy",
+    "output": "destroyed"
+  },
+  {
+    "input": "determine",
+    "output": "determined"
+  },
+  {
+    "input": "develop",
+    "output": "developed"
+  },
+  {
+    "input": "die",
+    "output": "died"
+  },
+  {
+    "input": "dig",
+    "output": "dug"
+  },
+  {
+    "input": "direct",
+    "output": "directed"
+  },
+  {
+    "input": "discover",
+    "output": "discovered"
+  },
+  {
+    "input": "discuss",
+    "output": "discussed"
+  },
+  {
+    "input": "display",
+    "output": "displayed"
+  },
+  {
+    "input": "double",
+    "output": "doubled"
+  },
+  {
+    "input": "draft",
+    "output": "drafted"
+  },
+  {
+    "input": "draw",
+    "output": "drew"
+  },
+  {
+    "input": "drill",
+    "output": "drilled"
+  },
+  {
+    "input": "drink",
+    "output": "drank"
+  },
+  {
+    "input": "drive",
+    "output": "drove"
+  },
+  {
+    "input": "drop",
+    "output": "dropped"
+  },
+  {
+    "input": "dwell",
+    "output": "dwelt"
+  },
+  {
+    "input": "eat",
+    "output": "ate"
+  },
+  {
+    "input": "eliminate",
+    "output": "eliminated"
+  },
+  {
+    "input": "enable",
+    "output": "enabled"
+  },
+  {
+    "input": "encounter",
+    "output": "encountered"
+  },
+  {
+    "input": "encourage",
+    "output": "encouraged"
+  },
+  {
+    "input": "enjoy",
+    "output": "enjoyed"
+  },
+  {
+    "input": "enter",
+    "output": "entered"
+  },
+  {
+    "input": "escape",
+    "output": "escaped"
+  },
+  {
+    "input": "establish",
+    "output": "established"
+  },
+  {
+    "input": "examine",
+    "output": "examined"
+  },
+  {
+    "input": "exhibit",
+    "output": "exhibited"
+  },
+  {
+    "input": "exist",
+    "output": "existed"
+  },
+  {
+    "input": "expect",
+    "output": "expected"
+  },
+  {
+    "input": "explain",
+    "output": "explained"
+  },
+  {
+    "input": "express",
+    "output": "expressed"
+  },
+  {
+    "input": "extend",
+    "output": "extended"
+  },
+  {
+    "input": "face",
+    "output": "faced"
+  },
+  {
+    "input": "fail",
+    "output": "failed"
+  },
+  {
+    "input": "fall",
+    "output": "fell"
+  },
+  {
+    "input": "feed",
+    "output": "fed"
+  },
+  {
+    "input": "feel",
+    "output": "felt"
+  },
+  {
+    "input": "fight",
+    "output": "fought"
+  },
+  {
+    "input": "file",
+    "output": "filed"
+  },
+  {
+    "input": "fill",
+    "output": "filled"
+  },
+  {
+    "input": "finance",
+    "output": "financed"
+  },
+  {
+    "input": "find",
+    "output": "found"
+  },
+  {
+    "input": "finish",
+    "output": "finished"
+  },
+  {
+    "input": "flee",
+    "output": "fled"
+  },
+  {
+    "input": "fling",
+    "output": "flung"
+  },
+  {
+    "input": "fly",
+    "output": "flew"
+  },
+  {
+    "input": "follow",
+    "output": "followed"
+  },
+  {
+    "input": "forbear",
+    "output": "forbore"
+  },
+  {
+    "input": "forbid",
+    "output": "forbade"
+  },
+  {
+    "input": "forego",
+    "output": "forewent"
+  },
+  {
+    "input": "foresee",
+    "output": "foresaw"
+  },
+  {
+    "input": "foretell",
+    "output": "foretold"
+  },
+  {
+    "input": "forget",
+    "output": "forgot"
+  },
+  {
+    "input": "forgive",
+    "output": "forgave"
+  },
+  {
+    "input": "form",
+    "output": "formed"
+  },
+  {
+    "input": "forsake",
+    "output": "forsook"
+  },
+  {
+    "input": "found",
+    "output": "found"
+  },
+  {
+    "input": "freeze",
+    "output": "froze"
+  },
+  {
+    "input": "furnish",
+    "output": "furnished"
+  },
+  {
+    "input": "gain",
+    "output": "gained"
+  },
+  {
+    "input": "get",
+    "output": "got"
+  },
+  {
+    "input": "give",
+    "output": "gave"
+  },
+  {
+    "input": "grind",
+    "output": "ground"
+  },
+  {
+    "input": "grow",
+    "output": "grew"
+  },
+  {
+    "input": "guess",
+    "output": "guessed"
+  },
+  {
+    "input": "guide",
+    "output": "guided"
+  },
+  {
+    "input": "hamstring",
+    "output": "hamstrung"
+  },
+  {
+    "input": "handle",
+    "output": "handled"
+  },
+  {
+    "input": "hang",
+    "output": "hung"
+  },
+  {
+    "input": "happen",
+    "output": "happened"
+  },
+  {
+    "input": "hate",
+    "output": "hated"
+  },
+  {
+    "input": "have",
+    "output": "had"
+  },
+  {
+    "input": "hear",
+    "output": "heard"
+  },
+  {
+    "input": "help",
+    "output": "helped"
+  },
+  {
+    "input": "hide",
+    "output": "hid"
+  },
+  {
+    "input": "hit",
+    "output": "hit"
+  },
+  {
+    "input": "hold",
+    "output": "held"
+  },
+  {
+    "input": "hurry",
+    "output": "hurried"
+  },
+  {
+    "input": "identify",
+    "output": "identified"
+  },
+  {
+    "input": "imagine",
+    "output": "imagined"
+  },
+  {
+    "input": "improve",
+    "output": "improved"
+  },
+  {
+    "input": "include",
+    "output": "included"
+  },
+  {
+    "input": "increase",
+    "output": "increased"
+  },
+  {
+    "input": "indicate",
+    "output": "indicated"
+  },
+  {
+    "input": "influence",
+    "output": "influenced"
+  },
+  {
+    "input": "inlay",
+    "output": "inlaid"
+  },
+  {
+    "input": "insist",
+    "output": "insisted"
+  },
+  {
+    "input": "insure",
+    "output": "insured"
+  },
+  {
+    "input": "interbreed",
+    "output": "interbred"
+  },
+  {
+    "input": "involve",
+    "output": "involved"
+  },
+  {
+    "input": "join",
+    "output": "joined"
+  },
+  {
+    "input": "jump",
+    "output": "jumped"
+  },
+  {
+    "input": "justify",
+    "output": "justified"
+  },
+  {
+    "input": "keep",
+    "output": "kept"
+  },
+  {
+    "input": "kill",
+    "output": "killed"
+  },
+  {
+    "input": "kneel",
+    "output": "knelt"
+  },
+  {
+    "input": "know",
+    "output": "knew"
+  },
+  {
+    "input": "last",
+    "output": "lasted"
+  },
+  {
+    "input": "lay",
+    "output": "laid"
+  },
+  {
+    "input": "lead",
+    "output": "led"
+  },
+  {
+    "input": "leap",
+    "output": "leapt"
+  },
+  {
+    "input": "learn",
+    "output": "learned"
+  },
+  {
+    "input": "leave",
+    "output": "left"
+  },
+  {
+    "input": "lend",
+    "output": "lent"
+  },
+  {
+    "input": "let",
+    "output": "let"
+  },
+  {
+    "input": "lie",
+    "output": "lay"
+  },
+  {
+    "input": "lift",
+    "output": "lifted"
+  },
+  {
+    "input": "light",
+    "output": "lit"
+  },
+  {
+    "input": "listen",
+    "output": "listened"
+  },
+  {
+    "input": "live",
+    "output": "lived"
+  },
+  {
+    "input": "look",
+    "output": "looked"
+  },
+  {
+    "input": "lose",
+    "output": "lost"
+  },
+  {
+    "input": "maintain",
+    "output": "maintained"
+  },
+  {
+    "input": "make",
+    "output": "made"
+  },
+  {
+    "input": "match",
+    "output": "matched"
+  },
+  {
+    "input": "mean",
+    "output": "meant"
+  },
+  {
+    "input": "measure",
+    "output": "measured"
+  },
+  {
+    "input": "meet",
+    "output": "met"
+  },
+  {
+    "input": "mention",
+    "output": "mentioned"
+  },
+  {
+    "input": "misdeal",
+    "output": "misdealt"
+  },
+  {
+    "input": "mislay",
+    "output": "mislaid"
+  },
+  {
+    "input": "mislead",
+    "output": "misled"
+  },
+  {
+    "input": "misspend",
+    "output": "misspent"
+  },
+  {
+    "input": "mistake",
+    "output": "mistook"
+  },
+  {
+    "input": "misunderstand",
+    "output": "misunderstood"
+  },
+  {
+    "input": "model",
+    "output": "modelled"
+  },
+  {
+    "input": "move",
+    "output": "moved"
+  },
+  {
+    "input": "name",
+    "output": "named"
+  },
+  {
+    "input": "note",
+    "output": "noted"
+  },
+  {
+    "input": "notice",
+    "output": "noticed"
+  },
+  {
+    "input": "observe",
+    "output": "observed"
+  },
+  {
+    "input": "obtain",
+    "output": "obtained"
+  },
+  {
+    "input": "occur",
+    "output": "occurred"
+  },
+  {
+    "input": "offer",
+    "output": "offered"
+  },
+  {
+    "input": "operate",
+    "output": "operated"
+  },
+  {
+    "input": "order",
+    "output": "ordered"
+  },
+  {
+    "input": "outdo",
+    "output": "outdid"
+  },
+  {
+    "input": "outgrow",
+    "output": "outgrew"
+  },
+  {
+    "input": "outrun",
+    "output": "outran"
+  },
+  {
+    "input": "outshine",
+    "output": "outshone"
+  },
+  {
+    "input": "outwear",
+    "output": "outwore"
+  },
+  {
+    "input": "overbear",
+    "output": "overbore"
+  },
+  {
+    "input": "overcome",
+    "output": "overcame"
+  },
+  {
+    "input": "overdo",
+    "output": "overdid"
+  },
+  {
+    "input": "overdraw",
+    "output": "overdrew"
+  },
+  {
+    "input": "overdrive",
+    "output": "overdrove"
+  },
+  {
+    "input": "overgrow",
+    "output": "overgrew"
+  },
+  {
+    "input": "overhang",
+    "output": "overhung"
+  },
+  {
+    "input": "overlay",
+    "output": "overlaid"
+  },
+  {
+    "input": "overlie",
+    "output": "overlay"
+  },
+  {
+    "input": "overpay",
+    "output": "overpaid"
+  },
+  {
+    "input": "override",
+    "output": "overrode"
+  },
+  {
+    "input": "overrun",
+    "output": "overran"
+  },
+  {
+    "input": "oversee",
+    "output": "oversaw"
+  },
+  {
+    "input": "oversleep",
+    "output": "overslept"
+  },
+  {
+    "input": "overtake",
+    "output": "overtook"
+  },
+  {
+    "input": "overthrow",
+    "output": "overthrew"
+  },
+  {
+    "input": "pack",
+    "output": "packed"
+  },
+  {
+    "input": "paint",
+    "output": "painted"
+  },
+  {
+    "input": "partake",
+    "output": "partook"
+  },
+  {
+    "input": "participate",
+    "output": "participated"
+  },
+  {
+    "input": "pass",
+    "output": "passed"
+  },
+  {
+    "input": "pay",
+    "output": "paid"
+  },
+  {
+    "input": "perform",
+    "output": "performed"
+  },
+  {
+    "input": "permit",
+    "output": "permitted"
+  },
+  {
+    "input": "pick",
+    "output": "picked"
+  },
+  {
+    "input": "place",
+    "output": "placed"
+  },
+  {
+    "input": "plan",
+    "output": "planned"
+  },
+  {
+    "input": "play",
+    "output": "played"
+  },
+  {
+    "input": "please",
+    "output": "pleased"
+  },
+  {
+    "input": "point",
+    "output": "pointed"
+  },
+  {
+    "input": "post",
+    "output": "posted"
+  },
+  {
+    "input": "practice",
+    "output": "practiced"
+  },
+  {
+    "input": "prefer",
+    "output": "preferred"
+  },
+  {
+    "input": "prepare",
+    "output": "prepared"
+  },
+  {
+    "input": "prepay",
+    "output": "prepaid"
+  },
+  {
+    "input": "preserve",
+    "output": "preserved"
+  },
+  {
+    "input": "preset",
+    "output": "preset"
+  },
+  {
+    "input": "prevent",
+    "output": "prevented"
+  },
+  {
+    "input": "process",
+    "output": "processed"
+  },
+  {
+    "input": "produce",
+    "output": "produced"
+  },
+  {
+    "input": "program",
+    "output": "programmed"
+  },
+  {
+    "input": "project",
+    "output": "projected"
+  },
+  {
+    "input": "promote",
+    "output": "promoted"
+  },
+  {
+    "input": "protect",
+    "output": "protected"
+  },
+  {
+    "input": "prove",
+    "output": "proved"
+  },
+  {
+    "input": "provide",
+    "output": "provided"
+  },
+  {
+    "input": "pull",
+    "output": "pulled"
+  },
+  {
+    "input": "push",
+    "output": "pushed"
+  },
+  {
+    "input": "question",
+    "output": "questioned"
+  },
+  {
+    "input": "raise",
+    "output": "raised"
+  },
+  {
+    "input": "reach",
+    "output": "reached"
+  },
+  {
+    "input": "realize",
+    "output": "realized"
+  },
+  {
+    "input": "rebuild",
+    "output": "rebuilt"
+  },
+  {
+    "input": "recall",
+    "output": "recalled"
+  },
+  {
+    "input": "receive",
+    "output": "received"
+  },
+  {
+    "input": "recognize",
+    "output": "recognized"
+  },
+  {
+    "input": "recommend",
+    "output": "recommended"
+  },
+  {
+    "input": "record",
+    "output": "recorded"
+  },
+  {
+    "input": "redo",
+    "output": "redid"
+  },
+  {
+    "input": "reduce",
+    "output": "reduced"
+  },
+  {
+    "input": "refer",
+    "output": "referred"
+  },
+  {
+    "input": "reflect",
+    "output": "reflected"
+  },
+  {
+    "input": "regard",
+    "output": "regarded"
+  },
+  {
+    "input": "release",
+    "output": "released"
+  },
+  {
+    "input": "remain",
+    "output": "remained"
+  },
+  {
+    "input": "remake",
+    "output": "remade"
+  },
+  {
+    "input": "remember",
+    "output": "remembered"
+  },
+  {
+    "input": "remove",
+    "output": "removed"
+  },
+  {
+    "input": "rend",
+    "output": "rent"
+  },
+  {
+    "input": "repay",
+    "output": "repaid"
+  },
+  {
+    "input": "repeat",
+    "output": "repeated"
+  },
+  {
+    "input": "replace",
+    "output": "replaced"
+  },
+  {
+    "input": "report",
+    "output": "reported"
+  },
+  {
+    "input": "represent",
+    "output": "represented"
+  },
+  {
+    "input": "request",
+    "output": "requested"
+  },
+  {
+    "input": "require",
+    "output": "required"
+  },
+  {
+    "input": "rerun",
+    "output": "reran"
+  },
+  {
+    "input": "research",
+    "output": "researched"
+  },
+  {
+    "input": "resell",
+    "output": "resold"
+  },
+  {
+    "input": "resist",
+    "output": "resisted"
+  },
+  {
+    "input": "respond",
+    "output": "responded"
+  },
+  {
+    "input": "retake",
+    "output": "retook"
+  },
+  {
+    "input": "retell",
+    "output": "retold"
+  },
+  {
+    "input": "rethink",
+    "output": "rethought"
+  },
+  {
+    "input": "return",
+    "output": "returned"
+  },
+  {
+    "input": "reveal",
+    "output": "revealed"
+  },
+  {
+    "input": "review",
+    "output": "reviewed"
+  },
+  {
+    "input": "rewrite",
+    "output": "rewrote"
+  },
+  {
+    "input": "ride",
+    "output": "rode"
+  },
+  {
+    "input": "ring",
+    "output": "rang"
+  },
+  {
+    "input": "rise",
+    "output": "rose"
+  },
+  {
+    "input": "roll",
+    "output": "rolled"
+  },
+  {
+    "input": "run",
+    "output": "ran"
+  },
+  {
+    "input": "save",
+    "output": "saved"
+  },
+  {
+    "input": "say",
+    "output": "said"
+  },
+  {
+    "input": "schedule",
+    "output": "scheduled"
+  },
+  {
+    "input": "search",
+    "output": "searched"
+  },
+  {
+    "input": "secure",
+    "output": "secured"
+  },
+  {
+    "input": "see",
+    "output": "saw"
+  },
+  {
+    "input": "seek",
+    "output": "sought"
+  },
+  {
+    "input": "seem",
+    "output": "seemed"
+  },
+  {
+    "input": "select",
+    "output": "selected"
+  },
+  {
+    "input": "sell",
+    "output": "sold"
+  },
+  {
+    "input": "send",
+    "output": "sent"
+  },
+  {
+    "input": "separate",
+    "output": "separated"
+  },
+  {
+    "input": "serve",
+    "output": "served"
+  },
+  {
+    "input": "set",
+    "output": "set"
+  },
+  {
+    "input": "settle",
+    "output": "settled"
+  },
+  {
+    "input": "shake",
+    "output": "shook"
+  },
+  {
+    "input": "share",
+    "output": "shared"
+  },
+  {
+    "input": "shine",
+    "output": "shone"
+  },
+  {
+    "input": "shoot",
+    "output": "shot"
+  },
+  {
+    "input": "show",
+    "output": "showed"
+  },
+  {
+    "input": "shrink",
+    "output": "shrank"
+  },
+  {
+    "input": "signal",
+    "output": "signaled"
+  },
+  {
+    "input": "sing",
+    "output": "sang"
+  },
+  {
+    "input": "sink",
+    "output": "sank"
+  },
+  {
+    "input": "sit",
+    "output": "sat"
+  },
+  {
+    "input": "slay",
+    "output": "slew"
+  },
+  {
+    "input": "sleep",
+    "output": "slept"
+  },
+  {
+    "input": "slide",
+    "output": "slid"
+  },
+  {
+    "input": "sling",
+    "output": "slung"
+  },
+  {
+    "input": "slink",
+    "output": "slunk"
+  },
+  {
+    "input": "smite",
+    "output": "smote"
+  },
+  {
+    "input": "speak",
+    "output": "spoke"
+  },
+  {
+    "input": "speed",
+    "output": "sped"
+  },
+  {
+    "input": "spend",
+    "output": "spent"
+  },
+  {
+    "input": "spin",
+    "output": "spun"
+  },
+  {
+    "input": "spit",
+    "output": "spat"
+  },
+  {
+    "input": "spread",
+    "output": "spread"
+  },
+  {
+    "input": "spring",
+    "output": "sprang"
+  },
+  {
+    "input": "stand",
+    "output": "stood"
+  },
+  {
+    "input": "start",
+    "output": "started"
+  },
+  {
+    "input": "stay",
+    "output": "stayed"
+  },
+  {
+    "input": "steal",
+    "output": "stole"
+  },
+  {
+    "input": "stick",
+    "output": "stuck"
+  },
+  {
+    "input": "sting",
+    "output": "stung"
+  },
+  {
+    "input": "stink",
+    "output": "stank"
+  },
+  {
+    "input": "stop",
+    "output": "stopped"
+  },
+  {
+    "input": "stride",
+    "output": "strode"
+  },
+  {
+    "input": "strike",
+    "output": "struck"
+  },
+  {
+    "input": "string",
+    "output": "strung"
+  },
+  {
+    "input": "strive",
+    "output": "strove"
+  },
+  {
+    "input": "study",
+    "output": "studied"
+  },
+  {
+    "input": "suffer",
+    "output": "suffered"
+  },
+  {
+    "input": "suggest",
+    "output": "suggested"
+  },
+  {
+    "input": "supply",
+    "output": "supplied"
+  },
+  {
+    "input": "support",
+    "output": "supported"
+  },
+  {
+    "input": "suppose",
+    "output": "supposed"
+  },
+  {
+    "input": "survive",
+    "output": "survived"
+  },
+  {
+    "input": "suspect",
+    "output": "suspected"
+  },
+  {
+    "input": "swear",
+    "output": "swore"
+  },
+  {
+    "input": "sweep",
+    "output": "swept"
+  },
+  {
+    "input": "swim",
+    "output": "swam"
+  },
+  {
+    "input": "swing",
+    "output": "swung"
+  },
+  {
+    "input": "take",
+    "output": "took"
+  },
+  {
+    "input": "talk",
+    "output": "talked"
+  },
+  {
+    "input": "teach",
+    "output": "taught"
+  },
+  {
+    "input": "tear",
+    "output": "tore"
+  },
+  {
+    "input": "tell",
+    "output": "told"
+  },
+  {
+    "input": "tend",
+    "output": "tended"
+  },
+  {
+    "input": "test",
+    "output": "tested"
+  },
+  {
+    "input": "thank",
+    "output": "thanked"
+  },
+  {
+    "input": "think",
+    "output": "thought"
+  },
+  {
+    "input": "throw",
+    "output": "threw"
+  },
+  {
+    "input": "trade",
+    "output": "traded"
+  },
+  {
+    "input": "train",
+    "output": "trained"
+  },
+  {
+    "input": "transfer",
+    "output": "transferred"
+  },
+  {
+    "input": "travel",
+    "output": "traveled"
+  },
+  {
+    "input": "tread",
+    "output": "trod"
+  },
+  {
+    "input": "treat",
+    "output": "treated"
+  },
+  {
+    "input": "trust",
+    "output": "trusted"
+  },
+  {
+    "input": "try",
+    "output": "tried"
+  },
+  {
+    "input": "turn",
+    "output": "turned"
+  },
+  {
+    "input": "unbend",
+    "output": "unbent"
+  },
+  {
+    "input": "unbind",
+    "output": "unbound"
+  },
+  {
+    "input": "undergo",
+    "output": "underwent"
+  },
+  {
+    "input": "underlie",
+    "output": "underlay"
+  },
+  {
+    "input": "underpay",
+    "output": "underpaid"
+  },
+  {
+    "input": "undersell",
+    "output": "undersold"
+  },
+  {
+    "input": "undershoot",
+    "output": "undershot"
+  },
+  {
+    "input": "understand",
+    "output": "understood"
+  },
+  {
+    "input": "undertake",
+    "output": "undertook"
+  },
+  {
+    "input": "underwrite",
+    "output": "underwrote"
+  },
+  {
+    "input": "undo",
+    "output": "undid"
+  },
+  {
+    "input": "unwind",
+    "output": "unwound"
+  },
+  {
+    "input": "uphold",
+    "output": "upheld"
+  },
+  {
+    "input": "use",
+    "output": "used"
+  },
+  {
+    "input": "value",
+    "output": "valued"
+  },
+  {
+    "input": "vary",
+    "output": "varied"
+  },
+  {
+    "input": "view",
+    "output": "viewed"
+  },
+  {
+    "input": "visit",
+    "output": "visited"
+  },
+  {
+    "input": "wait",
+    "output": "waited"
+  },
+  {
+    "input": "wake",
+    "output": "woke"
+  },
+  {
+    "input": "walk",
+    "output": "walked"
+  },
+  {
+    "input": "want",
+    "output": "wanted"
+  },
+  {
+    "input": "watch",
+    "output": "watched"
+  },
+  {
+    "input": "waylay",
+    "output": "waylaid"
+  },
+  {
+    "input": "wear",
+    "output": "wore"
+  },
+  {
+    "input": "weep",
+    "output": "wept"
+  },
+  {
+    "input": "win",
+    "output": "won"
+  },
+  {
+    "input": "wind",
+    "output": "wound"
+  },
+  {
+    "input": "wish",
+    "output": "wished"
+  },
+  {
+    "input": "withdraw",
+    "output": "withdrew"
+  },
+  {
+    "input": "withhold",
+    "output": "withheld"
+  },
+  {
+    "input": "withstand",
+    "output": "withstood"
+  },
+  {
+    "input": "wonder",
+    "output": "wondered"
+  },
+  {
+    "input": "work",
+    "output": "worked"
+  },
+  {
+    "input": "worry",
+    "output": "worried"
+  },
+  {
+    "input": "wound",
+    "output": "wounded"
+  },
+  {
+    "input": "wring",
+    "output": "wrung"
+  },
+  {
+    "input": "write",
+    "output": "wrote"
+  },
+  {
+    "input": "yield",
+    "output": "yielded"
+  }
+]
