@@ -46,6 +46,7 @@ def plot_kl_model_vs_two_bayes_linear_over_steps(
     figsize: tuple = (8, 5),
     show: bool = True,
     verbose: bool = False,
+    p_minor_hybrid: float | None = None,
 ) -> dict:
     """
     Plot average KL-surrogate(model || baseline) across exact checkpoint steps
@@ -82,6 +83,7 @@ def plot_kl_model_vs_two_bayes_linear_over_steps(
         num_samples=num_samples,
         steps_to_use=steps_to_use,
         eps=eps,
+        p_minor_hybrid=p_minor_hybrid,
     )
     cached = None
     if use_cache and not force_recompute and os.path.exists(cache_path):
@@ -91,6 +93,9 @@ def plot_kl_model_vs_two_bayes_linear_over_steps(
             print(f"[cache] loaded KL-over-steps from {cache_path}")
 
     p_minor_orig = float(getattr(train_task, "p_minor", 0.0))
+    # p_minor for the hybrid/extrapolation baseline: override when caller wants
+    # to test extrapolation to a minor-dominated distribution (e.g. major-only exps).
+    p_minor_for_hybrid = p_minor_hybrid if p_minor_hybrid is not None else p_minor_orig
     sigma2 = max(float(train_task.noise_scale) ** 2, eps)
 
     if cached is None:
@@ -116,7 +121,7 @@ def plot_kl_model_vs_two_bayes_linear_over_steps(
         approx_bayes = MixedRidge(
             tau=tau,
             task_pool=train_task.task_pool.clone(),
-            p0=p_minor_orig,
+            p0=p_minor_for_hybrid,
             noise_scale=float(train_task.noise_scale),
             dtype=train_task.dtype,
         ).to(config.device)
@@ -251,7 +256,7 @@ def plot_kl_model_vs_two_bayes_linear_over_steps(
 
 
 def plot_kl_model_vs_two_bayes_linear_transition_across_k(
-    k_values,
+    k_values=None,
     mode: str = "train",
     num_samples: int = 1024,
     steps=None,
@@ -264,6 +269,9 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
     figsize: tuple = (9, 4),
     show: bool = True,
     verbose: bool = False,
+    n_major_values=None,
+    major_only_exp_kwargs: Optional[dict] = None,
+    p_minor_hybrid: Optional[float] = None,
 ) -> dict:
     """
     Visualize the transition from exact-Bayes-like to Gaussian-new-like behavior across k.
@@ -281,6 +289,18 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
     if exp_name_kwargs is None:
         exp_name_kwargs = {}
 
+    if n_major_values is not None:
+        loop_keys = list(n_major_values)
+        use_major_only = True
+        # Default hybrid prior for major-only: minor tasks dominate (p_minor ≈ 1).
+        if p_minor_hybrid is None:
+            p_minor_hybrid = 1.0 - 1e-12
+    elif k_values is not None:
+        loop_keys = list(k_values)
+        use_major_only = False
+    else:
+        raise ValueError("Provide k_values or n_major_values.")
+
     def _centers_to_edges(vals: np.ndarray) -> np.ndarray:
         vals = np.asarray(vals, dtype=float)
         if vals.ndim != 1 or vals.size == 0:
@@ -296,9 +316,21 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
     curves = {}
     exp_names = {}
     all_steps = set()
-    for k in k_values:
-        exp_name = get_exp_name("linear", k, **exp_name_kwargs)
-        exp_names[k] = exp_name
+    for key in loop_keys:
+        base_kw = dict(exp_name_kwargs)
+        if use_major_only:
+            base_kw.update(major_only_exp_kwargs or {})
+            exp_name = get_exp_name(
+                "linear",
+                0,
+                n_tasks=int(key),
+                n_minor_tasks=1,
+                p_minor=1e-12,
+                **base_kw,
+            )
+        else:
+            exp_name = get_exp_name("linear", key, **base_kw)
+        exp_names[key] = exp_name
         try:
             out = plot_kl_model_vs_two_bayes_linear_over_steps(
                 exp_name=exp_name,
@@ -310,11 +342,12 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
                 force_recompute=force_recompute,
                 show=False,
                 verbose=verbose,
+                p_minor_hybrid=p_minor_hybrid,
             )
             steps_k = np.asarray(out["steps"], dtype=int)
             exact_k = np.asarray(out["kl_exact_mean_by_step"], dtype=float)
             hybrid_k = np.asarray(out["kl_hybrid_mean_by_step"], dtype=float)
-            curves[k] = {
+            curves[key] = {
                 "steps": steps_k,
                 "kl_exact_mean_by_step": exact_k,
                 "kl_hybrid_mean_by_step": hybrid_k,
@@ -322,7 +355,7 @@ def plot_kl_model_vs_two_bayes_linear_transition_across_k(
             }
             all_steps.update(steps_k.tolist())
         except Exception as e:
-            logger.warning(f"k={k} ({exp_names[k]}): {e}")
+            logger.warning(f"key={key} ({exp_names[key]}): {e}")
 
     ks = sorted(curves.keys())
     if len(ks) == 0:

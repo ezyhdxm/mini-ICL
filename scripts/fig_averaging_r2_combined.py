@@ -143,7 +143,7 @@ def main():
         _log_last10_r2(label, r2)
 
     log.info("Composing figure …")
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.2), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 2.6), sharey=True)
 
     for idx, (ax, r2) in enumerate(zip(axes, results)):
         plot_averaging_r2_on_ax(

@@ -145,7 +145,7 @@ def main():
         kl_vmax=0.7,
         rmse_vmin=0.0,
         rmse_vmax=7.0,
-        figsize=(13, 3.8),
+        figsize=(13, 3.0),
     )
     fig_inj.savefig(SAVE_PATH, dpi=300, bbox_inches="tight")
     log.info(f"Saved → {SAVE_PATH}")
@@ -160,7 +160,7 @@ def main():
         kl_vmax=0.7,
         rmse_vmin=0.0,
         rmse_vmax=7.0,
-        figsize=(13, 3.8),
+        figsize=(13, 3.0),
     )
     fig_mode.savefig(SAVE_PATH_MODE, dpi=300, bbox_inches="tight")
     log.info(f"Saved → {SAVE_PATH_MODE}  (total {time.time() - t_total:.1f}s)")

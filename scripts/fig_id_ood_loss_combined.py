@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SAVE_PATH = PROJECT_ROOT / "paper_figs" / "id_ood_loss_combined.png"
+SAVE_DIR = PROJECT_ROOT / "paper_figs"
 
 # Ensure the project src is on the path when running as a plain script.
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -150,6 +150,7 @@ def _plot_row(
     ylabel_id: str,
     row_label: str,
     noise_floor: float | None = None,
+    xlim: tuple[float, float] | None = None,
 ) -> list:
     """Populate one row's ID and OOD axes from a results dict.
 
@@ -161,6 +162,8 @@ def _plot_row(
     for ax in (ax_id, ax_ood):
         _style_ax(ax)
         ax.set_xscale("log")
+        if xlim is not None:
+            ax.set_xlim(xlim)
         if noise_floor is not None:
             ax.axhline(
                 noise_floor,
@@ -210,8 +213,8 @@ def parse_args() -> argparse.Namespace:
         help="Output DPI (default: 300).",
     )
     p.add_argument(
-        "--out", type=Path, default=SAVE_PATH,
-        help=f"Output path (default: {SAVE_PATH}).",
+        "--out", type=Path, default=None,
+        help="Output path (default: paper_figs/id_ood_loss_combined_c{V}.png).",
     )
     return p.parse_args()
 
@@ -219,6 +222,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     k_list = range(args.k_max + 1)
+    if args.out is None:
+        args.out = SAVE_DIR / f"id_ood_loss_combined_c{args.coin_vocab_size}.png"
     os.chdir(PROJECT_ROOT)
 
     # ------------------------------------------------------------------
@@ -244,12 +249,33 @@ def main() -> None:
         loaded.append((exp_id, exp_name, results))
 
     # ------------------------------------------------------------------
+    # Compute common xlim across all experiments
+    # ------------------------------------------------------------------
+    exp_starts, exp_ends = [], []
+    for _, _, results in loaded:
+        if not results:
+            continue
+        xmin = min(
+            d["train_steps"][d["train_steps"] > 0].min()
+            for d in results.values() if (d["train_steps"] > 0).any()
+        )
+        xmax = max(d["train_steps"].max() for d in results.values())
+        exp_starts.append(xmin)
+        exp_ends.append(xmax)
+    if exp_starts:
+        x_lo = 10 ** np.floor(np.log10(max(exp_starts)))
+        x_hi = max(exp_ends) * 1.3
+        common_xlim = (x_lo, x_hi)
+    else:
+        common_xlim = None
+
+    # ------------------------------------------------------------------
     # Build the combined 3×2 figure
     # ------------------------------------------------------------------
     fig, axes = plt.subplots(
         3, 2,
         figsize=(10, 9),
-        sharex=False,   # x-ranges differ per experiment
+        sharex=False,
     )
     fig.patch.set_facecolor("white")
 
@@ -275,6 +301,7 @@ def main() -> None:
                 ylabel_id=ylabel,
                 row_label=exp_id,
                 noise_floor=nf,
+                xlim=common_xlim,
             )
             # Collect handles from the first populated row for the shared legend
             if not shared_handles:
@@ -283,6 +310,8 @@ def main() -> None:
             for ax in (ax_id, ax_ood):
                 _style_ax(ax)
                 ax.set_xscale("log")
+                if common_xlim is not None:
+                    ax.set_xlim(common_xlim)
                 ax.text(0.5, 0.5, "No data", transform=ax.transAxes,
                         ha="center", va="center", color="gray")
             ax_id.set_ylabel(f"{exp_id}\n{ylabel}", fontsize=FS_LABEL)
@@ -310,10 +339,9 @@ def main() -> None:
 
     fig.subplots_adjust(right=0.88)
 
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
-    log.info(f"Saved → {out_path}  (total {time.time()-t_total:.1f}s)")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(args.out, dpi=args.dpi, bbox_inches="tight")
+    log.info(f"Saved → {args.out}  (total {time.time()-t_total:.1f}s)")
     plt.close(fig)
 
 

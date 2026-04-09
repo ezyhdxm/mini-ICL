@@ -227,6 +227,7 @@ def _draw_legend_cosmetics_refs(
     final_edge_color, final_edge_width,
     show_simplex_triangle, simplex_triangle_color,
     simplex_triangle_alpha, simplex_triangle_lw, simplex_triangle_ls,
+    legend_r2_values=None,
 ):
     """Draw legend entries, axis cosmetics, reference stars, and simplex triangle."""
 
@@ -281,15 +282,29 @@ def _draw_legend_cosmetics_refs(
         r2_min = float(np.min(R2))
         r2_max = float(np.max(R2))
 
-        r2_levels = np.quantile(R2, [0.2, 0.5, 0.8, 0.95]).astype(float)
-
-        r2_levels = np.unique(np.round(r2_levels, 2))
-        if r2_levels.size < 3:
-            r2_levels = np.unique(np.round(np.array([r2_min, 0.5 * (r2_min + r2_max), r2_max]), 2))
+        if legend_r2_values is not None:
+            r2_levels = np.asarray(legend_r2_values, dtype=float)
+        else:
+            # Three lower ticks from quantiles; largest tick = global max R² (not 95th percentile).
+            q20, q50, q80 = np.quantile(R2, [0.2, 0.5, 0.8]).astype(float)
+            levels = []
+            for q in (q20, q50, q80):
+                rq = round(float(q), 2)
+                if not levels or rq > levels[-1] + 1e-9:
+                    levels.append(rq)
+            if not levels or r2_max > levels[-1] + 1e-9:
+                levels.append(float(r2_max))
+            else:
+                levels[-1] = float(r2_max)
+            r2_levels = np.asarray(levels, dtype=float)
+            if r2_levels.size < 3:
+                r2_levels = np.unique(np.round(np.array([r2_min, 0.5 * (r2_min + r2_max), r2_max]), 2))
 
         size_handles = []
         size_labels = []
-        for v in r2_levels:
+        n_lv = int(r2_levels.size)
+        for i, v in enumerate(r2_levels):
+            v = float(v)
             area = _r2_value_to_area(
                 v,
                 r2_min=r2_min,
@@ -308,7 +323,13 @@ def _draw_legend_cosmetics_refs(
                 linewidths=0.9,
             )
             size_handles.append(h)
-            size_labels.append(f"R² = {float(v):.2f}")
+            # Last automatic tick is global max(R²): show extra precision vs .2f quantile ticks
+            if legend_r2_values is None and i == n_lv - 1 and np.isfinite(r2_max):
+                atol = 1e-5 * max(1.0, abs(r2_max))
+                if abs(v - r2_max) <= atol:
+                    size_labels.append(f"R² = {float(r2_max):.3f}")
+                    continue
+            size_labels.append(f"R² = {v:.2f}")
 
         leg2 = ax.legend(  # noqa: F841
             handles=size_handles,

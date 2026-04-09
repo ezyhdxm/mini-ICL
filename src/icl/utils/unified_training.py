@@ -39,6 +39,8 @@ def unified_train(
     final_layernorm: bool = None,
     quiet: bool = True,
     device: Optional[str] = None,
+    n_tasks: Optional[int] = None,
+    n_minor_tasks: Optional[int] = None,
 ):
     import os
     _prev_wandb_silent = os.environ.get("WANDB_SILENT")
@@ -57,6 +59,10 @@ def unified_train(
         else:
             config.task.n_minor_tasks = 1
             config.task.p_minor = 1e-12
+        if n_minor_tasks is not None:
+            config.task.n_minor_tasks = int(n_minor_tasks)
+        if n_tasks is not None:
+            config.task.n_tasks = int(n_tasks)
         if pad is not None:
             if task_name == "linear":
                 config.model.pad = pad
@@ -257,5 +263,135 @@ def unified_train_parallel(
     if errors:
         msg = "; ".join(f"k={k}: {e}" for k, e in errors)
         raise RuntimeError(f"unified_train_parallel: {len(errors)} experiment(s) failed — {msg}")
+
+    return results
+
+
+def _major_only_train_worker(args):
+    """Run one major-only experiment: same minor setup as ``k=-1`` (dummy minor + tiny p_minor)."""
+    task_name, n_major, kwargs = args
+    verbose = kwargs.pop("_parallel_verbose", False)
+    device = _worker_device
+    if verbose:
+        print(
+            f"[major_only] Training {task_name} n_major={n_major} on {device} ...",
+            flush=True,
+        )
+    result = unified_train(
+        task_name,
+        0,
+        device=device,
+        n_tasks=n_major,
+        n_minor_tasks=1,
+        p_minor=1e-12,
+        **kwargs,
+    )
+    return _to_cpu(result)
+
+
+def unified_train_major_only_parallel(
+    task_names: list,
+    n_major_list: list,
+    n_gpus: Optional[int] = None,
+    verbose: bool = False,
+    **train_kwargs,
+) -> list:
+    """Train (task, n_major) pairs with effectively major-only sampling.
+
+    For each ``task_name`` in ``task_names`` and each ``n_major`` in
+    ``n_major_list``, runs ``unified_train`` with ``n_tasks=n_major``,
+    ``n_minor_tasks=1``, and ``p_minor=1e-12`` — the same minor configuration
+    as ``k=-1`` in :func:`unified_train` (one dummy minor task, negligible
+    sampling weight). Order of results matches
+    nested iteration: all ``n_major`` values for task_names[0], then
+    task_names[1], etc.
+
+    Parameters
+    ----------
+    task_names : list of str
+        e.g. ``["latent", "coin", "linear"]``.
+    n_major_list : list of int
+        Major-task counts (e.g. ``[4, 8, ..., 1024]``).
+    n_gpus, verbose, **train_kwargs
+        Same role as in :func:`unified_train_parallel` / :func:`unified_train`.
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    jobs = [(t, n) for t in task_names for n in n_major_list]
+    if not jobs:
+        return []
+
+    n_available = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    n_workers = n_gpus if n_gpus is not None else min(2, n_available or 1)
+    n_workers = min(n_workers, len(jobs))
+    if n_workers <= 0:
+        n_workers = 1
+    use_gpu = n_available > 0
+
+    train_kwargs = {k: v for k, v in train_kwargs.items() if k != "device"}
+    worker_kwargs = {**train_kwargs, "_parallel_verbose": verbose}
+
+    def _device(i: int) -> str:
+        return f"cuda:{i % n_available}" if use_gpu else "cpu"
+
+    args_list = [(t, n, {**worker_kwargs}) for t, n in jobs]
+
+    if n_workers == 1:
+        out = []
+        for t, n in jobs:
+            if verbose:
+                print(
+                    f"[major_only] Training {t} n_major={n} on {_device(0)} ...",
+                    flush=True,
+                )
+            out.append(
+                unified_train(
+                    t,
+                    0,
+                    device=_device(0),
+                    n_tasks=n,
+                    n_minor_tasks=1,
+                    p_minor=1e-12,
+                    **train_kwargs,
+                )
+            )
+        return out
+
+    if verbose:
+        print(
+            f"[major_only] Starting parallel sweep: {len(jobs)} jobs, n_workers={n_workers}",
+            flush=True,
+        )
+
+    import multiprocessing as mp
+    ctx = mp.get_context("spawn")
+
+    gpu_queue = ctx.Queue()
+    for i in range(n_workers):
+        gpu_queue.put(_device(i))
+
+    results = [None] * len(jobs)
+    errors = []
+    with ProcessPoolExecutor(
+        max_workers=n_workers,
+        mp_context=ctx,
+        initializer=_init_worker,
+        initargs=(gpu_queue,),
+    ) as ex:
+        future_to_idx = {ex.submit(_major_only_train_worker, a): i for i, a in enumerate(args_list)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            t, n = jobs[idx]
+            try:
+                results[idx] = future.result()
+                if verbose:
+                    print(f"[major_only] Completed {t} n_major={n}", flush=True)
+            except Exception as e:
+                logger.exception("major_only sweep failed for %s n_major=%s: %s", t, n, e)
+                errors.append(((t, n), e))
+
+    if errors:
+        msg = "; ".join(f"{t} n_major={n}: {e}" for (t, n), e in errors)
+        raise RuntimeError(f"unified_train_major_only_parallel: {len(errors)} job(s) failed — {msg}")
 
     return results

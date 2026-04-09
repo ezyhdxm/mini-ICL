@@ -1,0 +1,55 @@
+\begin{table}[t]
+\centering
+\small
+\renewcommand{\arraystretch}{1.1}
+\setlength{\tabcolsep}{5pt}
+\caption{ANOVA $R^2$ at the final context position for major (memorized) vs.\ minor (unmemorized) tasks across experiments E1--E3 with $K{=}10$.
+Higher $R^2$ indicates that the $(z, s_t)$ cell-means decomposition (E1, E3) or the ANCOVA model with task-specific slopes (E2) explains more hidden-state variance.}
+\label{tab:major_minor_r2}
+
+\begin{subtable}{\linewidth}
+\centering
+\caption{E1 (Dice): cell-means $R^2$}
+\begin{tabular}{@{}l cccccc@{}}
+\toprule
+& \multicolumn{6}{c}{\textbf{Layer}} \\
+\cmidrule(lr){2-7}
+Split & 0 & 1 & 2 & 3 & 4 & 5 \\
+\midrule
+Major & 0.985 & 0.961 & 0.924 & 0.921 & 0.970 & 0.977 \\
+Minor & 0.989 & 0.976 & 0.960 & 0.944 & 0.932 & 0.931 \\
+\bottomrule
+\end{tabular}
+\end{subtable}
+
+\begin{subtable}{\linewidth}
+\centering
+\caption{E3 (Markov): cell-means $R^2$}
+\begin{tabular}{@{}l cccccc@{}}
+\toprule
+& \multicolumn{6}{c}{\textbf{Layer}} \\
+\cmidrule(lr){2-7}
+Split & 0 & 1 & 2 & 3 & 4 & 5 \\
+\midrule
+Major & 0.741 & 0.685 & 0.738 & 0.885 & 0.930 & 0.950 \\
+Minor & 0.748 & 0.684 & 0.702 & 0.786 & 0.774 & 0.743 \\
+\bottomrule
+\end{tabular}
+\end{subtable}
+
+\begin{subtable}{\linewidth}
+\centering
+\caption{E2 (Linear): ANCOVA $R^2$}
+\begin{tabular}{@{}l cccccc@{}}
+\toprule
+& \multicolumn{6}{c}{\textbf{Layer}} \\
+\cmidrule(lr){2-7}
+Split & 4 & 6 & 8 & 10 & 12 & 14 \\
+\midrule
+Major & 0.957 & 0.951 & 0.959 & 0.967 & 0.972 & 0.970 \\
+Minor & 0.955 & 0.933 & 0.888 & 0.854 & 0.842 & 0.832 \\
+\bottomrule
+\end{tabular}
+\end{subtable}
+
+\end{table}

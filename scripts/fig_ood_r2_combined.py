@@ -56,7 +56,7 @@ _COMMON = dict(
 
 
 def _save_path(coin_layer: int, linear_layer: int, latent_layer: int) -> Path:
-    name = f"ood_r2_c{coin_layer}_l{linear_layer}_t{latent_layer}.png"
+    name = f"ood_r2_c{coin_layer}_l{linear_layer}_t{latent_layer}_logx.png"
     return PROJECT_ROOT / "paper_figs" / name
 
 
@@ -137,8 +137,24 @@ def main():
         data.append(out)
         log.info(f"[{label}] done in {time.time() - t0:.1f}s")
 
+    import numpy as np
+    all_starts, all_ends = [], []
+    for out in data:
+        for _, m_steps, _, _, _ in out["results"]:
+            s = np.asarray(m_steps, dtype=float)
+            s = s[s > 0]
+            if s.size:
+                all_starts.append(s.min())
+                all_ends.append(s.max())
+    if all_starts:
+        x_lo = 10 ** np.floor(np.log10(max(all_starts)))
+        x_hi = max(all_ends) * 1.3
+        common_xlim = (x_lo, x_hi)
+    else:
+        common_xlim = None
+
     log.info("Composing figure …")
-    fig, axes = plt.subplots(1, 3, figsize=(13, 3.5), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(13, 2.6), sharey=True)
 
     for idx, (ax, out) in enumerate(zip(axes, data)):
         draw_ood_r2_curves_on_ax(
@@ -151,6 +167,8 @@ def main():
             show_legend=(idx == len(data) - 1),
             legend_title=r"$N_{\mathrm{minor}}$",
         )
+        if common_xlim is not None:
+            ax.set_xlim(common_xlim)
         if idx > 0:
             ax.tick_params(labelleft=False)
 

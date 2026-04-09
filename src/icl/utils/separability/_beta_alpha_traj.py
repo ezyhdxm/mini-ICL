@@ -141,7 +141,7 @@ def plot_beta_alpha_on_ax(
             ax.errorbar(
                 ts_j[sm], beta_mean[sm, col],
                 yerr=yerr,
-                fmt=mk, color=c, markersize=3.5, linewidth=1.2,
+                fmt=mk, color=c, markersize=4.0, linewidth=1.2,
                 capsize=2, capthick=0.8, elinewidth=0.8,
                 label=beta_label, zorder=3,
             )

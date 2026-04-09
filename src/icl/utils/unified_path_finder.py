@@ -25,8 +25,8 @@ def unified_get_config(
         raise ValueError(f"Unknown task_name: {task_name}")
     config.training.warmup_steps = 15_000
     if task_name == "latent":
-        config.training.warmup_steps = 20_000
-        config.training.num_epochs = 40_000
+        config.training.warmup_steps = 15_000
+        config.training.num_epochs = 30_000
         return config
     if task_name == "dyck":
         config.training.warmup_steps = 15_000
@@ -214,6 +214,8 @@ def get_exp_name(
     batch_size_schedule: list = None,
     p_minor_schedule: list = None,
     final_layernorm: bool = None,
+    n_tasks: Optional[int] = None,
+    n_minor_tasks: Optional[int] = None,
 ) -> str:
     """Generate standardized experiment name based on task and parameters."""
     config = unified_get_config(task_name)
@@ -227,6 +229,10 @@ def get_exp_name(
     else:
         config.task.n_minor_tasks = 1
         config.task.p_minor = 1e-12
+    if n_minor_tasks is not None:
+        config.task.n_minor_tasks = int(n_minor_tasks)
+    if n_tasks is not None:
+        config.task.n_tasks = int(n_tasks)
     if pad is not None:
         if task_name == "linear":
             config.model.pad = pad

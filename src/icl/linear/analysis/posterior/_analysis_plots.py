@@ -239,7 +239,7 @@ def plot_val_r2_across_layers(
 
 
 def plot_id_ood_loss(
-    k_list,
+    k_list=None,
     logx: bool = True,
     figsize: tuple = (10, 4),
     show: bool = True,
@@ -249,6 +249,8 @@ def plot_id_ood_loss(
     ood_source: str = "ood",
     metric_key: str = "Transformer | True",
     noise_scale: Optional[float] = 0.5,
+    n_major_list=None,
+    legend_title: Optional[str] = None,
 ) -> dict:
     """Plot ID and OOD training loss vs step for multiple k values.
 
@@ -258,8 +260,14 @@ def plot_id_ood_loss(
 
     Parameters
     ----------
-    k_list : sequence of int
+    k_list : sequence of int, optional
         Each k → ``get_exp_name("linear", k, pad=pad, **exp_name_kwargs)``.
+        Use **either** ``k_list`` or ``n_major_list``, not both.
+    n_major_list : sequence of int, optional
+        Major-only sweep: each value is ``n_tasks`` with
+        ``get_exp_name(..., k=0, n_tasks=..., n_minor_tasks=1, p_minor=1e-12, ...)``.
+    legend_title : str, optional
+        Legend title override (default depends on k vs major sweep).
     exp_name_kwargs : dict, optional
         Extra kwargs passed to ``get_exp_name`` for linear (e.g. ``n_layer``,
         ``total_steps``, ``warmup_steps``, ``batch_size``). Must match the
@@ -289,6 +297,12 @@ def plot_id_ood_loss(
 
     if exp_name_kwargs is None:
         exp_name_kwargs = {}
+
+    if n_major_list is not None and k_list is not None:
+        raise ValueError("Pass only one of k_list or n_major_list.")
+    if n_major_list is None and k_list is None:
+        raise ValueError("Provide k_list or n_major_list.")
+    use_n_major = n_major_list is not None
 
     def _resolve_linear_exp_dir(exp_name: str) -> str:
         candidates = [
@@ -377,9 +391,23 @@ def plot_id_ood_loss(
         return None, src_key
 
     results = {}
-    for k in k_list:
-        exp_name = get_exp_name("linear", k, pad=pad, **exp_name_kwargs)
-        n_minor_tasks = 2 ** k if k >= 0 else 0
+    iter_keys = list(n_major_list) if use_n_major else list(k_list)
+    for key in iter_keys:
+        if use_n_major:
+            exp_name = get_exp_name(
+                "linear",
+                0,
+                pad=pad,
+                n_tasks=int(key),
+                n_minor_tasks=1,
+                p_minor=1e-12,
+                **exp_name_kwargs,
+            )
+            n_minor_tasks = int(key)
+        else:
+            k = key
+            exp_name = get_exp_name("linear", k, pad=pad, **exp_name_kwargs)
+            n_minor_tasks = 2 ** k if k >= 0 else 0
 
         try:
             exp_dir = _resolve_linear_exp_dir(exp_name)
@@ -405,7 +433,7 @@ def plot_id_ood_loss(
             id_loss = np.asarray(id_loss[:L], dtype=float)
             ood_loss = np.asarray(ood_loss[:L], dtype=float)
 
-            results[k] = dict(
+            results[key] = dict(
                 n_minor=n_minor_tasks,
                 train_steps=train_steps,
                 id_loss=id_loss,
@@ -415,7 +443,7 @@ def plot_id_ood_loss(
                 metric_key_used=metric_key,
             )
         except Exception as e:
-            logger.warning(f"Could not load k={k}: {e}")
+            logger.warning(f"Could not load key={key}: {e}")
 
     ks_sorted = sorted(results.keys())
     if not ks_sorted:
@@ -462,10 +490,17 @@ def plot_id_ood_loss(
     ax1.tick_params(labelsize=fs_tick)
 
     handles, labels = ax1.get_legend_handles_labels()
+    _leg_title = legend_title
+    if _leg_title is None:
+        _leg_title = (
+            r"$N_{\mathrm{major}}$"
+            if use_n_major
+            else r"$\log_2(n_{\mathrm{minor}})$"
+        )
     ax2.legend(
         handles,
         labels,
-        title=r"$\log_2(n_{\mathrm{minor}})$",
+        title=_leg_title,
         fontsize=fs_tick,
         title_fontsize=fs_label,
         frameon=True,

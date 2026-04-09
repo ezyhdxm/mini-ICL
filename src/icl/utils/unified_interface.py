@@ -16,6 +16,7 @@ from icl.utils.unified_training import (  # noqa: F401
     unified_train,
     _unified_train_worker,
     unified_train_parallel,
+    unified_train_major_only_parallel,
 )
 from icl.utils.unified_path_finder import unified_get_config, get_exp_name  # noqa: F401
 

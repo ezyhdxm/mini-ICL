@@ -263,12 +263,13 @@ class NoisyLinearRegression:
                     noise_scale=self.noise_scale, dtype=self.dtype
                 )
             )
-            models.append(
-                get_model(
-                    name="unbalanced_mmse", minor_task_pool=self.minor_pool.clone(), task_pool=self.task_pool.clone(), p0=self.p_minor, 
-                    scale=self.noise_scale, dtype=self.dtype
+            if self.minor_pool is not None:
+                models.append(
+                    get_model(
+                        name="unbalanced_mmse", minor_task_pool=self.minor_pool.clone(), task_pool=self.task_pool.clone(), p0=self.p_minor, 
+                        scale=self.noise_scale, dtype=self.dtype
+                    )
                 )
-            )
 
         return models
     

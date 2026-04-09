@@ -90,14 +90,13 @@ def _draw_variance_r2(ax, exp_name, *, prefix_k=3, batch_size=2048,
         ax.plot(positions, vals, label=str(li),
                 **_layer_style(li, len(positions)))
 
-    ax.set_xlabel("Dyck position", fontsize=12)
-    ax.set_ylabel("Residual variance ratio", fontsize=12)
+    ax.set_xlabel("Dyck position")
+    ax.set_ylabel("Residual variance ratio")
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_ylim(-0.02, 1.02)
-    ax.tick_params(labelsize=11)
-    ax.legend(title="Layer", fontsize=11, title_fontsize=11,
+    ax.legend(title="Layer", fontsize=9, title_fontsize=10,
               framealpha=0.9, loc="upper right",
-              borderaxespad=0.3, handlelength=2.2)
+              borderaxespad=0.3, handlelength=1.5)
     ax.grid(True, alpha=0.25, linewidth=0.5)
 
 
@@ -186,9 +185,8 @@ def _draw_prefix_scatter(ax, probe, viz_data, probe_results, *,
                     ha="center", va="center",
                     color=_darken(color), bbox=bbox_props)
 
-    ax.set_xlabel("Projection dim 1", fontsize=12)
-    ax.set_ylabel("Projection dim 2", fontsize=12)
-    ax.tick_params(axis="both", labelsize=11)
+    ax.set_xlabel("Projection dim 1")
+    ax.set_ylabel("Projection dim 2")
 
 
 # ── CLI & main ────────────────────────────────────────────────────────────────
@@ -271,12 +269,12 @@ def main():
 
     # ── Compose combined figure ───────────────────────────────────────────────
     log.info("Composing figure …")
-    fig = plt.figure(figsize=(11, 4.5))
+    fig = plt.figure(figsize=(11, 3.2))
     gs = gridspec.GridSpec(
         1, 2, figure=fig,
-        wspace=0.20,
+        wspace=0.22,
         left=0.08, right=0.97,
-        top=0.95, bottom=0.13,
+        top=0.95, bottom=0.16,
     )
     ax_left  = fig.add_subplot(gs[0])
     ax_right = fig.add_subplot(gs[1])

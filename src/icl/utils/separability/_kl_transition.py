@@ -37,8 +37,10 @@ def plot_kl_transition_on_ax(
     show_xlabel: bool = True,
     show_colorbar: bool = False,
     fig=None,
+    y_axis_label: str | None = None,
+    metric: str = "ratio",
 ):
-    """Render the KL-ratio heatmap from a pre-computed result dict onto *ax*.
+    """Render a KL heatmap from a pre-computed result dict onto *ax*.
 
     Parameters
     ----------
@@ -47,7 +49,14 @@ def plot_kl_transition_on_ax(
     out :
         Dict returned by any of the three ``plot_kl_model_vs_two_bayes_*_transition_across_k``
         functions.  Required keys:
-        ``step_grid``, ``k_values_loaded``, ``log10_ratio_matrix``, ``alpha_matrix``.
+        ``step_grid``, ``k_values_loaded``, ``alpha_matrix``, and either
+        ``log10_ratio_matrix`` (``metric="ratio"``) or ``log10_best_kl_matrix``
+        (``metric="log10_min_kl"``).
+    metric :
+        ``"ratio"`` — diverging map of ``log(KL_exact / KL_approx)`` (default).
+        ``"log10_min_kl"`` — sequential map of
+        ``log10(min(KL_exact, KL_approx))``.  Use for linear regression where
+        the two baselines coincide and the ratio is degenerate (~0 everywhere).
     show_ylabel :
         If True, add the y-axis label.
     show_xlabel :
@@ -68,41 +77,68 @@ def plot_kl_transition_on_ax(
 
     step_grid    = np.asarray(out["step_grid"],           dtype=float)
     ks           = np.asarray(out["k_values_loaded"],     dtype=float)
-    log_ratio    = np.asarray(out["log10_ratio_matrix"],  dtype=float)
     alpha_matrix = np.asarray(out["alpha_matrix"],        dtype=float)
 
     x_edges = _centers_to_edges(step_grid)
     y_edges = _centers_to_edges(ks)
 
-    rel_norm = mcolors.TwoSlopeNorm(vmin=-_REL_VMAX, vcenter=0.0, vmax=_REL_VMAX)
-    cmap_rel = plt.get_cmap(_CMAP_NAME).copy()
-    cmap_rel.set_bad(color="#f0f0f0")
+    if metric == "ratio":
+        log_ratio = np.asarray(out["log10_ratio_matrix"], dtype=float)
+        rel_norm = mcolors.TwoSlopeNorm(vmin=-_REL_VMAX, vcenter=0.0, vmax=_REL_VMAX)
+        cmap = plt.get_cmap(_CMAP_NAME).copy()
+        cmap.set_bad(color="#f0f0f0")
+        z_ma = np.ma.masked_invalid(log_ratio)
+        mesh = ax.pcolormesh(
+            x_edges, y_edges, z_ma,
+            cmap=cmap, norm=rel_norm, shading="auto",
+        )
+        facecolors = cmap(rel_norm(z_ma.filled(0.0)))
+    elif metric == "log10_min_kl":
+        z = np.asarray(out["log10_best_kl_matrix"], dtype=float)
+        z_ma = np.ma.masked_invalid(z)
+        finite = z[np.isfinite(z)]
+        if finite.size == 0:
+            vmin, vmax = -6.0, 0.0
+        else:
+            vmin = float(np.min(finite))
+            vmax = float(np.max(finite))
+        if vmax - vmin < 1e-12:
+            vmax = vmin + 1e-12
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+        cmap = plt.get_cmap("viridis_r").copy()
+        cmap.set_bad(color="#f0f0f0")
+        mesh = ax.pcolormesh(
+            x_edges, y_edges, z_ma,
+            cmap=cmap, norm=norm, shading="auto",
+        )
+        facecolors = cmap(norm(z_ma.filled(vmin)))
+    else:
+        raise ValueError(f"metric must be 'ratio' or 'log10_min_kl', got {metric!r}")
 
-    log_ratio_ma = np.ma.masked_invalid(log_ratio)
+    facecolors[..., -1] = alpha_matrix
+    mesh.set_facecolor(facecolors.reshape(-1, 4))
 
-    mesh = ax.pcolormesh(
-        x_edges, y_edges, log_ratio_ma,
-        cmap=cmap_rel, norm=rel_norm, shading="auto",
-    )
-
-    # Apply per-cell alpha transparency (closeness modulation).
-    rel_facecolors = cmap_rel(rel_norm(log_ratio_ma.filled(0.0)))
-    rel_facecolors[..., -1] = alpha_matrix
-    mesh.set_facecolor(rel_facecolors.reshape(-1, 4))
-
-    ax.set_yticks(ks)
+    even_ks = [k for k in ks if int(k) % 2 == 0]
+    ax.set_yticks(even_ks)
     ax.grid(False)
     ax.set_xlabel("Training Step")
     if not show_xlabel:
         ax.set_xlabel("")
     if show_ylabel:
-        ax.set_ylabel(r"$\log_2(N_{\mathrm{minor}})$")
+        if y_axis_label is None:
+            y_axis_label = r"$\log_2(N_{\mathrm{minor}})$"
+        ax.set_ylabel(y_axis_label)
 
     if show_colorbar:
         assert fig is not None, "fig must be provided when show_colorbar=True"
         cbar = fig.colorbar(mesh, ax=ax, pad=0.02)
-        cbar.set_label(
-            r"$\log(\mathrm{KL}_{\mathrm{Bayesian}} / \mathrm{KL}_{\mathrm{extrapolation}})$",
-        )
+        if metric == "ratio":
+            cbar.set_label(
+                r"$\log(\mathrm{KL}_{\mathrm{Bayes}} / \mathrm{KL}_{\mathrm{extrap}})$",
+            )
+        else:
+            cbar.set_label(
+                r"$\log_{10}(\min(\mathrm{KL}_{\mathrm{Bayes}}, \mathrm{KL}_{\mathrm{extrap}}))$",
+            )
 
     return mesh

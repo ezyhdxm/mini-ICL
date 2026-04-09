@@ -52,8 +52,9 @@ def plot_averaging_r2_on_ax(
         ax.set_xscale("symlog", linthresh=1)
     ax.set_ylim(-0.02, 1.02)
     _ncol = 2 if len(layers) > 6 else 1
-    ax.legend(title="Layer", framealpha=0.9, loc="best", ncol=_ncol,
-              borderaxespad=0.3, handlelength=2.2)
+    ax.legend(title="Layer", framealpha=0.9, loc="lower right", ncol=_ncol,
+              borderaxespad=0.3, handlelength=1.5, fontsize=9,
+              title_fontsize=10, columnspacing=0.8)
     ax.grid(True, alpha=0.25, linewidth=0.5)
 
 

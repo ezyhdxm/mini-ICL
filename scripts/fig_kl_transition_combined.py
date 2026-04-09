@@ -17,7 +17,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SAVE_PATH = PROJECT_ROOT / "paper_figs" / "kl_transition_combined.png"
+SAVE_PATH = PROJECT_ROOT / "paper_figs" / "kl_transition_combined_logx.png"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,8 +102,15 @@ def main():
         data.append(out)
         log.info(f"[{label}] done in {time.time() - t0:.1f}s")
 
+    import numpy as np
+    x_starts = [np.asarray(d["step_grid"], dtype=float).min() for d in data]
+    x_ends   = [np.asarray(d["step_grid"], dtype=float).max() for d in data]
+    x_lo = 10 ** np.floor(np.log10(max(x_starts)))
+    x_hi = max(x_ends) * 1.3
+    common_xlim = (x_lo, x_hi)
+
     log.info("Composing figure …")
-    fig, axes = plt.subplots(1, 3, figsize=(13, 3.5))
+    fig, axes = plt.subplots(1, 3, figsize=(13, 2.6))
 
     last_mesh = None
     for idx, (ax, out) in enumerate(zip(axes, data)):
@@ -115,6 +122,7 @@ def main():
             fig=fig,
         )
         ax.set_xscale("log")
+        ax.set_xlim(common_xlim)
         last_mesh = mesh
         if idx > 0:
             ax.tick_params(labelleft=False)
@@ -122,8 +130,10 @@ def main():
     # Single shared colorbar on the right of the last panel.
     cbar = fig.colorbar(last_mesh, ax=axes[-1], pad=0.04, fraction=0.046)
     cbar.set_label(
-        r"$\log(\mathrm{KL}_{\mathrm{Bayesian}} / \mathrm{KL}_{\mathrm{extrapolation}})$",
+        r"$\log(\mathrm{KL}_{\mathrm{Bayes}} / \mathrm{KL}_{\mathrm{extrap}})$",
+        fontsize=12,
     )
+    cbar.ax.tick_params(labelsize=11)
 
     fig.tight_layout(w_pad=0.5)
     SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)

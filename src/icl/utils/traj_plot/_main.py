@@ -180,6 +180,9 @@ def project_with_r2_trajectories_group_colors_mpl(
     # --- axis padding ---
     axis_margin=0.03,
 
+    # --- marker-size legend: explicit R² ticks ---
+    legend_r2_values=None,
+
     # --- compatibility alias ---
     b_maj=None,  # alias for b_major
     step=None,
@@ -383,6 +386,7 @@ def project_with_r2_trajectories_group_colors_mpl(
         show_simplex_triangle=show_simplex_triangle, simplex_triangle_color=simplex_triangle_color,
         simplex_triangle_alpha=simplex_triangle_alpha, simplex_triangle_lw=simplex_triangle_lw,
         simplex_triangle_ls=simplex_triangle_ls,
+        legend_r2_values=legend_r2_values,
     )
 
     # ============================================================

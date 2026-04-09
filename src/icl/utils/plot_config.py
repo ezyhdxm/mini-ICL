@@ -12,13 +12,13 @@ from typing import Optional, Sequence, Tuple
 
 # Paper-friendly font sizes (increase from matplotlib defaults for readability)
 _PAPER_RC = {
-    "font.size": 11,
-    "axes.titlesize": 13,
-    "axes.labelsize": 13,
-    "xtick.labelsize": 11,
-    "ytick.labelsize": 11,
-    "legend.fontsize": 10,
-    "legend.title_fontsize": 11,
+    "font.size": 13,
+    "axes.titlesize": 15,
+    "axes.labelsize": 15,
+    "xtick.labelsize": 13,
+    "ytick.labelsize": 13,
+    "legend.fontsize": 12,
+    "legend.title_fontsize": 13,
 }
 
 
@@ -260,14 +260,14 @@ def _draw_single_simplex_panel(
     ax.plot(tri_x, tri_y, "k-", lw=1.2)
 
     if show_alpha1:
-        ax.text(-0.03, -0.02, r"$\alpha_1$", ha="right", va="top", fontsize=11)
+        ax.text(-0.03, -0.02, r"$\alpha_1$", ha="right", va="top", fontsize=13)
     if show_alpha2:
-        ax.text(1.03, -0.02, r"$\alpha_2$", ha="left",  va="top", fontsize=11)
+        ax.text(1.03, -0.02, r"$\alpha_2$", ha="left",  va="top", fontsize=13)
     if show_alpha3:
-        ax.text(0.5, _SQRT3_2 + 0.03, r"$\alpha_3$", ha="center", va="bottom", fontsize=11)
+        ax.text(0.5, _SQRT3_2 + 0.03, r"$\alpha_3$", ha="center", va="bottom", fontsize=13)
 
-    ax.text(title_x, -0.08, title, ha=title_ha, va="top", fontsize=11)
-    ax.text(title_x, -0.17, mean_fmt.format(vals.mean()), ha=title_ha, va="top", fontsize=9, color="0.4")
+    ax.text(title_x, -0.08, title, ha=title_ha, va="top", fontsize=13)
+    ax.text(title_x, -0.18, mean_fmt.format(vals.mean()), ha=title_ha, va="top", fontsize=10, color="0.4")
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_xlim(-0.08, 1.08)
@@ -331,13 +331,13 @@ def _render_simplex_combined_fig(
             ax_left, bary_x, bary_y, data_left, vmin, vmax,
             title_left, mean_fmt, cmap=cmap, grid_res=grid_res, smooth_sigma=smooth_sigma,
             show_alpha1=show_a1, show_alpha2=False, show_alpha3=True,
-            title_x=0.5, title_ha="center",
+            title_x=0.35, title_ha="center",
         )
         _draw_single_simplex_panel(
             ax_right, bary_x, bary_y, data_right, vmin, vmax,
             title_right, mean_fmt, cmap=cmap, grid_res=grid_res, smooth_sigma=smooth_sigma,
             show_alpha1=False, show_alpha2=show_a2, show_alpha3=True,
-            title_x=0.5, title_ha="center",
+            title_x=0.65, title_ha="center",
         )
 
     # ── Single dual-sided colorbar, matched to axes height ────────────────────
@@ -357,16 +357,16 @@ def _render_simplex_combined_fig(
     cbar  = fig.colorbar(sm, cax=cb_ax)
 
     cbar.set_ticks(tick_pos)
-    cbar.set_ticklabels([f"{v:.1f}" for v in kl_vals], fontsize=9)
+    cbar.set_ticklabels([f"{v:.1f}" for v in kl_vals], fontsize=11)
     cbar.ax.yaxis.set_ticks_position("left")
     cbar.ax.yaxis.set_label_position("left")
-    cbar.set_label("KL divergence", fontsize=10, labelpad=8)
+    cbar.set_label("KL divergence", fontsize=12, labelpad=8)
 
     ax_rmse_twin = cbar.ax.twinx()
     ax_rmse_twin.set_ylim(0.0, 1.0)
     ax_rmse_twin.set_yticks(tick_pos)
-    ax_rmse_twin.set_yticklabels([f"{int(v)}" for v in rmse_vals], fontsize=9)
-    ax_rmse_twin.set_ylabel("RMSE", fontsize=10, labelpad=8)
+    ax_rmse_twin.set_yticklabels([f"{int(v)}" for v in rmse_vals], fontsize=11)
+    ax_rmse_twin.set_ylabel("RMSE", fontsize=12, labelpad=8)
 
     return fig
 
@@ -382,7 +382,7 @@ def render_injection_simplex_combined(
     rmse_vmax: float = 7.0,
     title_base: str = "Unsteered",
     title_inj: str = "Steered",
-    figsize: Tuple[float, float] = (12, 3.8),
+    figsize: Tuple[float, float] = (13, 3.0),
     cmap: str = "magma_r",
     grid_res: int = 128,
     smooth_sigma: float = 2.0,
@@ -411,7 +411,7 @@ def render_mode_task_comparison_combined(
     rmse_vmax: float = 7.0,
     title_inj: str = "Steered",
     title_mode: str = r"Mode task $k^\star$",
-    figsize: Tuple[float, float] = (12, 3.8),
+    figsize: Tuple[float, float] = (13, 3.0),
     cmap: str = "magma_r",
     grid_res: int = 128,
     smooth_sigma: float = 2.0,

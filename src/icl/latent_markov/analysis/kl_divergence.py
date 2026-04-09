@@ -578,7 +578,7 @@ def plot_kl_model_vs_two_bayes_latent_over_steps(
 
 
 def plot_kl_model_vs_two_bayes_latent_transition_across_k(
-    k_values,
+    k_values=None,
     mode: str = "train",
     num_samples: int = 1024,
     steps=None,
@@ -593,6 +593,8 @@ def plot_kl_model_vs_two_bayes_latent_transition_across_k(
     show: bool = True,
     verbose: bool = False,
     exp_name_kwargs: Optional[dict] = None,
+    n_major_values=None,
+    major_only_exp_kwargs: Optional[dict] = None,
 ) -> dict:
     """
     Visualize the transition from exact-Bayes-like to Dirichlet-like behavior across k.
@@ -625,12 +627,36 @@ def plot_kl_model_vs_two_bayes_latent_transition_across_k(
     if exp_name_kwargs is None:
         exp_name_kwargs = {}
 
+    if n_major_values is not None:
+        loop_keys = list(n_major_values)
+        use_major_only = True
+        # Default hybrid prior for major-only: new-task bucket dominates (p_common ≈ 0).
+        if p_common_total is None:
+            p_common_total = 1e-12
+    elif k_values is not None:
+        loop_keys = list(k_values)
+        use_major_only = False
+    else:
+        raise ValueError("Provide k_values or n_major_values.")
+
     curves = {}
     exp_names = {}
     all_steps = set()
-    for k in k_values:
-        exp_name = get_exp_name("latent", k, **exp_name_kwargs)
-        exp_names[k] = exp_name
+    for key in loop_keys:
+        base_kw = dict(exp_name_kwargs)
+        if use_major_only:
+            base_kw.update(major_only_exp_kwargs or {})
+            exp_name = get_exp_name(
+                "latent",
+                0,
+                n_tasks=int(key),
+                n_minor_tasks=1,
+                p_minor=1e-12,
+                **base_kw,
+            )
+        else:
+            exp_name = get_exp_name("latent", key, **base_kw)
+        exp_names[key] = exp_name
         try:
             out = plot_kl_model_vs_two_bayes_latent_over_steps(
                 exp_name=exp_name,
@@ -648,7 +674,7 @@ def plot_kl_model_vs_two_bayes_latent_transition_across_k(
             steps_k = np.asarray(out["steps"], dtype=int)
             exact_k = np.asarray(out["kl_exact_mean_by_step"], dtype=float)
             hybrid_k = np.asarray(out["kl_hybrid_mean_by_step"], dtype=float)
-            curves[k] = {
+            curves[key] = {
                 "steps": steps_k,
                 "kl_exact_mean_by_step": exact_k,
                 "kl_hybrid_mean_by_step": hybrid_k,
@@ -656,7 +682,7 @@ def plot_kl_model_vs_two_bayes_latent_transition_across_k(
             }
             all_steps.update(steps_k.tolist())
         except Exception as e:
-            _logger.warning(f"k={k} ({exp_names[k]}): {e}")
+            _logger.warning(f"key={key} ({exp_names[key]}): {e}")
 
     ks = sorted(curves.keys())
     if len(ks) == 0:

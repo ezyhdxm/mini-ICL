@@ -163,7 +163,7 @@ def main():
         log.info(f"[{label}] done in {time.time() - t0:.1f}s")
 
     log.info("Composing figure …")
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.2), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 2.6), sharey=True)
 
     y_lo_global, y_hi_global = np.inf, -np.inf
     for idx, (ax, (results, k_major, proj_simplex)) in enumerate(zip(axes, data)):
@@ -194,7 +194,7 @@ def main():
 
     # Legend on the right side of the last panel.
     axes[-1].legend(
-        fontsize=9,
+        fontsize=11,
         loc="upper left",
         bbox_to_anchor=(1.02, 1.0),
         borderaxespad=0,

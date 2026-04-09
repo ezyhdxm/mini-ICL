@@ -30,6 +30,7 @@ def _get_linear_kl_over_steps_cache_path(
     num_samples: int,
     steps_to_use,
     eps: float,
+    p_minor_hybrid: float | None = None,
 ):
     cache_dir = os.path.join(exp_dir, "analysis_cache")
     os.makedirs(cache_dir, exist_ok=True)
@@ -38,6 +39,7 @@ def _get_linear_kl_over_steps_cache_path(
         "num_samples": int(num_samples),
         "steps_to_use": [int(s) for s in steps_to_use],
         "eps": float(eps),
+        "p_minor_hybrid": float(p_minor_hybrid) if p_minor_hybrid is not None else None,
         "version": 1,
     }
     payload_str = json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"))
