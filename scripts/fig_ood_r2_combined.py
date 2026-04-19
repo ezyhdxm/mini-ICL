@@ -112,12 +112,18 @@ def parse_args():
                    help="Vocabulary size for E1 Coins experiments (default: 16)")
     p.add_argument("--avg-over", type=int, default=128, metavar="A",
                    help="Sequences averaged per OOD task before R² for all experiments (default: 128; use 1 for no averaging)")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Optional output path. Defaults to PROJECT_ROOT/paper_figs/<auto-name>.",
+    )
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    save_path = _save_path(args.coin_layer, args.linear_layer, args.latent_layer)
+    save_path = args.out or _save_path(args.coin_layer, args.linear_layer, args.latent_layer)
 
     panels = [
         ("E1 (Coins)",  lambda: _compute_coin(args.coin_layer, args.coin_vocab_size, args.avg_over)),
@@ -154,7 +160,8 @@ def main():
         common_xlim = None
 
     log.info("Composing figure …")
-    fig, axes = plt.subplots(1, 3, figsize=(13, 2.6), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(14.2, 2.9), sharey=True)
+    shared_handles = shared_labels = None
 
     for idx, (ax, out) in enumerate(zip(axes, data)):
         draw_ood_r2_curves_on_ax(
@@ -164,15 +171,30 @@ def main():
             shadow_alpha=0.1,
             show_iqr_band=True,
             show_ylabel=(idx == 0),
-            show_legend=(idx == len(data) - 1),
+            show_legend=False,
             legend_title=r"$N_{\mathrm{minor}}$",
         )
+        if shared_handles is None:
+            shared_handles, shared_labels = ax.get_legend_handles_labels()
         if common_xlim is not None:
             ax.set_xlim(common_xlim)
         if idx > 0:
             ax.tick_params(labelleft=False)
 
-    fig.tight_layout(w_pad=0.5)
+    fig.tight_layout(w_pad=0.7)
+    if shared_handles:
+        fig.legend(
+            shared_handles,
+            shared_labels,
+            title=r"$N_{\mathrm{minor}}$",
+            fontsize=9,
+            title_fontsize=10,
+            frameon=True,
+            framealpha=0.95,
+            loc="center left",
+            bbox_to_anchor=(0.905, 0.5),
+        )
+    fig.subplots_adjust(right=0.87)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=300, bbox_inches="tight")
     log.info(f"Saved → {save_path}  (total {time.time() - t_total:.1f}s)")

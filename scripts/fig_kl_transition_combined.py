@@ -106,11 +106,11 @@ def main():
     x_starts = [np.asarray(d["step_grid"], dtype=float).min() for d in data]
     x_ends   = [np.asarray(d["step_grid"], dtype=float).max() for d in data]
     x_lo = 10 ** np.floor(np.log10(max(x_starts)))
-    x_hi = max(x_ends) * 1.3
+    x_hi = max(x_ends)
     common_xlim = (x_lo, x_hi)
 
     log.info("Composing figure …")
-    fig, axes = plt.subplots(1, 3, figsize=(13, 2.6))
+    fig, axes = plt.subplots(1, 3, figsize=(13, 3.2))
 
     last_mesh = None
     for idx, (ax, out) in enumerate(zip(axes, data)):
@@ -128,9 +128,9 @@ def main():
             ax.tick_params(labelleft=False)
 
     # Single shared colorbar on the right of the last panel.
-    cbar = fig.colorbar(last_mesh, ax=axes[-1], pad=0.04, fraction=0.046)
+    cbar = fig.colorbar(last_mesh, ax=axes[-1], pad=0.02, fraction=0.046)
     cbar.set_label(
-        r"$\log(\mathrm{KL}_{\mathrm{Bayes}} / \mathrm{KL}_{\mathrm{extrap}})$",
+        r"$\log(\mathrm{KL}_{\mathtt{M1}} / \mathrm{KL}_{\mathtt{M2}})$",
         fontsize=12,
     )
     cbar.ax.tick_params(labelsize=11)

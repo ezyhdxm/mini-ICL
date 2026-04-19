@@ -20,11 +20,16 @@ from icl.coin.coin_ood_analysis import get_new_sampler
 logger = setup_logger(__name__)
 
 
-def _make_linear_eval_generator(device: str, train_task, step: int) -> torch.Generator:
+def _make_linear_eval_generator(
+    device: str,
+    train_task,
+    step: int,
+    seed_offset: int = 0,
+) -> torch.Generator:
     """Deterministic generator for linear eval-pool construction."""
     base_seed = int(getattr(train_task, "task_seed", 0))
     gen = torch.Generator(device=device)
-    gen.manual_seed(base_seed + 1_000_003 + int(step))
+    gen.manual_seed(base_seed + 1_000_003 + int(step) + int(seed_offset))
     return gen
 
 
@@ -125,7 +130,13 @@ def _get_hiddens(
         if verbose:
             logger.info("Creating eval task pool...")
 
-        eval_gen = _make_linear_eval_generator(dev, train_task, step)
+        linear_ood_seed_offset = int(kwargs.get("linear_ood_seed_offset", 0))
+        eval_gen = _make_linear_eval_generator(
+            dev,
+            train_task,
+            step,
+            seed_offset=linear_ood_seed_offset,
+        )
         eval_task_pool, k_minor = _create_eval_task_pool(
             train_task,
             K=n_ood,
@@ -570,7 +581,13 @@ def _get_hiddens_at_real_positions(
         if verbose:
             logger.info("Creating eval task pool...")
 
-        eval_gen = _make_linear_eval_generator(device, train_task, step)
+        linear_ood_seed_offset = int(kwargs.get("linear_ood_seed_offset", 0))
+        eval_gen = _make_linear_eval_generator(
+            device,
+            train_task,
+            step,
+            seed_offset=linear_ood_seed_offset,
+        )
         eval_task_pool, k_minor = _create_eval_task_pool(
             train_task,
             K=n_ood,

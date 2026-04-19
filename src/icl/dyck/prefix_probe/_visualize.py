@@ -92,6 +92,11 @@ def plot_2d_scatter(
     grid_res=500,
     save_dir=None,
     save_path=None,
+    color_by="hierarchical",
+    depth_cmap="viridis",
+    intra_depth_variation=0.0,
+    centroid_label_style="hex",
+    force_legend=False,
 ):
     """Produce one figure per prefix length with hierarchical colouring.
 
@@ -109,6 +114,32 @@ def plot_2d_scatter(
         If given, each figure is saved as ``<save_dir>/scatter_l<l>.png``.
     save_path : str | None
         Legacy single-file path (ignored when *save_dir* is set).
+    color_by : {"hierarchical", "depth"}, default "hierarchical"
+        Colouring scheme. ``"hierarchical"`` uses the prefix-tree position
+        (siblings share hues). ``"depth"`` colours each prefix by its
+        number of unmatched open parentheses (``sum(prefix)``) using a
+        sequential colormap; clusters at the same depth share a colour
+        and a discrete colorbar replaces the per-class legend.
+    depth_cmap : str, default "viridis"
+        Matplotlib colormap name used when ``color_by="depth"``.
+    intra_depth_variation : float in [0, 1], default 0.0
+        Only used with ``color_by="depth"``. Adds HSV value (brightness)
+        variation among prefixes that share the same depth so individual
+        clusters remain visually distinguishable. ``0`` keeps the legacy
+        behaviour (identical color per depth); ``~0.4`` is a good default
+        when you want siblings to be readable but still grouped by depth.
+        Hue is preserved, so the depth colorbar stays meaningful.
+    centroid_label_style : {"hex", "paren", "none"}, default "hex"
+        Text drawn at each cluster centroid when the per-class legend is
+        suppressed (i.e. ``n_cls > legend_max_classes`` and not
+        ``force_legend``). ``"paren"`` renders the actual Dyck prefix
+        such as ``"(()("``; ``"hex"`` keeps the compact hex encoding;
+        ``"none"`` omits centroid labels entirely.
+    force_legend : bool, default False
+        If True, always render the matplotlib legend with the actual
+        parenthesis strings as labels, regardless of *legend_max_classes*.
+        Useful when you want the legend instead of (or in addition to)
+        centroid annotations even with many classes.
 
     Returns
     -------
@@ -145,7 +176,19 @@ def plot_2d_scatter(
         y_np = y_all.numpy()
 
         prefixes = [class_to_prefix[l][c] for c in range(n_cls)]
-        color_map = _hierarchical_colors(prefixes)
+        if color_by == "depth":
+            color_map, depth_norm, depth_cmap_obj = _depth_colors(
+                prefixes,
+                cmap_name=depth_cmap,
+                intra_depth_variation=intra_depth_variation,
+            )
+        elif color_by == "hierarchical":
+            color_map = _hierarchical_colors(prefixes)
+            depth_norm = depth_cmap_obj = None
+        else:
+            raise ValueError(
+                f"color_by must be 'hierarchical' or 'depth', got {color_by!r}"
+            )
 
         fig, ax = plt.subplots(figsize=(7, 6))
         ax.tick_params(axis="both", labelsize=14)
@@ -201,17 +244,33 @@ def plot_2d_scatter(
                                        replace=False)
                 pts = pts[sub]
 
-            use_legend = n_cls <= legend_max_classes
+            use_legend = force_legend or n_cls <= legend_max_classes
             ax.scatter(
                 pts[:, 0], pts[:, 1],
                 c=[color], s=12, alpha=0.6,
                 edgecolors="white", linewidths=0.3,
                 label=paren_lbl if use_legend else None,
             )
+            if centroid_label_style == "paren":
+                centroid_lbl = paren_lbl
+            elif centroid_label_style == "hex":
+                centroid_lbl = hex_lbl
+            elif centroid_label_style == "none":
+                centroid_lbl = None
+            else:
+                raise ValueError(
+                    "centroid_label_style must be 'hex', 'paren' or 'none', "
+                    f"got {centroid_label_style!r}"
+                )
             centroids.append((pts[:, 0].mean(), pts[:, 1].mean(),
-                              hex_lbl, color))
+                              centroid_lbl, color))
 
-        if n_cls > legend_max_classes:
+        show_centroid_labels = (
+            not force_legend
+            and n_cls > legend_max_classes
+            and centroid_label_style != "none"
+        )
+        if show_centroid_labels:
             txt_size = max(7, 10 - n_cls * 0.02)
             bbox = dict(boxstyle="round,pad=0.15", facecolor="white",
                         edgecolor="none", alpha=0.7)
@@ -233,9 +292,44 @@ def plot_2d_scatter(
             ax.set_xlabel("Projection dim 1", fontsize=16)
             ax.set_ylabel("Projection dim 2", fontsize=16)
 
-        if n_cls <= legend_max_classes:
-            ax.legend(fontsize=10, markerscale=2.5, loc="best",
-                      framealpha=0.85, ncol=max(1, (n_cls + 4) // 5))
+        if color_by == "depth" and not force_legend:
+            import matplotlib as mpl
+            import matplotlib.colors as mcolors
+            depths_present = sorted({sum(p) for p in prefixes})
+            discrete_colors = [
+                depth_cmap_obj(depth_norm(d)) for d in depths_present
+            ]
+            discrete_cmap = mcolors.ListedColormap(discrete_colors)
+            if len(depths_present) == 1:
+                d0 = depths_present[0]
+                bounds = [d0 - 0.5, d0 + 0.5]
+            else:
+                bounds = [depths_present[0] - 0.5]
+                for a, b in zip(depths_present[:-1], depths_present[1:]):
+                    bounds.append((a + b) / 2.0)
+                bounds.append(depths_present[-1] + 0.5)
+            discrete_norm = mcolors.BoundaryNorm(
+                bounds, ncolors=len(discrete_colors)
+            )
+            sm = mpl.cm.ScalarMappable(norm=discrete_norm, cmap=discrete_cmap)
+            sm.set_array([])
+            cbar = fig.colorbar(
+                sm, ax=ax,
+                ticks=depths_present,
+                boundaries=bounds,
+                spacing="uniform",
+                pad=0.02,
+                drawedges=True,
+            )
+            cbar.set_label("number of unmatched '('", fontsize=14)
+            cbar.ax.tick_params(labelsize=12)
+            cbar.outline.set_linewidth(0.5)
+            cbar.dividers.set_color("white")
+            cbar.dividers.set_linewidth(1.0)
+        if force_legend or n_cls <= legend_max_classes:
+            legend_fontsize = max(6, 10 - 0.06 * n_cls) if force_legend else 10
+            ax.legend(fontsize=legend_fontsize, markerscale=2.5, loc="best",
+                      framealpha=0.85, ncol=max(1, (n_cls + 9) // 10))
 
         fig.tight_layout()
 
@@ -438,6 +532,57 @@ def _hierarchical_colors(prefixes, n_hue_levels=3):
 
         color_map[prefix] = mcolors.hsv_to_rgb([hue, sat, val])
     return color_map
+
+
+def _depth_colors(prefixes, cmap_name="viridis", intra_depth_variation=0.0):
+    """Map each prefix to a colour based on its number of unmatched '('.
+
+    The depth is ``sum(prefix)`` (since +1 = '(' and -1 = ')'). All
+    prefixes sharing a depth get the same hue (so the depth colorbar
+    stays meaningful), but when ``intra_depth_variation > 0`` their HSV
+    value (brightness) is spread across a band so individual clusters
+    remain visually distinguishable. Returns the colour map together
+    with the matplotlib ``Normalize`` and ``Colormap`` used, so the
+    caller can attach a matching colorbar.
+    """
+    import matplotlib as mpl
+    import matplotlib.colors as mcolors
+
+    depths = [sum(p) for p in prefixes]
+    d_min, d_max = min(depths), max(depths)
+
+    cmap = mpl.colormaps.get_cmap(cmap_name)
+    if d_min == d_max:
+        norm = mcolors.Normalize(vmin=d_min - 0.5, vmax=d_max + 0.5)
+    else:
+        norm = mcolors.Normalize(vmin=d_min, vmax=d_max)
+
+    var = float(max(0.0, min(1.0, intra_depth_variation)))
+
+    groups = {}
+    for p, d in zip(prefixes, depths):
+        groups.setdefault(d, []).append(p)
+
+    color_map = {}
+    for d, members in groups.items():
+        base_rgb = cmap(norm(d))[:3]
+        if var == 0.0 or len(members) == 1:
+            for p in members:
+                color_map[p] = tuple(base_rgb)
+            continue
+
+        h, s, v = mcolors.rgb_to_hsv(base_rgb)
+        v_lo = max(0.30, v - 0.45 * var)
+        v_hi = min(1.00, v + 0.45 * var)
+
+        sorted_members = sorted(members)
+        n = len(sorted_members)
+        for i, p in enumerate(sorted_members):
+            t = i / max(1, n - 1)
+            v_p = v_lo + t * (v_hi - v_lo)
+            color_map[p] = tuple(mcolors.hsv_to_rgb([h, s, v_p]))
+
+    return color_map, norm, cmap
 
 
 def _darken(color, factor=0.4):

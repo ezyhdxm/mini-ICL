@@ -20,6 +20,7 @@ import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SAVE_PATH = PROJECT_ROOT / "paper_figs" / "dyck_combined.png"
+SAVE_PATH_PROJECTION = PROJECT_ROOT / "paper_figs" / "dyck_projection.png"
 
 
 def _check_experiment_exists(task_name: str, exp_name: str) -> None:
@@ -103,11 +104,22 @@ def _draw_variance_r2(ax, exp_name, *, prefix_k=3, batch_size=2048,
 # ── Right panel: 2D prefix scatter ───────────────────────────────────────────
 
 def _draw_prefix_scatter(ax, probe, viz_data, probe_results, *,
-                         target_length=7, grid_res=300):
-    """Draw the 2D prefix scatter for *target_length* onto *ax*."""
+                         target_length=7, grid_res=300,
+                         color_by="depth", intra_depth_variation=0.3,
+                         depth_cmap="viridis",
+                         centroid_label_style="hex"):
+    """Draw the 2D prefix scatter for *target_length* onto *ax*.
+
+    ``centroid_label_style`` controls the text drawn at each cluster
+    centroid: ``"hex"`` (compact hex encoding), ``"paren"`` (the actual
+    Dyck prefix, e.g. ``"(()("``), or ``"none"`` to omit labels.
+    """
     from icl.dyck.prefix_probe._visualize import (
-        _hierarchical_colors, _darken, _prefix_to_hex,
+        _hierarchical_colors, _depth_colors, _darken,
+        _prefix_to_hex, _prefix_to_paren,
     )
+    import matplotlib as mpl
+    import matplotlib.colors as mcolors
 
     data_by_len        = viz_data["data_by_len"]
     prefix_to_class    = viz_data["prefix_to_class"]
@@ -118,7 +130,19 @@ def _draw_prefix_scatter(ax, probe, viz_data, probe_results, *,
     class_to_prefix = {v: k for k, v in prefix_to_class[l].items()}
     n_cls = n_classes_per_length[l]
     prefixes = [class_to_prefix[c] for c in range(n_cls)]
-    color_map = _hierarchical_colors(prefixes)
+    if color_by == "depth":
+        color_map, depth_norm, depth_cmap_obj = _depth_colors(
+            prefixes,
+            cmap_name=depth_cmap,
+            intra_depth_variation=intra_depth_variation,
+        )
+    elif color_by == "hierarchical":
+        color_map = _hierarchical_colors(prefixes)
+        depth_norm = depth_cmap_obj = None
+    else:
+        raise ValueError(
+            f"color_by must be 'hierarchical' or 'depth', got {color_by!r}"
+        )
 
     h_all = data_by_len[l]["hiddens"]
     y_all = data_by_len[l]["labels"]
@@ -163,7 +187,18 @@ def _draw_prefix_scatter(ax, probe, viz_data, probe_results, *,
               extent=[xx.min(), xx.max(), yy.min(), yy.max()],
               origin="lower", aspect="auto", interpolation="bilinear")
 
-    # Scatter points + centroid labels
+    if centroid_label_style == "hex":
+        _label_fn = _prefix_to_hex
+    elif centroid_label_style == "paren":
+        _label_fn = _prefix_to_paren
+    elif centroid_label_style == "none":
+        _label_fn = None
+    else:
+        raise ValueError(
+            "centroid_label_style must be 'hex', 'paren' or 'none', "
+            f"got {centroid_label_style!r}"
+        )
+
     centroids = []
     for c in range(n_cls):
         pts = z_all[y_np == c]
@@ -173,20 +208,59 @@ def _draw_prefix_scatter(ax, probe, viz_data, probe_results, *,
         ax.scatter(pts[:, 0], pts[:, 1],
                    c=[color], s=12, alpha=0.6,
                    edgecolors="white", linewidths=0.3)
-        centroids.append((pts[:, 0].mean(), pts[:, 1].mean(),
-                          _prefix_to_hex(prefixes[c]), color))
+        if _label_fn is not None:
+            centroids.append((pts[:, 0].mean(), pts[:, 1].mean(),
+                              _label_fn(prefixes[c]), color))
 
-    txt_size = max(7, 10 - n_cls * 0.02)
-    bbox_props = dict(boxstyle="round,pad=0.15",
-                      facecolor="white", edgecolor="none", alpha=0.7)
-    for cx, cy, lbl, color in centroids:
-        ax.annotate(lbl, (cx, cy),
-                    fontsize=txt_size, fontweight="bold",
-                    ha="center", va="center",
-                    color=_darken(color), bbox=bbox_props)
+    if centroids:
+        txt_size = max(7, 10 - n_cls * 0.02)
+        bbox_props = dict(boxstyle="round,pad=0.15",
+                          facecolor="white", edgecolor="none", alpha=0.7)
+        font_kwargs = {}
+        if centroid_label_style == "paren":
+            font_kwargs["family"] = "monospace"
+        for cx, cy, lbl, color in centroids:
+            ax.annotate(lbl, (cx, cy),
+                        fontsize=txt_size, fontweight="bold",
+                        ha="center", va="center",
+                        color=_darken(color), bbox=bbox_props,
+                        **font_kwargs)
 
     ax.set_xlabel("Projection dim 1")
     ax.set_ylabel("Projection dim 2")
+
+    if color_by == "depth":
+        depths_present = sorted({sum(p) for p in prefixes})
+        discrete_colors = [
+            depth_cmap_obj(depth_norm(d)) for d in depths_present
+        ]
+        discrete_cmap = mcolors.ListedColormap(discrete_colors)
+        if len(depths_present) == 1:
+            d0 = depths_present[0]
+            bounds = [d0 - 0.5, d0 + 0.5]
+        else:
+            bounds = [depths_present[0] - 0.5]
+            for a, b in zip(depths_present[:-1], depths_present[1:]):
+                bounds.append((a + b) / 2.0)
+            bounds.append(depths_present[-1] + 0.5)
+        discrete_norm = mcolors.BoundaryNorm(
+            bounds, ncolors=len(discrete_colors)
+        )
+        sm = mpl.cm.ScalarMappable(norm=discrete_norm, cmap=discrete_cmap)
+        sm.set_array([])
+        cbar = ax.figure.colorbar(
+            sm, ax=ax,
+            ticks=depths_present,
+            boundaries=bounds,
+            spacing="uniform",
+            pad=0.02,
+            drawedges=True,
+        )
+        cbar.set_label("number of unmatched '('", fontsize=10)
+        cbar.ax.tick_params(labelsize=9)
+        cbar.outline.set_linewidth(0.5)
+        cbar.dividers.set_color("white")
+        cbar.dividers.set_linewidth(1.0)
 
 
 # ── CLI & main ────────────────────────────────────────────────────────────────
@@ -298,8 +372,21 @@ def main():
 
     SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(SAVE_PATH, dpi=300, bbox_inches="tight")
-    log.info(f"Saved → {SAVE_PATH}  (total {time.time() - t_total:.1f}s)")
+    log.info(f"Saved → {SAVE_PATH}")
     plt.close(fig)
+
+    # ── Standalone projection figure (parenthesis centroid labels) ────────────
+    log.info("Drawing standalone projection figure …")
+    fig_proj, ax_proj = plt.subplots(figsize=(7.5, 6.5))
+    _draw_prefix_scatter(
+        ax_proj, probe, viz_data, probe_results,
+        target_length=args.target_length,
+        centroid_label_style="paren",
+    )
+    fig_proj.tight_layout()
+    fig_proj.savefig(SAVE_PATH_PROJECTION, dpi=300, bbox_inches="tight")
+    log.info(f"Saved → {SAVE_PATH_PROJECTION}  (total {time.time() - t_total:.1f}s)")
+    plt.close(fig_proj)
 
 
 if __name__ == "__main__":
