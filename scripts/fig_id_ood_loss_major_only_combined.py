@@ -5,7 +5,7 @@ Expects experiments trained with ``run_major_only_sweep.py`` (or equivalent):
 ``n_tasks`` swept over powers of two, ``n_minor_tasks=1``, ``p_minor=1e-12``,
 same step/warmup settings as ``run_pipeline.py`` / ``run_major_only_sweep.py``.
 
-Usage (from ``mini-ICL`` root)::
+Usage (from the project root)::
 
     uv run python scripts/fig_id_ood_loss_major_only_combined.py
 """

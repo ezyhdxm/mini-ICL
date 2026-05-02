@@ -174,3 +174,126 @@ def plot_beta_alpha_on_ax(
             ax.set_xlabel("Position $t$")
 
     return y_lo, y_hi
+
+
+def plot_beta_alpha_one_col_on_ax(
+    ax,
+    results_by_task: Dict[int, Dict[str, np.ndarray]],
+    k_major: int,
+    tid: int,
+    col: int,
+    pidx: np.ndarray,
+    *,
+    project_beta_simplex: bool = False,
+    beta_errbar: str = "quantile",
+    corner_colors: Tuple[str, ...] = _DEFAULT_COLORS,
+    show_ylabel: bool = True,
+    show_xlabel: bool = True,
+    add_labels: bool = False,
+) -> Tuple[float, float]:
+    """Draw a *single* (alpha_k, beta_k) pair on ``ax``.
+
+    This is the per-task variant of :func:`plot_beta_alpha_on_ax`: instead of
+    overlaying all K major tasks on one axis, it draws only the column ``col``
+    of the ``(B, T, K)`` arrays. Used by the per-task buildup figure on the
+    P3 alignment slide.
+    """
+    import matplotlib.colors as mcolors
+
+    corner_rgb = [mcolors.to_rgb(c) for c in corner_colors]
+    T_plot = len(pidx)
+    ts = pidx.astype(float)
+
+    # Subsampling pattern matches the multi-column variant so visual density
+    # is consistent across figures: dense for the first few positions, then
+    # one-in-``thin_step`` thereafter.
+    dense_cutoff = 5
+    thin_step = 2
+    sm = np.zeros(T_plot, dtype=bool)
+    sm[:dense_cutoff] = True
+    for i in range(dense_cutoff, T_plot):
+        if (i - dense_cutoff) % thin_step == 0:
+            sm[i] = True
+
+    beta_all = results_by_task[tid]["beta"][:, pidx, :]  # (B, T_plot, K)
+    post_all = results_by_task[tid]["post"][:, pidx, :]  # (B, T_plot, K)
+
+    beta_mean = beta_all.mean(axis=0)
+    beta_std = beta_all.std(axis=0)
+
+    if project_beta_simplex:
+        for t in range(beta_mean.shape[0]):
+            v = beta_mean[t]
+            u = np.sort(v)[::-1]
+            cssv = np.cumsum(u) - 1.0
+            rho = np.nonzero(u > cssv / np.arange(1, len(u) + 1))[0][-1]
+            theta = cssv[rho] / (rho + 1.0)
+            beta_mean[t] = np.maximum(v - theta, 0.0)
+
+    if beta_errbar == "quantile":
+        beta_q_lo = np.percentile(beta_all, 25, axis=0)
+        beta_q_hi = np.percentile(beta_all, 75, axis=0)
+
+    post_mean = post_all.mean(axis=0)
+    post_q10 = np.percentile(post_all, 10, axis=0)
+    post_q90 = np.percentile(post_all, 90, axis=0)
+
+    c = corner_rgb[col % len(corner_rgb)]
+    mk = _MARKERS[col % len(_MARKERS)]
+
+    if beta_errbar == "quantile":
+        yerr_lo = np.clip(beta_mean[sm, col] - beta_q_lo[sm, col], 0, None)
+        yerr_hi = np.clip(beta_q_hi[sm, col] - beta_mean[sm, col], 0, None)
+        yerr = [yerr_lo, yerr_hi]
+    else:
+        yerr = beta_std[sm, col]
+
+    if project_beta_simplex:
+        bm = beta_mean[sm, col]
+        if isinstance(yerr, list):
+            yerr[0] = np.minimum(yerr[0], bm)
+            yerr[1] = np.minimum(yerr[1], 1.0 - bm)
+        else:
+            yerr = [np.minimum(yerr, bm), np.minimum(yerr, 1.0 - bm)]
+
+    beta_label = rf"$\beta_{{{col + 1}}}$" if add_labels else None
+    alpha_label = rf"$\alpha_{{{col + 1}}}$" if add_labels else None
+
+    ax.errorbar(
+        ts[sm], beta_mean[sm, col],
+        yerr=yerr,
+        fmt=mk, color=c, markersize=4.5, linewidth=1.2,
+        capsize=2, capthick=0.8, elinewidth=0.8,
+        label=beta_label, zorder=3,
+    )
+    ax.plot(
+        ts, post_mean[:, col], color=c, lw=2.2, ls="--", alpha=0.9,
+        label=alpha_label, zorder=2,
+    )
+    ax.fill_between(
+        ts, post_q10[:, col], post_q90[:, col],
+        color=c, alpha=0.15, linewidth=0, zorder=1,
+    )
+
+    if beta_errbar == "quantile":
+        data_lo = beta_q_lo[:, col].ravel()
+        data_hi = beta_q_hi[:, col].ravel()
+    else:
+        data_lo = (beta_mean[:, col] - beta_std[:, col]).ravel()
+        data_hi = (beta_mean[:, col] + beta_std[:, col]).ravel()
+
+    all_vals = np.concatenate(
+        [data_lo, data_hi, post_q10[:, col].ravel(), post_q90[:, col].ravel()]
+    )
+    y_lo = float(np.nanmin(all_vals))
+    y_hi = float(np.nanmax(all_vals))
+
+    ax.grid(axis="y", alpha=0.3)
+    if show_ylabel:
+        k_major_label = k_major
+        task_label = f"Task {tid + 1}" if tid < k_major_label else f"OOD {tid + 1}"
+        ax.set_ylabel(task_label)
+    if show_xlabel:
+        ax.set_xlabel("Position $t$")
+
+    return y_lo, y_hi

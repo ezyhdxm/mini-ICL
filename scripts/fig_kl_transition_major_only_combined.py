@@ -11,7 +11,7 @@ constructed with the **opposite** prior from training: p_major ≈ 0, p_minor �
 so it represents the ideal predictor for a minor-task-dominated distribution.
 Y-axis shows log₂(N_major) with N_major tick labels so cells are evenly spaced.
 
-Usage (from ``mini-ICL`` root)::
+Usage (from the project root)::
 
     uv run python scripts/fig_kl_transition_major_only_combined.py
 """

@@ -25,7 +25,6 @@ venv/
 env/
 ENV/
 .venv
-mini-icl/
 
 # IDEs
 .vscode/
@@ -48,8 +47,7 @@ htmlcov/
 # Results and outputs
 # Ignore everything in results/ by default
 results/*
-# But track specific code/documentation files
-!results/README_BROWSER.md
+# But track the experiment browser UI
 !results/experiment_browser.html
 # Ignore subdirectories (experiment data)
 results/**/
@@ -68,8 +66,11 @@ Thumbs.db
 
 # Project specific
 wandb/
+**/wandb/
 *.log
 legacy/
 beta/
-representation_geometry_two_modes/
+
+# Editor / agent local config (may leak absolute paths)
+.claude/
 

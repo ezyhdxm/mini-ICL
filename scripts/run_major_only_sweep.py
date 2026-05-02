@@ -4,7 +4,7 @@ Sweeps ``n_tasks`` (major-task count) over ``2**min_exp .. 2**max_exp`` inclusiv
 with ``n_minor_tasks=1`` and ``p_minor=1e-12``, matching the ``k=-1`` branch in
 ``unified_train`` (dummy minor pool, negligible minor probability).
 
-Run from the ``mini-ICL`` repo root (same as ``run_pipeline.py``), e.g.::
+Run from the project root (same as ``run_pipeline.py``), e.g.::
 
     uv run python scripts/run_major_only_sweep.py
 """

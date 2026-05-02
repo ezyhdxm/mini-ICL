@@ -194,6 +194,13 @@ def project_with_r2_trajectories_group_colors_mpl(
     align_major_use_rotation=True,
     align_major_ref_dir=(1.0, 0.0),
     align_major_rotate_about="major1",
+
+    # --- selective rendering of trajectories (does NOT affect projection) ---
+    # None  -> draw all trajectories of that group
+    # []    -> draw no trajectories of that group
+    # [k,...] -> draw only trajectories whose index is in the list
+    render_indices_major=None,
+    render_indices_ood=None,
 ):
     """
     Key behavior:
@@ -362,6 +369,8 @@ def project_with_r2_trajectories_group_colors_mpl(
         show_pow2_anchors=show_pow2_anchors,
         include_last=include_last, end_marker_alpha=end_marker_alpha,
         end_marker_edge_color=end_marker_edge_color, end_marker_edge_width=end_marker_edge_width,
+        render_indices_major=render_indices_major,
+        render_indices_ood=render_indices_ood,
     )
 
     # ============================================================

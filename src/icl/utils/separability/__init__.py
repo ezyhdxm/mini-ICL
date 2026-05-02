@@ -52,6 +52,7 @@ from icl.utils.separability._averaging_r2 import (  # noqa: F401
 )
 from icl.utils.separability._beta_alpha_traj import (  # noqa: F401
     plot_beta_alpha_on_ax,
+    plot_beta_alpha_one_col_on_ax,
 )
 from icl.utils.separability._kl_transition import (  # noqa: F401
     plot_kl_transition_on_ax,

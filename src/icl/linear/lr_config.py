@@ -60,6 +60,6 @@ def get_config() -> ConfigDict:
     config.eval.save_every = 200
 
     config.wandb = ConfigDict()
-    config.wandb.project = "mini-ICL-linear"  # Specify wandb project
+    config.wandb.project = "icl-linear"  # Specify wandb project
 
     return config

@@ -65,17 +65,21 @@ def _fit_r2_mlp(X, Y, hidden_dim=64, n_epochs=200, lr=1e-3):
     return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
 
-def _compute_running_beta_hat(demo_data, demo_target):
+def _compute_running_beta_hat(demo_data, demo_target, lam: float = 1e-4):
     """Running ridge regression estimate at each position t.
 
     ŵₜ = (Σ_{s≤t} xₛxₛᵀ + λI)⁻¹ (Σ_{s≤t} xₛyₛ)
+
+    With ``lam`` near 0 this collapses to the (min-norm) running OLS estimate.
+    Setting ``lam = σ² / s²`` (noise variance over prior variance) recovers the
+    M2 posterior-predictive mean of the Bayesian ridge (Appendix M2 derivation).
 
     Returns (B, T, D).
     """
     B, T, D = demo_data.shape
     XtY = torch.zeros(B, D, device=demo_data.device, dtype=demo_data.dtype)
     XtX = torch.zeros(B, D, D, device=demo_data.device, dtype=demo_data.dtype)
-    reg = 1e-4 * torch.eye(D, device=demo_data.device, dtype=demo_data.dtype)
+    reg = float(lam) * torch.eye(D, device=demo_data.device, dtype=demo_data.dtype)
     out = torch.zeros(B, T, D, device=demo_data.device, dtype=demo_data.dtype)
     for t in range(T):
         x_t, y_t = demo_data[:, t, :], demo_target[:, t]
@@ -305,6 +309,7 @@ def _collect_features(
     model, layer, task_obj, train_task,
     *, device, B, eval_positions, n_dims, n_samples,
     extraction_point: str = "post_attn",
+    beta_lam: float = 1e-4,
 ):
     """Collect hidden states and diagnostic feature vectors at *eval_positions*.
 
@@ -312,7 +317,9 @@ def _collect_features(
 
     - h      : hidden state at layer l (post_attn or post_mlp depending on
                *extraction_point*)
-    - beta   : running ridge estimate  ŵₜ = (XᵀX + λI)⁻¹ XᵀY
+    - beta   : running ridge estimate  ŵₜ = (XᵀX + λI)⁻¹ XᵀY, with λ controlled
+               by ``beta_lam`` (set to ``σ² / s²`` to recover the M2 posterior
+               mean; default ``1e-4`` reproduces the legacy near-OLS behaviour)
     - xty    : running average  XᵀY / t
     - xt     : current input xₜ
     - pgauss : P(z = K+1 | X, Y) — posterior probability that the
@@ -359,7 +366,7 @@ def _collect_features(
         finally:
             handle.remove()
 
-        beta = _compute_running_beta_hat(data, target).index_select(1, point_pos)
+        beta = _compute_running_beta_hat(data, target, lam=beta_lam).index_select(1, point_pos)
         xty = _compute_running_xty(data, target).index_select(1, point_pos)
         xt = data.index_select(1, point_pos)
 
@@ -790,6 +797,7 @@ def _probe_and_filter_vopt(
     *, device, B, eval_positions, n_dims, n_samples_probe,
     r2_filter_threshold=0.1,
     extraction_point: str = "post_attn",
+    beta_lam: float = 1e-4,
 ):
     """Probe V_opt with known features and filter to interpretable directions.
 
@@ -815,12 +823,14 @@ def _probe_and_filter_vopt(
         device=device, B=B, eval_positions=eval_positions,
         n_dims=n_dims, n_samples=n_samples_probe,
         extraction_point=extraction_point,
+        beta_lam=beta_lam,
     )
     feat_ood = _collect_features(
         model, layer, ood_task_eval, train_task,
         device=device, B=B, eval_positions=eval_positions,
         n_dims=n_dims, n_samples=n_samples_probe,
         extraction_point=extraction_point,
+        beta_lam=beta_lam,
     )
 
     proj_maj = feat_maj["h"] @ V_opt_cpu
@@ -1060,6 +1070,7 @@ def intervene_optimal_orth_direction(
     n_rand_int: int = 5,
     extraction_point: str = "post_attn",
     probe_method: str = "ols",
+    r2_filter_threshold: float = 0.1,
     verbose: bool = False,
     print_summary: bool = True,
 ) -> dict:
@@ -1128,6 +1139,11 @@ def intervene_optimal_orth_direction(
     n_dims = int(config.task.n_dims)
     n_embd = int(config.model.n_embd)
     noise_scale = float(train_task.noise_scale)
+    task_scale = float(getattr(train_task, "task_scale", 1.0))
+    # M2 ridge penalty: λ = σ² / s²  (noise variance / prior variance).
+    # Matches the closed-form posterior mean derived in
+    # Appendix "Details about extrapolative task learning mode" for E2.
+    beta_lam = (noise_scale ** 2) / max(task_scale ** 2, 1e-12)
 
     if fit_positions is None:
         fit_positions = list(range(min(10, n_points), n_points))
@@ -1218,6 +1234,8 @@ def intervene_optimal_orth_direction(
         device=device, B=B, eval_positions=eval_positions,
         n_dims=n_dims, n_samples_probe=n_samples_probe,
         extraction_point=extraction_point,
+        beta_lam=beta_lam,
+        r2_filter_threshold=r2_filter_threshold,
     )
 
     # ---- 5. V_opt summary stats ----
@@ -1586,9 +1604,9 @@ def plot_optimal_orth_direction_across_layers(
     # ── Plot 3: R² — enriched probes → V_opt ─────────────────────────────
     _FEAT_LATEX = {
         "X^TY/t":         r"$X^\top Y / t$",
-        "beta_hat":        r"$\hat{\beta}$",
+        "beta_hat":        r"$\hat{w}$",
         "x_t":             r"$x_t$",
-        "x_t @ beta_hat":  r"$x_t \cdot \hat{\beta}$",
+        "x_t @ beta_hat":  r"$x_t \cdot \hat{w}$",
         "P(Z=K+1)":        r"$P(Z\!=\!K\!+\!1)$",
         "||x_t||^2":       r"$\|x_t\|^2$",
         "P(Z)":            r"$P(Z)$",

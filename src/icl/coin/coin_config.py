@@ -22,7 +22,7 @@ def get_config_coin() -> ConfigDict:
     config.work_dir = os.path.join("results", TASKNAME)  # Specify working directory
     config.ngram = 3  # N-gram order for the n-gram learner
     config.wandb = ConfigDict()
-    config.wandb.project = "mini-ICL-coin"  # Specify wandb project
+    config.wandb.project = "icl-coin"  # Specify wandb project
 
     #####################  
     #    Tasks          #

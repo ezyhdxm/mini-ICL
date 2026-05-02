@@ -34,6 +34,9 @@ def _draw_trajectories(
     show_pow2_anchors,
     # end marker params
     include_last, end_marker_alpha, end_marker_edge_color, end_marker_edge_width,
+    # selective rendering (filters trajectories without affecting projection)
+    render_indices_major=None,
+    render_indices_ood=None,
 ):
     """Draw all trajectory lines, scatter points, and end markers."""
 
@@ -192,11 +195,22 @@ def _draw_trajectories(
     _major_lw = float(major_line_width) if major_line_width is not None else None
     _ood_alpha = float(ood_line_alpha_factor)
 
-    for k in idx_major.tolist():
+    _all_major = idx_major.tolist()
+    _all_ood = idx_ood.tolist()
+    _maj_to_draw = (
+        _all_major if render_indices_major is None
+        else [int(k) for k in _all_major if int(k) in set(int(x) for x in render_indices_major)]
+    )
+    _ood_to_draw = (
+        _all_ood if render_indices_ood is None
+        else [int(k) for k in _all_ood if int(k) in set(int(x) for x in render_indices_ood)]
+    )
+
+    for k in _maj_to_draw:
         _draw_one(int(k), X_proj[int(k)], _major_rgb_for_k(int(k)), major_linestyle, "major",
                   lw_override=_major_lw)
 
-    for k in idx_ood.tolist():
+    for k in _ood_to_draw:
         rgb, ls = ood_style[int(k)]
         _draw_one(int(k), X_proj[int(k)], rgb, ls, "ood", t_show_local=t_show_ood,
                   alpha_scale=_ood_alpha)

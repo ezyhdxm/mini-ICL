@@ -101,6 +101,16 @@ def parse_args():
         default=0,
         help="Integer offset added to the deterministic linear OOD sampling seed.",
     )
+    p.add_argument(
+        "--ood-far-oversample",
+        type=int,
+        default=1,
+        help=(
+            "If >1, sample (this * n_ood) candidate OOD weights and keep the n_ood with "
+            "the smallest projected variance fraction onto the majority span. Useful for "
+            "demos that want OOD trajectories to stay clearly outside the simplex (small R^2)."
+        ),
+    )
     p.add_argument("--B", type=int, default=128, help="Batch size per task for hidden-state extraction.")
     p.add_argument(
         "--n-group",
@@ -149,6 +159,15 @@ def parse_args():
     )
     p.add_argument("--outdir", type=str, default=str(PROJECT_ROOT / "paper_figs"), help="Output directory.")
     p.add_argument("--stem", type=str, default=None, help="Output PNG basename without extension.")
+    p.add_argument(
+        "--dump-npz",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Optional path to dump the full kwargs dict for project_with_r2_trajectories_group_colors_mpl. "
+             "Saved as an object pickle inside an .npz file under key 'plot_kw'. "
+             "Allows downstream scripts (e.g. fig_simplex_buildup.py) to replay the exact projection.",
+    )
     p.add_argument(
         "--title",
         type=str,
@@ -315,6 +334,7 @@ def main():
         B=args.B,
         extraction_point=args.extraction_point,
         linear_ood_seed_offset=args.ood_seed_offset,
+        ood_far_oversample=args.ood_far_oversample,
     )
 
     hiddens_layer = hiddens[layer_idx].to(torch.float32)  # (K, T, B, D)
@@ -416,6 +436,12 @@ def main():
     )
     if args.legend_r2:
         plot_kw["legend_r2_values"] = list(args.legend_r2)
+
+    if args.dump_npz is not None:
+        dump_path = args.dump_npz
+        os.makedirs(os.path.dirname(os.path.abspath(dump_path)) or ".", exist_ok=True)
+        np.savez(dump_path, plot_kw=np.array(plot_kw, dtype=object))
+        log.info("Dumped plot kwargs -> %s", dump_path)
 
     fig, ax, *_ = project_with_r2_trajectories_group_colors_mpl(**plot_kw)
     ax.set_aspect(0.85, adjustable="datalim")

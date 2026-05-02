@@ -131,6 +131,7 @@ def _get_hiddens(
             logger.info("Creating eval task pool...")
 
         linear_ood_seed_offset = int(kwargs.get("linear_ood_seed_offset", 0))
+        ood_far_oversample = int(kwargs.get("ood_far_oversample", 1))
         eval_gen = _make_linear_eval_generator(
             dev,
             train_task,
@@ -144,6 +145,7 @@ def _get_hiddens(
             device=dev,
             n_minor=n_minor,
             generator=eval_gen,
+            ood_far_oversample=ood_far_oversample,
         )
         eval_task = _setup_eval_task(config, eval_task_pool, B, dev)
         if verbose:
@@ -582,6 +584,7 @@ def _get_hiddens_at_real_positions(
             logger.info("Creating eval task pool...")
 
         linear_ood_seed_offset = int(kwargs.get("linear_ood_seed_offset", 0))
+        ood_far_oversample = int(kwargs.get("ood_far_oversample", 1))
         eval_gen = _make_linear_eval_generator(
             device,
             train_task,
@@ -595,6 +598,7 @@ def _get_hiddens_at_real_positions(
             device=device,
             n_minor=n_minor,
             generator=eval_gen,
+            ood_far_oversample=ood_far_oversample,
         )
         eval_task = _setup_eval_task(config, eval_task_pool, B, device)
 
