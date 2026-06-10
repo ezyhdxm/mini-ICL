@@ -101,6 +101,10 @@ def plot_kl_model_vs_two_bayes_latent(
         step = config.training.num_epochs
     model, _ = nu.load_checkpoint(config, step=step, exp_name=exp_name, return_actual_step=True)
     model.eval().to(config.device)
+    # Ensure the sampler's transition matrices live on the same device as the
+    # model (else the Bayesian-baseline torch.cat mixes cpu/cuda tensors).
+    if hasattr(sampler, "to"):
+        sampler.to(config.device)
 
     if int(getattr(sampler, "order", 1)) != 1:
         raise ValueError("plot_kl_model_vs_two_bayes_latent currently supports order=1 only.")
