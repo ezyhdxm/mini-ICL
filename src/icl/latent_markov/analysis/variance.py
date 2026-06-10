@@ -35,6 +35,7 @@ def _get_hiddens_cached(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     state: str = "hidden",
+    max_tasks: Optional[int] = None,
 ) -> tuple:
     """Return (all_hiddens, token_info), reusing cache when parameters match."""
     key = (
@@ -47,6 +48,7 @@ def _get_hiddens_cached(
         post_layernorm,
         extraction_point,
         state,
+        max_tasks,
     )
     if key in _hiddens_cache:
         if verbose:
@@ -65,6 +67,7 @@ def _get_hiddens_cached(
         post_layernorm=post_layernorm,
         extraction_point=extraction_point,
         state=state,
+        max_tasks=max_tasks,
     )
     _hiddens_cache.clear()
     _hiddens_cache[key] = result
@@ -88,6 +91,7 @@ def get_token_conditioned_hiddens(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     state: str = "hidden",
+    max_tasks: Optional[int] = None,
 ) -> tuple:
     """
     Get token-conditioned hidden representations for Latent Markov task (non-padded).
@@ -157,6 +161,7 @@ def get_token_conditioned_hiddens(
         post_layernorm=post_layernorm,
         extraction_point=extraction_point,
         state=state,
+        max_tasks=max_tasks,
     )
 
     if verbose:
@@ -193,6 +198,7 @@ def plot_task_vector_r2_latent(
     show_ylabel: bool = True,
     print_summary: bool = True,
     task_batch_size: int = 8,
+    max_tasks: Optional[int] = None,
 ) -> dict:
     """Task-token vector R² for the Latent Markov task.
 
@@ -236,6 +242,7 @@ def plot_task_vector_r2_latent(
         task_batch_size=task_batch_size,
         post_layernorm=post_layernorm,
         extraction_point=extraction_point,
+        max_tasks=max_tasks,
     )
 
     if layers is None:
@@ -679,6 +686,7 @@ def plot_p1_variance(
     show: bool = True,
     title: Optional[str] = None,
     task_batch_size: int = 8,
+    max_tasks: Optional[int] = None,
 ) -> dict:
     """
     Compute and plot P1 variance (normalized conditional residual variance)
@@ -727,6 +735,7 @@ def plot_p1_variance(
     all_hiddens, token_info = _get_hiddens_cached(
         exp_name, layers, batch_size, positions_of_interest, n_minor, step, verbose,
         task_batch_size=task_batch_size,
+        max_tasks=max_tasks,
     )
 
     L = all_hiddens.shape[0]

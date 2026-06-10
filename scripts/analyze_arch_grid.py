@@ -67,6 +67,9 @@ def main():
     ap.add_argument("--max-lambda-k", type=int, default=64,
                     help="skip the lambda/interpolation analysis when n_tasks exceeds "
                          "this (it is a small-K analysis; dense over K is infeasible at K=1024)")
+    ap.add_argument("--max-tasks", type=int, default=None,
+                    help="cap tasks analysed in variance/R2 (e.g. 32) so large-K cells "
+                         "(K=1024) are tractable; statistics estimate fine from a subsample")
     args = ap.parse_args()
 
     from icl.latent_markov.analysis.variance import (
@@ -96,11 +99,13 @@ def main():
     analyses = [
         ("p1_variance",
          lambda e: plot_p1_variance(e, batch_size=args.batch_size,
-                                    positions_of_interest=pos, show=False), None),
+                                    positions_of_interest=pos, max_tasks=args.max_tasks,
+                                    show=False), None),
         ("beta_alpha_fig3", _beta_alpha_fig3, args.max_lambda_k),
         ("task_vector_r2",
          lambda e: plot_task_vector_r2_latent(e, batch_size=args.batch_size,
-                                              positions_of_interest=pos, show=False), None),
+                                              positions_of_interest=pos, max_tasks=args.max_tasks,
+                                              show=False), None),
     ]
 
     with open(args.manifest) as f:

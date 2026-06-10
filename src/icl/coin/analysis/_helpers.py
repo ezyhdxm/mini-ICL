@@ -196,9 +196,15 @@ def compute_hiddens_token_conditioned_coin(
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
     state: str = "hidden",
+    max_tasks: Optional[int] = None,
 ) -> Tuple[torch.Tensor, dict]:
     """
     Token-conditioned hidden extraction on non-padded sequences.
+
+    ``max_tasks`` caps the number of tasks analysed (uses the first ``max_tasks``
+    of the pool). Essential for large major pools (e.g. K=1024) where iterating
+    every task is prohibitively slow; the variance/R2 statistics estimate fine
+    from a task subsample.
 
     Non-padded counterpart of ``compute_hiddens_token_conditioned_coin_latent``.
 
@@ -263,6 +269,9 @@ def compute_hiddens_token_conditioned_coin(
     # ------------------------------------------------------------------
     # Step 1: collect tokens at each position across all tasks (CPU only)
     # ------------------------------------------------------------------
+    if max_tasks is not None:
+        n_tasks = min(n_tasks, int(max_tasks))
+
     all_tokens_by_position = {p: [] for p in positions_of_interest}
 
     for task_idx in range(n_tasks):
