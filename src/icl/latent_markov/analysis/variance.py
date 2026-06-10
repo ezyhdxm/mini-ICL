@@ -34,6 +34,7 @@ def _get_hiddens_cached(
     task_batch_size: int = 8,
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
+    state: str = "hidden",
 ) -> tuple:
     """Return (all_hiddens, token_info), reusing cache when parameters match."""
     key = (
@@ -45,6 +46,7 @@ def _get_hiddens_cached(
         step,
         post_layernorm,
         extraction_point,
+        state,
     )
     if key in _hiddens_cache:
         if verbose:
@@ -62,6 +64,7 @@ def _get_hiddens_cached(
         task_batch_size=task_batch_size,
         post_layernorm=post_layernorm,
         extraction_point=extraction_point,
+        state=state,
     )
     _hiddens_cache.clear()
     _hiddens_cache[key] = result
@@ -84,6 +87,7 @@ def get_token_conditioned_hiddens(
     task_batch_size: int = 8,
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
+    state: str = "hidden",
 ) -> tuple:
     """
     Get token-conditioned hidden representations for Latent Markov task (non-padded).
@@ -152,6 +156,7 @@ def get_token_conditioned_hiddens(
         task_batch_size=task_batch_size,
         post_layernorm=post_layernorm,
         extraction_point=extraction_point,
+        state=state,
     )
 
     if verbose:

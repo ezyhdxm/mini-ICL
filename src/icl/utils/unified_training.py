@@ -4,6 +4,7 @@ import torch
 from typing import Optional
 
 from icl.models.base_models import Transformer
+from icl.models.factory import build_model
 from icl.utils.train import train_model_with_plot
 from icl.linear.train_linear import train
 from icl.utils.unified_path_finder import unified_get_config
@@ -117,7 +118,7 @@ def unified_train(
             return train(config)
         else:
             config.vocab_size = vocab_size
-            model = Transformer(config)
+            model = build_model(config)
             model = model.to(config.device)
             return train_model_with_plot(model, config, show=False, verbose=False)
     finally:

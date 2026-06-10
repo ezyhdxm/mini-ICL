@@ -15,6 +15,12 @@ from icl.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+def _model_hidden_dim(model, config) -> int:
+    """Width of the per-layer hidden state: ``hidden_size`` for recurrent models
+    (RNN/LSTM), else the Transformer's ``config.model.emb_dim``."""
+    return int(getattr(model, "hidden_size", None) or config.model.emb_dim)
+
+
 @torch.no_grad()
 def extract_hidden_multi_coin_latent(
     model: nn.Module,
@@ -23,12 +29,28 @@ def extract_hidden_multi_coin_latent(
     task_pos: torch.Tensor,
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
+    state: str = "hidden",
 ) -> torch.Tensor:
     """Extract hidden states at specified positions via forward hooks.
 
     Returns shape ``(L, batch_size, n_positions, n_embd)`` where
     ``L = len(layers)``, ``n_positions = len(task_pos)``.
+
+    For non-Transformer architectures (RNN/LSTM, whose layers have no
+    ``attn_block``), we delegate to the generic per-layer extractor. ``state``
+    selects ``"hidden"`` (h_t, all archs) or ``"cell"`` (c_t, LSTM only);
+    ``post_layernorm``/``extraction_point`` are Transformer-only and ignored.
     """
+    is_transformer = hasattr(model.layers[0], "attn_block")
+    if not is_transformer:
+        from icl.models.hidden_extractor import extract_layer_hiddens
+        full = extract_layer_hiddens(model, batch_data, layers=layers, state=state)
+        return full.index_select(2, task_pos.to(full.device))  # (L, B, P, D)
+    if state != "hidden":
+        raise ValueError(
+            f"state={state!r} is only valid for LSTM models, not the Transformer."
+        )
+
     n_layers = len(model.layers)
     layer_set = set(layers)
     cache = {}
@@ -112,7 +134,7 @@ def compute_hiddens_multi_coin(
     device = config.device
     n_tasks = sampler.n_major_tasks + sampler.n_minor_tasks
     seq_len = sampler.seq_len
-    n_embd = config.model.emb_dim
+    n_embd = _model_hidden_dim(model, config)
 
     if layers is None:
         layers = list(range(len(model.layers)))
@@ -173,6 +195,7 @@ def compute_hiddens_token_conditioned_coin(
     task_batch_size: int = 8,
     post_layernorm: bool = False,
     extraction_point: str = "post_attn",
+    state: str = "hidden",
 ) -> Tuple[torch.Tensor, dict]:
     """
     Token-conditioned hidden extraction on non-padded sequences.
@@ -221,7 +244,7 @@ def compute_hiddens_token_conditioned_coin(
     device = config.device
     n_tasks = sampler.n_major_tasks + sampler.n_minor_tasks
     seq_len = sampler.seq_len
-    n_embd = config.model.emb_dim
+    n_embd = _model_hidden_dim(model, config)
 
     if layers is None:
         layers = list(range(len(model.layers)))
@@ -315,6 +338,7 @@ def compute_hiddens_token_conditioned_coin(
                     task_pos=extract_pos_tensor,
                     post_layernorm=post_layernorm,
                     extraction_point=extraction_point,
+                    state=state,
                 )  # (L, (t1-t0)*batch_size, 1, n_embd)
 
                 h_cpu = chunk_hiddens[:, :, 0, :].cpu()  # (L, (t1-t0)*B, D)

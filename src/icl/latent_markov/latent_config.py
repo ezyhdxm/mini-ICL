@@ -50,6 +50,7 @@ def get_config_base() -> ConfigDict:
     NUM_LAYERS = 6 # Default number of layers, can be overridden in config
 
     config.model = ConfigDict()
+    config.model.arch = "transformer"  # which architecture to build: transformer|rnn|lstm|mamba
     config.model.emb_dim = 128
     config.model.bias = False
     config.model.mlp_bias = True

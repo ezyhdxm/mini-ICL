@@ -281,6 +281,7 @@ def _compute_hiddens_at_real_tokens(
     return_data=False,
     post_layernorm=False,
     extraction_point: str = "post_attn",
+    state: str = "hidden",
     verbose=False,
     task_batch_size=None,
     precomputed_data: Optional[torch.Tensor] = None,
@@ -334,8 +335,13 @@ def _compute_hiddens_at_real_tokens(
     if n_tasks is None:
         n_tasks = sampler.n_major_tasks + sampler.n_minor_tasks
     seq_len = sampler.seq_len
-    n_embd = config.model.emb_dim
+    # Recurrent models (RNN/LSTM) use their hidden_size; Transformer uses emb_dim.
+    n_embd = int(getattr(model, "hidden_size", None) or config.model.emb_dim)
     n_layers = len(model.layers)
+    if state != "hidden" and hasattr(model.layers[0], "attn_block"):
+        raise ValueError(
+            f"state={state!r} is only valid for LSTM models, not the Transformer."
+        )
 
     task_pos = torch.arange(seq_len - 1, device=device)
 
@@ -361,7 +367,16 @@ def _compute_hiddens_at_real_tokens(
                     return next_blk.attn_block.ln1(h)
         return h
 
+    is_transformer = hasattr(model.layers[0], "attn_block")
+
     def run_and_extract(batch_data):
+        if not is_transformer:
+            # RNN/LSTM: full-sequence per-layer hiddens, then select real positions.
+            from icl.models.hidden_extractor import extract_layer_hiddens
+            full = extract_layer_hiddens(model, batch_data, state=state)  # (L, B, T, D)
+            sel = full.index_select(2, task_pos.to(full.device))  # (L, B, P, D)
+            return {l: sel[l] for l in range(n_layers)}
+
         cache = {}
         handles = []
         for l in range(n_layers):
@@ -489,6 +504,7 @@ def _get_hiddens_at_real_positions(
     device_override = kwargs.get("device", None)
     _post_ln = kwargs.get("post_layernorm", False)
     _ep = kwargs.get("extraction_point", "post_attn")
+    _state = kwargs.get("state", "hidden")
 
     if task_name == "latent":
         sampler, config = nu.load_config_and_sampler("latent", exp_name)
@@ -510,7 +526,7 @@ def _get_hiddens_at_real_positions(
             hiddens, demo_data = _compute_hiddens_at_real_tokens(
                 config, model, sampler_clone, B,
                 return_data=True, post_layernorm=_post_ln,
-                extraction_point=_ep, verbose=verbose,
+                extraction_point=_ep, state=_state, verbose=verbose,
             )
             hiddens = hiddens.cpu()
             demo_data = demo_data.cpu()
@@ -522,7 +538,7 @@ def _get_hiddens_at_real_positions(
             hiddens = _compute_hiddens_at_real_tokens(
                 config, model, sampler_clone, B,
                 post_layernorm=_post_ln, extraction_point=_ep,
-                verbose=verbose,
+                state=_state, verbose=verbose,
             )
             hiddens = hiddens.cpu()
             del model
