@@ -34,18 +34,43 @@ def _to_np(x):
     return np.asarray(x)
 
 
+# Keys to never serialize: figures, and raw hidden-state tensors (gigabytes).
+_SKIP_KEYS = {"fig", "ax", "axes", "all_hiddens", "token_info"}
+_MAX_ELEMS = 5_000_000  # backstop so a stray raw-hidden tensor never lands in the npz
+
+
+def _collect_arrays(obj, prefix: str, out: dict):
+    """Recursively collect array-able leaves (the computed metrics live in nested
+    dicts like results_dict / r2_results / results[mode])."""
+    if obj is None:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            _collect_arrays(v, f"{prefix}{k}_", out)
+        return
+    if hasattr(obj, "_asdict"):  # namedtuple
+        _collect_arrays(obj._asdict(), prefix, out)
+        return
+    if hasattr(obj, "__dataclass_fields__"):  # dataclass (e.g. TaskVectorR2Result)
+        import dataclasses
+        _collect_arrays(dataclasses.asdict(obj), prefix, out)
+        return
+    try:
+        arr = _to_np(obj)
+    except Exception:
+        return
+    if arr.dtype == object or arr.size == 0 or arr.size > _MAX_ELEMS:
+        return
+    out[prefix.rstrip("_")] = arr
+
+
 def _save_numeric(result: dict, npz_path: str):
-    """Save the numeric (non-figure) entries of a result dict to a .npz."""
+    """Save the computed metric arrays (not the raw hiddens) to a .npz."""
     arrays = {}
     for k, v in result.items():
-        if k in ("fig", "ax") or v is None:
+        if k in _SKIP_KEYS:
             continue
-        try:
-            arr = _to_np(v)
-            if arr.dtype != object:
-                arrays[k] = arr
-        except Exception:
-            pass  # skip anything that isn't cleanly array-able
+        _collect_arrays(v, f"{k}_", arrays)
     np.savez(npz_path, **arrays)
     return sorted(arrays)
 
@@ -76,8 +101,18 @@ def main():
         plot_p1_variance, plot_task_vector_r2_latent,
     )
     from icl.latent_markov.analysis import traj_averaging_projection_plot
+    from icl.latent_markov.analysis.kl_divergence import plot_kl_model_vs_two_bayes_latent
 
     pos = args.positions
+
+    def _kl_two_bayes(exp):
+        """Model next-token distribution vs the two Bayesian solutions, as KL(model||ref)
+        vs context position. Arch-agnostic (softmax(model(x)) + algebraic predictors).
+        modes=('major','ood'): in-distribution vs out-of-distribution. No 'minor' since
+        the uniform-K setup has no minor pool."""
+        return plot_kl_model_vs_two_bayes_latent(
+            exp, modes=("major", "ood"), num_samples=256, show=False,
+        )
 
     def _beta_alpha_fig3(exp):
         """Figure 3 (Bayesian posterior alignment): beta(t) task-vector coefficients
@@ -106,6 +141,7 @@ def main():
          lambda e: plot_task_vector_r2_latent(e, batch_size=args.batch_size,
                                               positions_of_interest=pos, max_tasks=args.max_tasks,
                                               show=False), None),
+        ("kl_two_bayes", _kl_two_bayes, None),
     ]
 
     with open(args.manifest) as f:
