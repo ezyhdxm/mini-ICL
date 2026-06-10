@@ -100,7 +100,7 @@ def plot_lambda_posterior_agreement(
 
     hiddens_layer = hiddens[layer].to(torch.float32)
     K, T, B_actual, D = hiddens_layer.shape
-    k_major = 3
+    k_major = int(sampler_clone.n_major_tasks)  # was hardcoded 3 (paper used 3 major tasks)
     dev = hiddens_layer.device
 
     b_f = b_vec.float().to(dev)
@@ -159,9 +159,9 @@ def plot_lambda_posterior_agreement(
         sampler_clone,
         demo_data,
         include_minor=False,
-    )  # (K, B, seq_len, 3)
+    )  # (K, B, seq_len, n_major)
 
-    n_components = 3
+    n_components = post_all.shape[-1]  # number of major tasks (was hardcoded 3)
     all_lam = np.zeros((K, B_actual, T, n_components), dtype=float)
     all_post = np.zeros((K, B_actual, T, n_components), dtype=float)
 
@@ -180,7 +180,7 @@ def plot_lambda_posterior_agreement(
 
         if W_logit_f.shape[0] > 0 and model_for_logits is not None:
             with torch.no_grad():
-                samples_k = demo_data[k, :B_actual].to(device=model_device)
+                samples_k = demo_data[k, :B_actual].long().to(device=model_device)
                 logits_k = model_for_logits(samples_k).float()[:, :T, :W_logit_f.shape[0]]
             nuisance = nuisance + torch.einsum(
                 "btd,df->btf", logits_k.to(dev), W_logit_f,

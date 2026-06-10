@@ -128,8 +128,9 @@ def _collect_multi_layer_data(
         handles = []
         for l in layers:
             layer_mod = (
-                model.layers[l] if extraction_point == "post_mlp"
-                else model.layers[l].attn_block
+                model.layers[l].attn_block
+                if (extraction_point != "post_mlp" and hasattr(model.layers[l], "attn_block"))
+                else model.layers[l]  # recurrent layers (RNN/LSTM) have no attn_block
             )
 
             def _make_hook(layer_idx):
@@ -204,8 +205,9 @@ def _collect_multi_layer_data(
             handles_a = []
             for l in layers:
                 layer_mod_a = (
-                    model.layers[l] if extraction_point == "post_mlp"
-                    else model.layers[l].attn_block
+                    model.layers[l].attn_block
+                    if (extraction_point != "post_mlp" and hasattr(model.layers[l], "attn_block"))
+                    else model.layers[l]  # recurrent layers (RNN/LSTM) have no attn_block
                 )
 
                 def _make_hook_a(layer_idx):
