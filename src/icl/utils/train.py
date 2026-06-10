@@ -18,7 +18,7 @@ from icl.latent_markov import LatentMarkov
 from icl.models.attention import MultiHeadAttention
 from icl.utils.logger import setup_logger
 
-from .basic import get_hash, canonicalize_config_for_exp
+from .basic import get_config_hash_for_exp
 from .train_utils import get_attn_base, get_train_result, tabulate_model
 
 logger = setup_logger(__name__)
@@ -27,14 +27,16 @@ logger = setup_logger(__name__)
 # use for profiling
 @contextmanager
 def maybe_nvtx_range(message, color="blue", enabled=True):
-    ctx = nvtx.annotate(message, color=color) if enabled else nullcontext() 
+    ctx = nvtx.annotate(message, color=color) if enabled else nullcontext()
     with ctx:
         if enabled:
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             start_time = timeit.default_timer()
         yield
         if enabled:
-            torch.cuda.synchronize()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             end_time = timeit.default_timer()
             logger.debug(f"{message}: {end_time - start_time:.6f} s")
             
@@ -92,9 +94,11 @@ class BaseTrainer:
         self.config = config
         self.mixed_precision = config.mixed_precision if hasattr(config, "mixed_precision") else True
         self.profile = config.profile if hasattr(config, "profile") else False
-        canonicalize_config_for_exp(config)
-        self.exp_name = f"train_{get_hash(config)}"
-        self.exp_dir = os.path.join(config.work_dir, self.exp_name)  
+        # Non-mutating: compute identity hash on a canonicalized copy so the
+        # runtime config.device (e.g. "cpu") is preserved while exp_name stays
+        # identical to get_exp_name's.
+        self.exp_name = f"train_{get_config_hash_for_exp(config)}"
+        self.exp_dir = os.path.join(config.work_dir, self.exp_name)
         cur_dir = os.getcwd()
         if cur_dir.endswith("notebooks"):
             self.exp_dir = os.path.join("..", self.exp_dir)
@@ -331,8 +335,8 @@ def train_model(config):
 
 
 def train_model_with_plot(model, config, show=False, verbose=False):
-    canonicalize_config_for_exp(config)
-    exp_name = f"train_{get_hash(config)}"
+    # Non-mutating identity hash (preserves runtime config.device).
+    exp_name = f"train_{get_config_hash_for_exp(config)}"
     exp_dir = os.path.join(config.work_dir, exp_name)
 
     cur_dir = os.getcwd()

@@ -12,6 +12,7 @@ logger = setup_logger(__name__)
 
 from .basic import get_hash, get_config_hash_for_exp
 from icl.models import Transformer
+from icl.models.factory import build_model
 
 
 #################
@@ -47,7 +48,7 @@ def load_model(checkpoint_dir, config, step=None):
         model_path = paths[-1]
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
-    model = Transformer(config)
+    model = build_model(config)
     model.load_state_dict(checkpoint['model'])
     model.eval()
     return model.to(device)
@@ -288,7 +289,7 @@ def load_checkpoint(config,
             data_type = torch.float
             model = get_model(**config["model"], dtype=data_type)
         else:
-            model = Transformer(config)
+            model = build_model(config)
         model.load_state_dict(checkpoint['model'])
         model.eval()
         model = model.to(device)

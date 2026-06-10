@@ -42,6 +42,7 @@ def unified_train(
     device: Optional[str] = None,
     n_tasks: Optional[int] = None,
     n_minor_tasks: Optional[int] = None,
+    arch: Optional[str] = None,
 ):
     import os
     _prev_wandb_silent = os.environ.get("WANDB_SILENT")
@@ -64,6 +65,8 @@ def unified_train(
             config.task.n_minor_tasks = int(n_minor_tasks)
         if n_tasks is not None:
             config.task.n_tasks = int(n_tasks)
+        if arch is not None:
+            config.model.arch = arch
         if pad is not None:
             if task_name == "linear":
                 config.model.pad = pad

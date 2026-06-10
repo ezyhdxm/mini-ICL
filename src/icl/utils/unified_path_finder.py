@@ -216,6 +216,7 @@ def get_exp_name(
     final_layernorm: bool = None,
     n_tasks: Optional[int] = None,
     n_minor_tasks: Optional[int] = None,
+    arch: Optional[str] = None,
 ) -> str:
     """Generate standardized experiment name based on task and parameters."""
     config = unified_get_config(task_name)
@@ -233,6 +234,8 @@ def get_exp_name(
         config.task.n_minor_tasks = int(n_minor_tasks)
     if n_tasks is not None:
         config.task.n_tasks = int(n_tasks)
+    if arch is not None:
+        config.model.arch = arch
     if pad is not None:
         if task_name == "linear":
             config.model.pad = pad
