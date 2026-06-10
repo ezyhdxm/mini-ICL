@@ -4,9 +4,9 @@ Reads the manifest written by train_arch_grid.py and, for each trained (arch, K)
 cell, runs the three latent-Markov analyses headlessly and saves their outputs:
 
   1.   conditional variance vs context      -> plot_p1_variance
-  2/3. task-vector interpolation & model-vs-Bayes agreement
-                                            -> plot_lambda_posterior_agreement
-  (+)  token-conditioned task-vector R²     -> plot_task_vector_r2_latent
+  2.   Figure 3 (Bayesian posterior alignment): beta(t) task-vector coefficients
+       vs Bayesian posterior alpha(t)        -> traj_averaging_projection_plot
+  3.   token-conditioned task-vector R²      -> plot_task_vector_r2_latent
 
 Per cell we write figures (.png) and numeric arrays (.npz) under
 <out-dir>/<arch>_K<K>/, plus a combined summary.json. Each analysis is wrapped
@@ -72,20 +72,32 @@ def main():
     from icl.latent_markov.analysis.variance import (
         plot_p1_variance, plot_task_vector_r2_latent,
     )
-    from icl.latent_markov.analysis.posterior import plot_lambda_posterior_agreement
+    from icl.latent_markov.analysis import traj_averaging_projection_plot
 
     pos = args.positions
-    max_pos = (max(pos) + 1) if pos else None
+
+    def _beta_alpha_fig3(exp):
+        """Figure 3 (Bayesian posterior alignment): beta(t) task-vector coefficients
+        vs the Bayesian posterior alpha(t). extraction_point='post_mlp' is the
+        cross-architecture (full-layer-output) extraction point."""
+        out = traj_averaging_projection_plot(
+            exp, task_ids=[0], B=args.batch_size, plot_positions=pos,
+            per_position_mean=True, project_beta_simplex=True,
+            beta_errbar="quantile", extraction_point="post_mlp", show=False,
+        )
+        # Flatten results_by_task (beta = model coeffs, post = Bayesian posterior).
+        flat = {k: out.get(k) for k in ("fig", "task_vecs", "grand_mean")}
+        for tid, r in out.get("results_by_task", {}).items():
+            flat[f"task{tid}_beta"] = r["beta"]
+            flat[f"task{tid}_post"] = r["post"]
+        return flat
 
     # (name, fn, max_k): max_k=None means run for any K; otherwise skip when n_tasks > max_k.
     analyses = [
         ("p1_variance",
          lambda e: plot_p1_variance(e, batch_size=args.batch_size,
                                     positions_of_interest=pos, show=False), None),
-        ("lambda_posterior",
-         lambda e: plot_lambda_posterior_agreement(e, B=args.batch_size,
-                                                   max_position=max_pos, show=False),
-         args.max_lambda_k),
+        ("beta_alpha_fig3", _beta_alpha_fig3, args.max_lambda_k),
         ("task_vector_r2",
          lambda e: plot_task_vector_r2_latent(e, batch_size=args.batch_size,
                                               positions_of_interest=pos, show=False), None),

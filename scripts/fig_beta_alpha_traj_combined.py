@@ -98,9 +98,9 @@ def _compute_linear(layer: int, simplex: bool):
     return results, k_major, simplex
 
 
-def _compute_latent(layer: int, simplex: bool):
+def _compute_latent(layer: int, simplex: bool, arch: str = "transformer"):
     from icl.latent_markov.analysis import traj_averaging_projection_plot
-    exp_name = get_exp_name("latent", -1, total_steps=30_000, warmup_steps=15_000)
+    exp_name = get_exp_name("latent", -1, total_steps=30_000, warmup_steps=15_000, arch=arch)
     out = traj_averaging_projection_plot(
         exp_name,
         layer_index=layer,
@@ -131,6 +131,9 @@ def parse_args():
                    help="Layer index for E2 Linear (default: 9)")
     p.add_argument("--latent-layer", type=int, default=3, metavar="L",
                    help="Layer index for E3 Latent (default: 3)")
+    p.add_argument("--latent-arch", default="transformer",
+                   choices=["transformer", "lstm", "rnn"],
+                   help="Architecture for the E3 Latent panel (default: transformer)")
     p.add_argument("--simplex", action=argparse.BooleanOptionalAction, default=True,
                    help="Use simplex projection for beta coefficients (default: --simplex)")
     p.add_argument("--coin-vocab-size", type=int, default=6, metavar="V",
@@ -151,7 +154,7 @@ def main():
     panels = [
         ("E1 (Coins)",  lambda: _compute_coin(args.coin_layer,   args.simplex, args.coin_vocab_size)),
         ("E2 (Linear)", lambda: _compute_linear(args.linear_layer, args.simplex)),
-        ("E3 (Latent)", lambda: _compute_latent(args.latent_layer, args.simplex)),
+        ("E3 (Latent)", lambda: _compute_latent(args.latent_layer, args.simplex, args.latent_arch)),
     ]
 
     t_total = time.time()

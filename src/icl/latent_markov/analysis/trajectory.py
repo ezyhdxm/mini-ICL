@@ -1265,6 +1265,11 @@ def traj_averaging_projection_plot(
 
     # ---- plot: n_rows x 1, all K components on each axes ----
     corner_rgb = [mcolors.to_rgb(c) for c in corner_colors]
+    if k_major > len(corner_rgb):
+        # corner_colors holds the paper's 3 fixed colors; for larger K (e.g. 4)
+        # generate enough distinct colors from a categorical colormap.
+        cmap = plt.get_cmap("tab10" if k_major <= 10 else "tab20")
+        corner_rgb = [cmap(i % cmap.N)[:3] for i in range(k_major)]
     ts = pidx.astype(float)
     n_rows = len(task_ids)
 
