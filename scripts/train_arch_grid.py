@@ -34,6 +34,11 @@ def main():
                     help="which task to train (default: latent)")
     ap.add_argument("--vocab-size", type=int, default=None,
                     help="vocab size; e.g. 2 for a real coin (default: task default, 8)")
+    ap.add_argument("--major-pool-type", default=None,
+                    help="coin: e.g. 'maxent' for well-separated coins from --major-means")
+    ap.add_argument("--major-means", nargs="+", type=float, default=None,
+                    help="coin: target mean (bias) per coin, e.g. 0.1 0.4 0.6 0.9 (avoids "
+                         "degenerate near-duplicate coins from random Dirichlet draws)")
     ap.add_argument("--n-tasks", nargs="+", type=int, default=NTASKS_DEFAULT)
     ap.add_argument("--num-epochs", type=int, default=30_000)
     ap.add_argument("--warmup-steps", type=int, default=15_000)
@@ -64,6 +69,7 @@ def main():
         # `num_epochs`; both set config.training.num_epochs for the latent task.
         exp_name = get_exp_name(
             args.task, k=-1, n_tasks=K, arch=arch, vocab_size=vocab,
+            major_pool_type=args.major_pool_type, major_means=args.major_means,
             total_steps=args.num_epochs, warmup_steps=args.warmup_steps,
         )
         exp_dir = os.path.join(work_dir, exp_name)
@@ -73,6 +79,7 @@ def main():
         if not args.dry_run:
             unified_train(
                 args.task, k=-1, n_tasks=K, arch=arch, vocab_size=vocab,
+                major_pool_type=args.major_pool_type, major_means=args.major_means,
                 num_epochs=args.num_epochs, warmup_steps=args.warmup_steps,
                 device=args.device,
             )
