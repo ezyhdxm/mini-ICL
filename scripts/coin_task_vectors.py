@@ -31,13 +31,16 @@ def main():
     ap.add_argument("--out-dir", default="results/coin_analysis")
     ap.add_argument("--layer", type=int, default=None, help="layer index (default: last)")
     ap.add_argument("--B", type=int, default=512, help="eval batch size (tighter error bars)")
+    ap.add_argument("--max-k", type=int, default=64,
+                    help="skip cells with n_tasks above this (projection is a small-K analysis)")
     args = ap.parse_args()
 
     from icl.coin.analysis.trajectory import traj_averaging_projection_plot_coin
 
     os.makedirs(args.out_dir, exist_ok=True)
-    runs = [r for r in json.load(open(args.manifest))["runs"] if r.get("trained", True)]
-    print(f"Coin task-vector projection for {len(runs)} cells")
+    runs = [r for r in json.load(open(args.manifest))["runs"]
+            if r.get("trained", True) and r["n_tasks"] <= args.max_k]
+    print(f"Coin task-vector projection for {len(runs)} cells (n_tasks <= {args.max_k})")
 
     data = {}
     for r in runs:
