@@ -95,39 +95,70 @@ def main():
     ap.add_argument("--max-tasks", type=int, default=None,
                     help="cap tasks analysed in variance/R2 (e.g. 32) so large-K cells "
                          "(K=1024) are tractable; statistics estimate fine from a subsample")
+    ap.add_argument("--beta-layers", nargs="+", type=int, default=None,
+                    help="layers for the alpha-beta (Figure 3) panels; default: ~4 spread "
+                         "across depth")
     args = ap.parse_args()
 
     from icl.latent_markov.analysis.variance import (
         plot_p1_variance, plot_task_vector_r2_latent,
     )
     from icl.latent_markov.analysis import traj_averaging_projection_plot
-    from icl.latent_markov.analysis.kl_divergence import plot_kl_model_vs_two_bayes_latent
+    from icl.latent_markov.analysis.two_modes_kl import run_two_modes_kl
 
     pos = args.positions
 
     def _kl_two_bayes(exp):
-        """Model next-token distribution vs the two Bayesian solutions, as KL(model||ref)
-        vs context position. Arch-agnostic (softmax(model(x)) + algebraic predictors).
-        modes=('major','ood'): in-distribution vs out-of-distribution. No 'minor' since
-        the uniform-K setup has no minor pool."""
-        return plot_kl_model_vs_two_bayes_latent(
-            exp, modes=("major", "ood"), num_samples=256, show=False,
-        )
+        """Model next-token distribution vs the two CORRECT Bayes solutions for the
+        uniform-over-K DGP: the known-pool (uniform 1/K over the K majors) and the
+        Dirichlet-new (online add-alpha) predictors. KL(model||ref) vs position, for
+        major (ID) and ood modes. Arch-agnostic (softmax(model(x)) + predictors)."""
+        return run_two_modes_kl(exp, modes=("major", "ood"), num_samples=256, show=False)
 
     def _beta_alpha_fig3(exp):
-        """Figure 3 (Bayesian posterior alignment): beta(t) task-vector coefficients
-        vs the Bayesian posterior alpha(t). extraction_point='post_mlp' is the
-        cross-architecture (full-layer-output) extraction point."""
-        out = traj_averaging_projection_plot(
-            exp, task_ids=[0], B=args.batch_size, plot_positions=pos,
-            per_position_mean=True, project_beta_simplex=True,
-            beta_errbar="quantile", extraction_point="post_mlp", show=False,
-        )
-        # Flatten results_by_task (beta = model coeffs, post = Bayesian posterior).
-        flat = {k: out.get(k) for k in ("fig", "task_vecs", "grand_mean")}
-        for tid, r in out.get("results_by_task", {}).items():
-            flat[f"task{tid}_beta"] = r["beta"]
-            flat[f"task{tid}_post"] = r["post"]
+        """Figure 3 (Bayesian posterior alignment) at SEVERAL layers: beta(t)
+        task-vector coefficients (markers) vs the Bayesian posterior alpha(t)
+        (dashed), one panel per layer. extraction_point='post_mlp' is the
+        cross-architecture (full-layer-output) point."""
+        import icl.utils.notebook_utils as nu
+        _, _, cfg = nu.load_everything("latent", exp)
+        nL = int(cfg.model.num_layers)
+        if args.beta_layers:
+            layers = sorted({L for L in args.beta_layers if 0 <= L < nL})
+        else:  # ~4 layers spread across depth
+            layers = sorted({int(round(f * (nL - 1))) for f in (0.0, 0.34, 0.67, 1.0)})
+
+        per_layer = {}
+        for L in layers:
+            o = traj_averaging_projection_plot(
+                exp, task_ids=[0], B=args.batch_size, plot_positions=pos,
+                per_position_mean=True, project_beta_simplex=True,
+                beta_errbar="quantile", extraction_point="post_mlp",
+                layer_index=L, show=False,
+            )
+            r = o["results_by_task"][0]
+            per_layer[L] = (np.asarray(r["beta"]), np.asarray(r["post"]))
+
+        fig, axes = plt.subplots(1, len(layers), figsize=(3.6 * len(layers), 3.4),
+                                 squeeze=False, sharey=True)
+        flat = {"fig": fig}
+        for i, L in enumerate(layers):
+            ax = axes[0][i]
+            beta, post = per_layer[L]
+            bmean, amean = beta.mean(axis=0), post.mean(axis=0)   # (T, Kc)
+            x = np.arange(bmean.shape[0])
+            for k in range(bmean.shape[1]):
+                col = plt.get_cmap("tab10")(k % 10)
+                ax.plot(x, amean[:, k], "--", lw=1.4, color=col)
+                ax.plot(x, bmean[:, k], marker="o", ms=2, lw=0.7, color=col)
+            ax.set_title(f"layer {L}", fontsize=10)
+            ax.set_xlabel("Position $t$")
+            ax.grid(True, alpha=0.3)
+            flat[f"layer{L}_beta"] = beta
+            flat[f"layer{L}_post"] = post
+        axes[0][0].set_ylabel(r"$\beta$ (markers) / $\alpha$ (dashed)")
+        fig.suptitle("Task-vector coefficients vs. Bayesian posterior, across layers")
+        fig.tight_layout()
         return flat
 
     # (name, fn, max_k): max_k=None means run for any K; otherwise skip when n_tasks > max_k.

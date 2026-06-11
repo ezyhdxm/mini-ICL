@@ -86,8 +86,8 @@ def _overlay_simple(base, out_dir, K, name, extractor, ylabel, title):
 
 
 def _combine_kl(base, out_dir, K):
-    modes, baselines = ["major", "ood"], ["exact", "hybrid"]
-    titles = {"exact": "KL(model || exact Bayes)", "hybrid": "KL(model || 3-known+Dirichlet)"}
+    modes, baselines = ["major", "ood"], ["known", "new"]
+    titles = {"known": "KL(model || known-pool $1/K$)", "new": "KL(model || Dirichlet-new)"}
     fig, axes = plt.subplots(len(modes), len(baselines), figsize=(11, 7), squeeze=False)
     any_curve = False
     for r, mode in enumerate(modes):
@@ -126,10 +126,14 @@ def _combine_beta_alpha(base, out_dir, K=4, comp=0):
     any_curve = False
     for arch in ARCHS:
         d = _npz(base, arch, K, "beta_alpha_fig3")
-        if d is None or "task0_beta" not in d.files:
+        if d is None:
             continue
-        beta = d["task0_beta"].mean(axis=0)   # (T, Kcomp)
-        post = d["task0_post"].mean(axis=0)    # (T, Kcomp)
+        layer_keys = [k for k in d.files if re.fullmatch(r"layer\d+_beta", k)]
+        if not layer_keys:
+            continue
+        L = max(int(re.match(r"layer(\d+)_beta", k).group(1)) for k in layer_keys)  # deepest layer
+        beta = d[f"layer{L}_beta"].mean(axis=0)   # (T, Kcomp)
+        post = d[f"layer{L}_post"].mean(axis=0)    # (T, Kcomp)
         T = beta.shape[0]
         x = np.arange(T)
         if not drawn_alpha:
