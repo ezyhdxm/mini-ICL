@@ -49,6 +49,26 @@ def _parallel_linear_scan(a, b):
     return b
 
 
+def _chunked_linear_scan(a, b, chunk: int = 32):
+    """Memory-bounded scan: parallel within chunks of size `chunk`, sequential carry
+    across chunks. Peak memory ~ chunk/T of the full parallel scan; same result."""
+    T = a.shape[-1]
+    if T <= chunk:
+        return _parallel_linear_scan(a, b)
+    outs = []
+    h_carry = None
+    for c0 in range(0, T, chunk):
+        c1 = min(c0 + chunk, T)
+        ac, bc = a[..., c0:c1], b[..., c0:c1]
+        if h_carry is not None:  # inject prev-chunk state into this chunk's first step
+            carry = ac[..., :1] * h_carry.unsqueeze(-1)         # (..., 1)
+            bc = bc + F.pad(carry, (0, c1 - c0 - 1))            # zeros after column 0
+        hc = _parallel_linear_scan(ac, bc)
+        outs.append(hc)
+        h_carry = hc[..., -1]
+    return torch.cat(outs, dim=-1)
+
+
 class MambaBlock(nn.Module):
     """Selective SSM block: in_proj -> causal conv -> selective scan -> gate -> out_proj."""
 
@@ -103,9 +123,9 @@ class MambaBlock(nn.Module):
         # Checkpoint the scan: recompute its log-depth intermediates in backward
         # instead of storing them (the parallel scan is fast but memory-heavy).
         if self.training and a.requires_grad:
-            h = checkpoint(_parallel_linear_scan, a, b, use_reentrant=False)
+            h = checkpoint(_chunked_linear_scan, a, b, use_reentrant=False)
         else:
-            h = _parallel_linear_scan(a, b)
+            h = _chunked_linear_scan(a, b)
         h = h.movedim(-1, 1)                                   # (B, T, d_inner, d_state)
         y = torch.einsum("btdn,btn->btd", h, Cm)               # (B, T, d_inner)
         return y + u * self.D                                   # skip term
