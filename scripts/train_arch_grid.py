@@ -44,7 +44,15 @@ def main():
 
     work_dir = unified_get_config("latent").work_dir  # e.g. results/latent
     cells = list(product(args.arch, args.n_tasks))
-    entries = []
+
+    # Merge into an existing manifest so adding an arch doesn't drop earlier cells.
+    merged = {}
+    if os.path.exists(args.manifest):
+        try:
+            for e in json.load(open(args.manifest)).get("runs", []):
+                merged[(e["arch"], e["n_tasks"])] = e
+        except Exception:
+            merged = {}
 
     for i, (arch, K) in enumerate(cells, 1):
         # NOTE: get_exp_name uses `total_steps` where unified_train uses
@@ -68,13 +76,13 @@ def main():
                 print(f"  WARNING: expected checkpoint dir missing: {exp_dir}\n"
                       f"  (train/get_exp_name params may have drifted)", flush=True)
 
-        entries.append(entry)
+        merged[(arch, K)] = entry
         # Write the manifest incrementally so a crash mid-grid keeps progress.
         os.makedirs(os.path.dirname(args.manifest) or ".", exist_ok=True)
         with open(args.manifest, "w") as f:
-            json.dump({"work_dir": work_dir, "runs": entries}, f, indent=2)
+            json.dump({"work_dir": work_dir, "runs": list(merged.values())}, f, indent=2)
 
-    print(f"\nManifest written: {args.manifest}  ({len(entries)} cells)", flush=True)
+    print(f"\nManifest written: {args.manifest}  ({len(merged)} cells)", flush=True)
 
 
 if __name__ == "__main__":

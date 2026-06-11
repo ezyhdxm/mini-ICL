@@ -12,6 +12,7 @@ from torch import nn
 
 from .base_models import Transformer
 from .recurrent import LSTMModel, RNNModel
+from .mamba import MambaModel
 
 
 def build_model(config) -> nn.Module:
@@ -24,8 +25,10 @@ def build_model(config) -> nn.Module:
         return LSTMModel(config)
     if arch == "rnn":
         return RNNModel(config)
+    if arch == "mamba":
+        return MambaModel(config)
 
     raise ValueError(
         f"Unknown config.model.arch={arch!r}. "
-        f"Registered architectures: ['transformer', 'lstm', 'rnn']."
+        f"Registered architectures: ['transformer', 'lstm', 'rnn', 'mamba']."
     )

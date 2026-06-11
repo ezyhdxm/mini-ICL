@@ -100,6 +100,8 @@ def main():
                          "across depth")
     ap.add_argument("--only", nargs="+", default=None,
                     help="run only these analyses by name (e.g. beta_alpha_fig3)")
+    ap.add_argument("--archs", nargs="+", default=None,
+                    help="process only cells of these architectures (e.g. mamba)")
     args = ap.parse_args()
 
     from icl.latent_markov.analysis.variance import (
@@ -182,6 +184,8 @@ def main():
     with open(args.manifest) as f:
         manifest = json.load(f)
     runs = [r for r in manifest["runs"] if r.get("trained", True)]
+    if args.archs:
+        runs = [r for r in runs if r["arch"] in set(args.archs)]
     print(f"Analyzing {len(runs)} trained cells from {args.manifest}")
 
     # Merge into an existing summary so a partial (--only) run doesn't drop entries.
