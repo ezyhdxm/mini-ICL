@@ -27,8 +27,11 @@ def build_model(config) -> nn.Module:
         return RNNModel(config)
     if arch == "mamba":
         return MambaModel(config)
+    if arch == "mamba_official":
+        from .mamba_official import MambaOfficialModel  # lazy: needs mamba-ssm + CUDA
+        return MambaOfficialModel(config)
 
     raise ValueError(
-        f"Unknown config.model.arch={arch!r}. "
-        f"Registered architectures: ['transformer', 'lstm', 'rnn', 'mamba']."
+        f"Unknown config.model.arch={arch!r}. Registered architectures: "
+        f"['transformer', 'lstm', 'rnn', 'mamba', 'mamba_official']."
     )
