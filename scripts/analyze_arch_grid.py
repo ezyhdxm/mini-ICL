@@ -98,6 +98,8 @@ def main():
     ap.add_argument("--beta-layers", nargs="+", type=int, default=None,
                     help="layers for the alpha-beta (Figure 3) panels; default: ~4 spread "
                          "across depth")
+    ap.add_argument("--only", nargs="+", default=None,
+                    help="run only these analyses by name (e.g. beta_alpha_fig3)")
     args = ap.parse_args()
 
     from icl.latent_markov.analysis.variance import (
@@ -174,18 +176,31 @@ def main():
                                               show=False), None),
         ("kl_two_bayes", _kl_two_bayes, None),
     ]
+    if args.only:
+        analyses = [a for a in analyses if a[0] in set(args.only)]
 
     with open(args.manifest) as f:
         manifest = json.load(f)
     runs = [r for r in manifest["runs"] if r.get("trained", True)]
     print(f"Analyzing {len(runs)} trained cells from {args.manifest}")
 
+    # Merge into an existing summary so a partial (--only) run doesn't drop entries.
+    summary_path = os.path.join(args.out_dir, "summary.json")
+    prior = {}
+    if os.path.exists(summary_path):
+        try:
+            for c in json.load(open(summary_path)):
+                prior[(c["arch"], c["n_tasks"])] = c
+        except Exception:
+            prior = {}
+
     summary = []
     for run in runs:
         arch, K, exp = run["arch"], run["n_tasks"], run["exp_name"]
         cell_dir = os.path.join(args.out_dir, f"{arch}_K{K}")
         os.makedirs(cell_dir, exist_ok=True)
-        cell = {"arch": arch, "n_tasks": K, "exp_name": exp}
+        cell = dict(prior.get((arch, K), {}))
+        cell.update({"arch": arch, "n_tasks": K, "exp_name": exp})
 
         for name, fn, max_k in analyses:
             if max_k is not None and K > max_k:

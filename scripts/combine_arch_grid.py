@@ -140,10 +140,14 @@ def _combine_beta_alpha(base, out_dir, K=4, comp=0):
     if not layers:
         return None
 
-    fig, axes = plt.subplots(1, len(layers), figsize=(3.6 * len(layers), 3.4),
+    n = len(layers)
+    ncols = min(3, n)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.0 * ncols, 3.2 * nrows),
                              squeeze=False, sharey=True)
+    axflat = axes.ravel()
     for i, L in enumerate(layers):
-        ax = axes[0][i]
+        ax = axflat[i]
         drawn_alpha = False
         for arch, d in arch_data.items():
             beta = d[f"layer{L}_beta"].mean(axis=0)   # (T, Kcomp)
@@ -158,8 +162,11 @@ def _combine_beta_alpha(base, out_dir, K=4, comp=0):
         ax.set_xlabel("Position $t$")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=7)
-    axes[0][0].set_ylabel(r"$\beta_0$ (markers) / $\alpha_0$ (dashed)")
-    fig.suptitle(f"Task-vector coefficient vs. Bayesian posterior, across layers  (K={K})")
+    for r in range(nrows):
+        axes[r][0].set_ylabel(r"$\beta_0$ / $\alpha_0$")
+    for j in range(n, len(axflat)):
+        axflat[j].axis("off")
+    fig.suptitle(f"Task-vector coefficient vs. Bayesian posterior, all layers  (K={K})")
     fig.tight_layout()
     path = os.path.join(out_dir, f"combined_beta_alpha_K{K}.png")
     fig.savefig(path, bbox_inches="tight", dpi=130)
