@@ -22,6 +22,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 def _dt_rank(d_model: int) -> int:
@@ -99,7 +100,13 @@ class MambaBlock(nn.Module):
         Bu = (dt * u).unsqueeze(-1) * Bm.unsqueeze(2)           # (B, T, d_inner, d_state)
         a = A_bar.movedim(1, -1)                               # (B, d_inner, d_state, T)
         b = Bu.movedim(1, -1)
-        h = _parallel_linear_scan(a, b).movedim(-1, 1)         # (B, T, d_inner, d_state)
+        # Checkpoint the scan: recompute its log-depth intermediates in backward
+        # instead of storing them (the parallel scan is fast but memory-heavy).
+        if self.training and a.requires_grad:
+            h = checkpoint(_parallel_linear_scan, a, b, use_reentrant=False)
+        else:
+            h = _parallel_linear_scan(a, b)
+        h = h.movedim(-1, 1)                                   # (B, T, d_inner, d_state)
         y = torch.einsum("btdn,btn->btd", h, Cm)               # (B, T, d_inner)
         return y + u * self.D                                   # skip term
 
