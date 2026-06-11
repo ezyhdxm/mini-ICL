@@ -94,6 +94,11 @@ class MambaBlock(nn.Module):
         self.D = nn.Parameter(torch.ones(self.d_inner))
         self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
 
+        # Scan execution knobs (memory/speed tradeoff): larger chunk = fewer
+        # sequential steps but more memory; checkpoint trades compute for memory.
+        self.scan_chunk = 64
+        self.scan_checkpoint = True
+
     def forward(self, x):  # x: (B, T, D)
         B, T, _ = x.shape
         x_and_z = self.in_proj(x)                      # (B, T, 2*d_inner)
@@ -122,10 +127,12 @@ class MambaBlock(nn.Module):
         b = Bu.movedim(1, -1)
         # Checkpoint the scan: recompute its log-depth intermediates in backward
         # instead of storing them (the parallel scan is fast but memory-heavy).
-        if self.training and a.requires_grad:
-            h = checkpoint(_chunked_linear_scan, a, b, use_reentrant=False)
+        def _scan(aa, bb):
+            return _chunked_linear_scan(aa, bb, chunk=self.scan_chunk)
+        if self.scan_checkpoint and self.training and a.requires_grad:
+            h = checkpoint(_scan, a, b, use_reentrant=False)
         else:
-            h = _chunked_linear_scan(a, b)
+            h = _scan(a, b)
         h = h.movedim(-1, 1)                                   # (B, T, d_inner, d_state)
         y = torch.einsum("btdn,btn->btd", h, Cm)               # (B, T, d_inner)
         return y + u * self.D                                   # skip term
