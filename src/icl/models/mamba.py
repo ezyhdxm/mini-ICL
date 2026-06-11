@@ -28,6 +28,26 @@ def _dt_rank(d_model: int) -> int:
     return max(1, d_model // 16)
 
 
+def _parallel_linear_scan(a, b):
+    """Inclusive associative scan of h_t = a_t * h_{t-1} + b_t along the last dim.
+
+    Hillis-Steele log-depth scan over the associative operator
+    (a, b) o (a', b') = (a*a', a'*b + b'), so depth is ~log2(T) instead of T.
+    Numerically stable here because a_t = exp(dt*A) in (0,1) (products stay
+    bounded; no division). a, b: (..., T). Returns h: (..., T).
+    """
+    T = a.shape[-1]
+    a, b = a.clone(), b.clone()
+    d = 1
+    while d < T:
+        a_sh = F.pad(a[..., :-d], (d, 0), value=1.0)   # a_{t-d}, identity a=1
+        b_sh = F.pad(b[..., :-d], (d, 0), value=0.0)   # b_{t-d}, identity b=0
+        b = a * b_sh + b                                # new b uses current a
+        a = a * a_sh
+        d *= 2
+    return b
+
+
 class MambaBlock(nn.Module):
     """Selective SSM block: in_proj -> causal conv -> selective scan -> gate -> out_proj."""
 
@@ -73,17 +93,27 @@ class MambaBlock(nn.Module):
         return self.out_proj(y)                         # (B, T, D)
 
     def _selective_scan(self, u, dt, A, Bm, Cm):
-        """Sequential selective scan. u,dt:(B,T,d_inner); A:(d_inner,d_state); Bm,Cm:(B,T,d_state)."""
-        Bsz, T, d_inner = u.shape
+        """Selective scan via the parallel (log-depth) linear scan.
+        u,dt:(B,T,d_inner); A:(d_inner,d_state); Bm,Cm:(B,T,d_state)."""
         A_bar = torch.exp(dt.unsqueeze(-1) * A)                 # (B, T, d_inner, d_state)
         Bu = (dt * u).unsqueeze(-1) * Bm.unsqueeze(2)           # (B, T, d_inner, d_state)
+        a = A_bar.movedim(1, -1)                               # (B, d_inner, d_state, T)
+        b = Bu.movedim(1, -1)
+        h = _parallel_linear_scan(a, b).movedim(-1, 1)         # (B, T, d_inner, d_state)
+        y = torch.einsum("btdn,btn->btd", h, Cm)               # (B, T, d_inner)
+        return y + u * self.D                                   # skip term
+
+    def _selective_scan_sequential(self, u, dt, A, Bm, Cm):
+        """Reference sequential scan (for correctness tests only)."""
+        Bsz, T, d_inner = u.shape
+        A_bar = torch.exp(dt.unsqueeze(-1) * A)
+        Bu = (dt * u).unsqueeze(-1) * Bm.unsqueeze(2)
         h = torch.zeros(Bsz, d_inner, self.d_state, device=u.device, dtype=u.dtype)
         ys = []
         for t in range(T):
-            h = A_bar[:, t] * h + Bu[:, t]                      # (B, d_inner, d_state)
-            ys.append(torch.einsum("bdn,bn->bd", h, Cm[:, t]))  # (B, d_inner)
-        y = torch.stack(ys, dim=1)                              # (B, T, d_inner)
-        return y + u * self.D                                   # skip term
+            h = A_bar[:, t] * h + Bu[:, t]
+            ys.append(torch.einsum("bdn,bn->bd", h, Cm[:, t]))
+        return torch.stack(ys, dim=1) + u * self.D
 
 
 class MambaResidualBlock(nn.Module):
