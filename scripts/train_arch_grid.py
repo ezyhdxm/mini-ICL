@@ -29,7 +29,11 @@ NTASKS_DEFAULT = [4, 1024]
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--arch", nargs="+", default=ARCHS_DEFAULT,
-                    choices=["transformer", "lstm", "rnn"])
+                    choices=["transformer", "lstm", "rnn", "mamba"])
+    ap.add_argument("--task", default="latent", choices=["latent", "coin"],
+                    help="which task to train (default: latent)")
+    ap.add_argument("--vocab-size", type=int, default=None,
+                    help="vocab size; e.g. 2 for a real coin (default: task default, 8)")
     ap.add_argument("--n-tasks", nargs="+", type=int, default=NTASKS_DEFAULT)
     ap.add_argument("--num-epochs", type=int, default=30_000)
     ap.add_argument("--warmup-steps", type=int, default=15_000)
@@ -42,7 +46,8 @@ def main():
     from icl.utils.unified_interface import unified_train
     from icl.utils.unified_path_finder import unified_get_config, get_exp_name
 
-    work_dir = unified_get_config("latent").work_dir  # e.g. results/latent
+    vocab = args.vocab_size if args.vocab_size is not None else 8
+    work_dir = unified_get_config(args.task).work_dir  # e.g. results/latent or results/coin
     cells = list(product(args.arch, args.n_tasks))
 
     # Merge into an existing manifest so adding an arch doesn't drop earlier cells.
@@ -58,7 +63,7 @@ def main():
         # NOTE: get_exp_name uses `total_steps` where unified_train uses
         # `num_epochs`; both set config.training.num_epochs for the latent task.
         exp_name = get_exp_name(
-            "latent", k=-1, n_tasks=K, arch=arch,
+            args.task, k=-1, n_tasks=K, arch=arch, vocab_size=vocab,
             total_steps=args.num_epochs, warmup_steps=args.warmup_steps,
         )
         exp_dir = os.path.join(work_dir, exp_name)
@@ -67,7 +72,7 @@ def main():
 
         if not args.dry_run:
             unified_train(
-                "latent", k=-1, n_tasks=K, arch=arch,
+                args.task, k=-1, n_tasks=K, arch=arch, vocab_size=vocab,
                 num_epochs=args.num_epochs, warmup_steps=args.warmup_steps,
                 device=args.device,
             )
