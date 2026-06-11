@@ -114,7 +114,8 @@ def run_two_modes_kl(exp_name, modes=("major", "ood"), num_samples=256, show=Fal
         ax = axes[0][mi]
         ax.plot(pos, kl_known, color="#1f77b4", lw=1.8, label="KL(model || known-pool $1/K$)")
         ax.plot(pos, kl_new, color="#d62728", lw=1.8, label="KL(model || Dirichlet-new)")
-        ax.set_title(f"{mode} mode", fontsize=11)
+        _label = {"major": "in-distribution (ID)", "ood": "out-of-distribution (OOD)"}.get(mode, mode)
+        ax.set_title(_label, fontsize=11)
         ax.set_xlabel("Position $t$")
         ax.set_ylabel("KL")
         ax.grid(True, alpha=0.3)

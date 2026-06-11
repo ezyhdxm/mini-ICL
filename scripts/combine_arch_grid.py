@@ -25,6 +25,8 @@ import numpy as np
 
 ARCHS = ["transformer", "lstm", "rnn"]
 ARCH_COLORS = {"transformer": "#1f77b4", "lstm": "#ff7f0e", "rnn": "#2ca02c"}
+# Sampler modes -> human labels for the uniform-over-K DGP.
+MODE_LABEL = {"major": "in-distribution (ID)", "ood": "out-of-distribution (OOD)"}
 
 
 def _npz(base, arch, K, name):
@@ -102,7 +104,7 @@ def _combine_kl(base, out_dir, K):
                     continue
                 ax.plot(d[pk], d[mk], lw=1.6, color=ARCH_COLORS[arch], label=arch)
                 any_curve = True
-            ax.set_title(f"{mode} mode -- {titles[bl]}", fontsize=10)
+            ax.set_title(f"{MODE_LABEL.get(mode, mode)} -- {titles[bl]}", fontsize=10)
             ax.set_xlabel("Position $t$")
             ax.set_ylabel("KL")
             ax.grid(True, alpha=0.3)
@@ -119,37 +121,46 @@ def _combine_kl(base, out_dir, K):
 
 
 def _combine_beta_alpha(base, out_dir, K=4, comp=0):
-    """beta_0 per arch vs the shared Bayesian posterior alpha_0 (the true task's
-    component). alpha is model-independent, so it is drawn once."""
-    fig, ax = plt.subplots(figsize=(6.5, 4))
-    drawn_alpha = False
-    any_curve = False
+    """One panel per layer: each arch's beta_0 vs the shared Bayesian posterior
+    alpha_0 (the true task's component). alpha is model-independent, drawn once."""
+    arch_data, layer_sets = {}, []
     for arch in ARCHS:
         d = _npz(base, arch, K, "beta_alpha_fig3")
         if d is None:
             continue
-        layer_keys = [k for k in d.files if re.fullmatch(r"layer\d+_beta", k)]
-        if not layer_keys:
+        layers = sorted(int(re.match(r"layer(\d+)_beta", k).group(1))
+                        for k in d.files if re.fullmatch(r"layer\d+_beta", k))
+        if not layers:
             continue
-        L = max(int(re.match(r"layer(\d+)_beta", k).group(1)) for k in layer_keys)  # deepest layer
-        beta = d[f"layer{L}_beta"].mean(axis=0)   # (T, Kcomp)
-        post = d[f"layer{L}_post"].mean(axis=0)    # (T, Kcomp)
-        T = beta.shape[0]
-        x = np.arange(T)
-        if not drawn_alpha:
-            ax.plot(x, post[:, comp], "k--", lw=2, label=r"$\alpha_0$ (Bayesian posterior)")
-            drawn_alpha = True
-        ax.plot(x, beta[:, comp], marker="o", ms=3, lw=1.2,
-                color=ARCH_COLORS[arch], label=fr"$\beta_0$ {arch}")
-        any_curve = True
-    if not any_curve:
-        plt.close(fig)
+        arch_data[arch] = d
+        layer_sets.append(set(layers))
+    if not arch_data:
         return None
-    ax.set_xlabel("Position $t$")
-    ax.set_ylabel("Coefficient on true task")
-    ax.set_title(f"Task-vector coefficient vs. Bayesian posterior  (K={K})")
-    ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    layers = sorted(set.intersection(*layer_sets))  # layers present for every arch
+    if not layers:
+        return None
+
+    fig, axes = plt.subplots(1, len(layers), figsize=(3.6 * len(layers), 3.4),
+                             squeeze=False, sharey=True)
+    for i, L in enumerate(layers):
+        ax = axes[0][i]
+        drawn_alpha = False
+        for arch, d in arch_data.items():
+            beta = d[f"layer{L}_beta"].mean(axis=0)   # (T, Kcomp)
+            post = d[f"layer{L}_post"].mean(axis=0)
+            x = np.arange(beta.shape[0])
+            if not drawn_alpha:
+                ax.plot(x, post[:, comp], "k--", lw=2, label=r"$\alpha_0$ (Bayes)")
+                drawn_alpha = True
+            ax.plot(x, beta[:, comp], marker="o", ms=2, lw=1.0,
+                    color=ARCH_COLORS[arch], label=arch)
+        ax.set_title(f"layer {L}", fontsize=10)
+        ax.set_xlabel("Position $t$")
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7)
+    axes[0][0].set_ylabel(r"$\beta_0$ (markers) / $\alpha_0$ (dashed)")
+    fig.suptitle(f"Task-vector coefficient vs. Bayesian posterior, across layers  (K={K})")
+    fig.tight_layout()
     path = os.path.join(out_dir, f"combined_beta_alpha_K{K}.png")
     fig.savefig(path, bbox_inches="tight", dpi=130)
     plt.close(fig)
